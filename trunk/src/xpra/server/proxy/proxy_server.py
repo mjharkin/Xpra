@@ -35,7 +35,8 @@ from xpra.make_thread import start_thread
 PROXY_SOCKET_TIMEOUT = envfloat("XPRA_PROXY_SOCKET_TIMEOUT", "0.1")
 PROXY_WS_TIMEOUT = envfloat("XPRA_PROXY_WS_TIMEOUT", "1.0")
 assert PROXY_SOCKET_TIMEOUT>0, "invalid proxy socket timeout"
-CAN_STOP_PROXY = envbool("XPRA_CAN_STOP_PROXY", False)
+CAN_STOP_PROXY = envbool("XPRA_CAN_STOP_PROXY", getuid()!=0)
+STOP_PROXY_SOCKET_TYPES = os.environ.get("XPRA_STOP_PROXY_SOCKET_TYPES", "unix-domain,named-pipe").split(",")
 
 
 MAX_CONCURRENT_CONNECTIONS = 200
@@ -170,8 +171,28 @@ class ProxyServer(ServerCore):
             self.send_disconnect(proto, "invalid request")
             return
         if is_req("stop"):
+            #global kill switch:
             if not CAN_STOP_PROXY:
-                self.send_disconnect(proto, "cannot stop proxy server")
+                msg = "cannot stop proxy server"
+                log.warn("Warning: %s", msg)
+                self.send_disconnect(proto, msg)
+                return
+            #verify socket type (only local connections by default):
+            try:
+                socktype = proto._conn.get_info().get("type")
+            except:
+                socktype = "unknown"
+            if socktype not in STOP_PROXY_SOCKET_TYPES:
+                msg = "cannot stop proxy server from a '%s' connection" % socktype
+                log.warn("Warning: %s", msg)
+                log.warn(" only from: %s", csv(STOP_PROXY_SOCKET_TYPES))
+                self.send_disconnect(proto, msg)
+                return
+            #connection must be authenticated:
+            if not proto.authenticators:
+                msg = "cannot stop proxy server from unauthenticated connections"
+                log.warn("Warning: %s", msg)
+                self.send_disconnect(proto, msg)
                 return
             self._requests.add(proto)
             #send a hello back and the client should then send its "shutdown-server" packet
@@ -367,7 +388,7 @@ class ProxyServer(ServerCore):
                 client_conn.set_active(True)
                 process = ProxyInstanceProcess(uid, gid, env_options, session_options, self._socket_dir,
                                                self.video_encoders, self.csc_modules,
-                                               client_conn, client_state, cipher, encryption_key, server_conn, c, message_queue)
+                                               client_conn, disp_desc, client_state, cipher, encryption_key, server_conn, c, message_queue)
                 log("starting %s from pid=%s", process, os.getpid())
                 self.processes[process] = (display, message_queue)
                 process.start()

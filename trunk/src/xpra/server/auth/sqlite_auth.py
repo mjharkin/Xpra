@@ -25,7 +25,7 @@ class Authenticator(SysAuthenticator):
             filename = os.path.join(exec_cwd, filename)
         self.filename = filename
         self.password_query = kwargs.pop("password_query", "SELECT password FROM users WHERE username=(?)")
-        self.sessions_query = kwargs.pop("sessions_query", "SELECT uid, gid, displays, env_options, session_options FROM users WHERE username=(?)")
+        self.sessions_query = kwargs.pop("sessions_query", "SELECT uid, gid, displays, env_options, session_options FROM users WHERE username=(?) AND password=(?)")
         SysAuthenticator.__init__(self, username, **kwargs)
         self.authenticate = self.authenticate_hmac
 
@@ -59,7 +59,7 @@ class Authenticator(SysAuthenticator):
             conn = sqlite3.connect(self.filename)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            cursor.execute(self.sessions_query, [self.username])
+            cursor.execute(self.sessions_query, [self.username, self.password_used or ""])
             data = cursor.fetchone()
         except sqlite3.DatabaseError as e:
             log("get_sessions()", exc_info=True)
@@ -131,16 +131,31 @@ def remove_user(filename, username, password=None):
     return exec_database_sql_script(None, filename, sql, sqlargs)
 
 def list_users(filename):
-    fields = ["username", "password", "uid", "gid", "displays", "env_options", "session_options"]
+    fields = ("username", "password", "uid", "gid", "displays", "env_options", "session_options")
+    def fmt(values, sizes):
+        s = ""
+        for i, field in enumerate(values):
+            if i==0:
+                s += "|"
+            s += ("%s" % field).rjust(sizes[i])+"|"
+        return s
     def cursor_callback(cursor):
         rows = cursor.fetchall()
         if len(rows)==0:
             print("no rows found")
             return
         print("%i rows found:" % len(rows))
-        print(csv(fields))
+        #calculate max size for each field:
+        sizes = [len(x)+1 for x in fields]
         for row in rows:
-            print(csv(row))
+            for i, value in enumerate(row):
+                sizes[i] = max(sizes[i], len(str(value))+1)
+        total = sum(sizes)+len(fields)+1
+        print("-"*total)
+        print(fmt((field.replace("_", " ") for field in fields), sizes))
+        print("-"*total)
+        for row in rows:
+            print(fmt(row, sizes))
     sql = "SELECT %s FROM users" % csv(fields)
     return exec_database_sql_script(cursor_callback, filename, sql)
 
@@ -160,7 +175,7 @@ def main(argv):
         print("usage:")
         print(" %s databasefile create" % sys.argv[0])
         print(" %s databasefile list" % sys.argv[0])
-        print(" %s databasefile add username password [uid, gid, displays, env_options, session_options" % sys.argv[0])
+        print(" %s databasefile add username password [uid, gid, displays, env_options, session_options]" % sys.argv[0])
         print(" %s databasefile remove username [password]" % sys.argv[0])
         print(" %s databasefile authenticate username password" % sys.argv[0])
         return 1

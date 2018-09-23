@@ -1356,6 +1356,11 @@ XpraClient.prototype._window_set_focus = function(win) {
 	for (var i in client.id_to_window) {
 		iwin = client.id_to_window[i];
 		iwin.focused = (i==wid);
+		if(iwin.title=="JidePopup" && iwin.metadata["transient-for"]==wid){
+			iwin.stacking_layer = top_stacking_layer;
+			client.send(["focus", iwin.wid, []]);
+		}
+		
 		if (iwin.focused) {
 			iwin.stacking_layer = top_stacking_layer;
 		}

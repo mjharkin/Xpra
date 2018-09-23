@@ -332,6 +332,12 @@ function doConnect() {
 	window.location = url;
 }
 
+$(document).keyup(function (e) {
+    if ($("password:focus") && (e.keyCode === 13)) {
+       doConnect();
+    }
+ });
+
 $(document).ready(function() {
 	var getparam = Utilities.getparam;
 	var getboolparam = Utilities.getboolparam;

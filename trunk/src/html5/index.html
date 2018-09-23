@@ -12,7 +12,7 @@
 		<meta charset="utf-8">
 		<meta name="description" content="xpra websockets client">
 		<link rel="shortcut icon" type="image/png" href="./favicon.png" id="favicon">
-
+		<link rel="stylesheet" href="css/dropdown.css">
 		<link rel="stylesheet" href="css/client.css">
 		<link rel="stylesheet" href="css/spinner.css">
 
@@ -45,6 +45,75 @@
 	</head>
 
 	<body>
+		<script>
+			/* When the user clicks on the button, 
+			toggle between hiding and showing the dropdown content */
+			function openDropdown() {
+				document.getElementById("menuDropdown").classList.toggle("show");
+			}
+
+			function addDropDownItem(wid, title)
+			{
+				var div = document.createElement("div");
+				div.id = "windowdropdowndiv"+wid;
+				var a = document.createElement("a");
+				a.appendChild(document.createTextNode(title));
+				div.onmouseover=function(){client._window_set_focus(client.id_to_window[wid])};
+				div.onclick=function(){
+					if(jQuery(client.id_to_window[wid].div).is(":hidden")){
+						jQuery(client.id_to_window[wid].div).show();
+					}
+				};
+				a.id = "windowdropdowntitle"+wid;
+				var img = new Image();
+				img.id = "windowdropdownicon"+wid;
+				img.src="favicon.png";
+				img.className="dropdown-content-img-left";
+				var img2 = new Image();
+				img2.id = "windowdropdownclose"+wid;
+				img2.src="icons/close.png";
+				img2.className="dropdown-content-img-right";
+				img2.onclick=function(){client._window_closed(client.id_to_window[wid])};
+				var img3 = new Image();
+				img3.id = "windowdropdownmax"+wid;
+				img3.src="icons/maximize.png";
+				img3.onclick=function(){client.id_to_window[wid].toggle_maximized()};
+				img3.className="dropdown-content-img-right";
+				var img4 = new Image();
+				img4.id = "windowdropdownmin"+wid;
+				img4.src="icons/minimize.png";
+				img4.onclick=function(){client.id_to_window[wid].toggle_minimized()};
+				img4.className="dropdown-content-img-right";
+				
+				div.appendChild(img);
+				div.appendChild(a);
+				div.appendChild(img2);
+				div.appendChild(img3);
+				div.appendChild(img4);
+				document.getElementById("menuDropdown").appendChild(div);
+			}
+
+			function removeDropDownItem(itemId)
+			{
+				var element = document.getElementById("windowdropdowndiv" + itemId);
+				element.parentNode.removeChild(element);
+			}
+
+			// Close the dropdown menu if the user clicks outside of it
+			window.onclick = function(event) {
+			  if (!event.target.matches('.dropbtn')) {
+
+				var dropdowns = document.getElementsByClassName("dropdown-content");
+				var i;
+				for (i = 0; i < dropdowns.length; i++) {
+				  var openDropdown = dropdowns[i];
+				  if (openDropdown.classList.contains('show')) {
+					openDropdown.classList.remove('show');
+				  }
+				}
+			  }
+			}
+		</script>
 		<div id="dpi" style="width: 1in; height: 1in; left: -100%; top: -100%; position: absolute;">
 		</div>
 
@@ -55,6 +124,10 @@
 		</div>
 
 		<div id="screen" style="width: 100%; height:100%;">
+			<div class="dropdown" >
+					<img src="favicon.png" onclick="openDropdown()" height="20px" width="20px" class="dropbtn" />
+					<div id="menuDropdown" class="dropdown-content" />
+			</div>
 			<div id="top_bar">
 				<div class="menu-block">
 					<button onclick="show_menu('xpra_menu', event);" class="menu-button">Xpra &#9660;</button>

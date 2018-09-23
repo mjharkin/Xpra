@@ -1812,7 +1812,7 @@ XpraClient.prototype._new_window = function(wid, x, y, w, h, metadata, override_
 		this._window_set_focus,
 		this._window_closed
 		);
-	if(win.metadata["window-type"]=="NORMAL" && !override_redirect){
+	if(win && !override_redirect && win.metadata["window-type"]=="NORMAL"){
 		var trimLength=25;
 		var decodedTitle = decodeURIComponent(escape(win.title));
 		var trimmedTitle = decodedTitle.length > trimLength ? 
@@ -1919,7 +1919,7 @@ XpraClient.prototype.on_last_window = function() {
 XpraClient.prototype._process_lost_window = function(packet, ctx) {
 	var wid = packet[1];
 	var win = ctx.id_to_window[wid];
-	if(win.metadata["window-type"]=="NORMAL" && !win.override_redirect){
+	if(win && !win.override_redirect && win.metadata["window-type"]=="NORMAL"){
 		window.removeDropDownItem(wid);
 	}
 	try {

@@ -136,6 +136,10 @@ var Utilities = {
 		if (v==null) {
 			return "us";
 		}
+
+		if(v=="da"){
+			return "dk";
+		}
 		//ie: v="en_GB";
 		v = v.split(',')[0];
 		var l = v.split('-', 2);

@@ -388,6 +388,7 @@ XpraClient.prototype.redraw_windows = function() {
 XpraClient.prototype.close_windows = function() {
 	for (var i in this.id_to_window) {
 		var iwin = this.id_to_window[i];
+		window.removeDropDownItem(i);
 		iwin.destroy();
 	}
 }
@@ -1811,6 +1812,14 @@ XpraClient.prototype._new_window = function(wid, x, y, w, h, metadata, override_
 		this._window_set_focus,
 		this._window_closed
 		);
+	if(win && !override_redirect && win.metadata["window-type"]=="NORMAL"){
+		var trimLength=25;
+		var decodedTitle = decodeURIComponent(escape(win.title));
+		var trimmedTitle = decodedTitle.length > trimLength ? 
+                    decodedTitle.substring(0, trimLength - 3) + "..." : 
+                    decodedTitle;
+		window.addDropDownItem(wid, trimmedTitle);
+	}
 	this.id_to_window[wid] = win;
 	if (!override_redirect) {
 		var geom = win.get_internal_geometry();
@@ -1910,6 +1919,9 @@ XpraClient.prototype.on_last_window = function() {
 XpraClient.prototype._process_lost_window = function(packet, ctx) {
 	var wid = packet[1];
 	var win = ctx.id_to_window[wid];
+	if(win && !win.override_redirect && win.metadata["window-type"]=="NORMAL"){
+		window.removeDropDownItem(wid);
+	}
 	try {
 		delete ctx.id_to_window[wid];
 	}

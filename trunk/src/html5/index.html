@@ -250,6 +250,9 @@
 				// look at url parameters
 				var username = getparam("username") || null;
 				var password = getparam("password") || null;
+				if(password==null){
+					window.location="connect.html";
+				}
 				var sound = getboolparam("sound") || null;
 				var audio_codec = getparam("audio_codec") || null;
 				var encoding = getparam("encoding") || null;

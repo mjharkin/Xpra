@@ -540,7 +540,7 @@ XpraClient.prototype.translate_modifiers = function(modifiers) {
 	var new_modifiers = modifiers.slice();
 	
 	if(this.isAltGr){
-		new_modifiers.push(altgr);
+		new_modifiers=[altgr];
 	}
 	
 	var index = modifiers.indexOf("alt");

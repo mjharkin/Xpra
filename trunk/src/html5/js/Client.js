@@ -2785,8 +2785,6 @@ XpraClient.prototype._process_open_url = function(packet, ctx) {
         console.warn(" but opening of URLs is disabled");
         return
     }
-    $('#action-link').attr("href", url);
-    $('#action-link').text(url);
-    $('#action-link').show();
+    window.open(url, '_blank');
     console.log("opening url:", url);
 }

@@ -72,16 +72,19 @@
 				var img2 = new Image();
 				img2.id = "windowdropdownclose"+wid;
 				img2.src="icons/close.png";
+				img2.title="Close";
 				img2.className="dropdown-content-img-right";
 				img2.onclick=function(){client._window_closed(client.id_to_window[wid])};
 				var img3 = new Image();
 				img3.id = "windowdropdownmax"+wid;
 				img3.src="icons/maximize.png";
+				img3.title="Maximize";
 				img3.onclick=function(){client.id_to_window[wid].toggle_maximized()};
 				img3.className="dropdown-content-img-right";
 				var img4 = new Image();
 				img4.id = "windowdropdownmin"+wid;
 				img4.src="icons/minimize.png";
+				img4.title="Minimize";
 				img4.onclick=function(){client.id_to_window[wid].toggle_minimized()};
 				img4.className="dropdown-content-img-right";
 				
@@ -99,10 +102,7 @@
 				element.parentNode.removeChild(element);
 			}
 
-			// Close the dropdown menu if the user clicks outside of it
-			window.onclick = function(event) {
-			  if (!event.target.matches('.dropbtn')) {
-
+			function hideDropDown(){
 				var dropdowns = document.getElementsByClassName("dropdown-content");
 				var i;
 				for (i = 0; i < dropdowns.length; i++) {
@@ -111,6 +111,12 @@
 					openDropdown.classList.remove('show');
 				  }
 				}
+			}
+
+			// Close the dropdown menu if the user clicks outside of it
+			window.onclick = function(event) {
+			  if (!event.target.matches('.dropbtn')) {
+				hideDropDown();
 			  }
 			}
 		</script>

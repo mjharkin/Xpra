@@ -1211,6 +1211,10 @@ XpraClient.prototype._window_mouse_move = function(ctx, e, window) {
 	ctx.do_window_mouse_move(e, window);
 }
 XpraClient.prototype.do_window_mouse_move = function(e, window) {
+	if(e.target.localName!="canvas"){
+		return;
+	}
+	
 	this._check_browser_language();
 	var mouse = this.getMouse(e, window),
 		x = Math.round(mouse.x),
@@ -1235,6 +1239,10 @@ XpraClient.prototype._window_mouse_up = function(ctx, e, window) {
 }
 
 XpraClient.prototype.do_window_mouse_click = function(e, window, pressed) {
+	if(e.target.localName!="canvas"){
+		return;
+	}
+	
 	var mouse = this.getMouse(e, window),
 		x = Math.round(mouse.x),
 		y = Math.round(mouse.y);

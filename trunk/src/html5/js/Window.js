@@ -797,16 +797,18 @@ XpraWindow.prototype.match_screen_size = function() {
 XpraWindow.prototype.move_resize = function(x, y, w, h) {
 	// only do it if actually changed!
 	if(!(this.w == w) || !(this.h == h) || !(this.x == x) || !(this.y == y)) {
-		this.w = w;
-		this.h = h;
-		this.x = x;
-		this.y = y;
-		if(!this.ensure_visible()) {
-			// we had to move the window so that it was visible
-			// is this the right thing to do?
-			this.geometry_cb(this);
+		if(!(this.h==(h-30))){
+			this.w = w;
+			this.h = h;
+			this.x = x;
+			this.y = y;
+			if(!this.ensure_visible()) {
+				// we had to move the window so that it was visible
+				// is this the right thing to do?
+				this.geometry_cb(this);
+			}
+			this.updateCSSGeometry();
 		}
-		this.updateCSSGeometry();
 	}
 };
 

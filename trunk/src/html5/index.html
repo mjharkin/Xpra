@@ -658,7 +658,7 @@
 					var f_el = document.fullscreenElement || document.mozFullScreen || document.webkitIsFullScreen || document.msFullscreenElement;
 					if (!f_el) {
 						var elem = document.getElementById("fullscreen");
-				        var req = elem.requestFullScreen || elem.webkitRequestFullScreen || elem.mozRequestFullScreen || elem.msRequestFullscreen;
+				        var req = elem.requestFullScreen || elem.webkitRequestFullScreen || elem.mozRequestFullScreen;
 						if (req) {
 							req.call(document.getElementById("screen"));
 						}

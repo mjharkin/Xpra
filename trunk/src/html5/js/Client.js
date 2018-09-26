@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2017 Antoine Martin <antoine@devloop.org.uk>
+ * Copyright (c) 2013-2018 Antoine Martin <antoine@devloop.org.uk>
  * Copyright (c) 2016 David Brushinski <dbrushinski@spikes.com>
  * Copyright (c) 2014 Joshua Higgins <josh@kxes.net>
  * Copyright (c) 2015-2016 Spikes, Inc.
@@ -193,7 +193,7 @@ XpraClient.prototype.send_log = function(level, args) {
 		try {
 			var sargs = [];
 			for(var i = 0; i < args.length; i++) {
-				sargs.push(String(args[i]));
+				sargs.push(unescape(encodeURIComponent(String(args[i]))));
 			}
 			this.send(["logging", level, sargs]);
 		} catch (e) {

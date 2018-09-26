@@ -9,6 +9,7 @@ import time
 import operator
 import threading
 from math import sqrt
+from collections import OrderedDict
 
 from xpra.net.compression import Compressed, LargeStructure
 from xpra.codecs.codec_constants import TransientCodecException, RGB_FORMATS, PIXEL_SUBSAMPLING
@@ -52,6 +53,23 @@ SCALING = envbool("XPRA_SCALING", True)
 SCALING_HARDCODED = parse_scaling_value(os.environ.get("XPRA_SCALING_HARDCODED", ""))
 SCALING_PPS_TARGET = envint("XPRA_SCALING_PPS_TARGET", 25*1920*1080)
 SCALING_MIN_PPS = envint("XPRA_SCALING_MIN_PPS", 25*320*240)
+SCALING_OPTIONS = (1, 10), (1, 5), (1, 4), (1, 3), (1, 2), (2, 3), (1, 1)
+SCALING_OPTIONS_STR = os.environ.get("XPRA_SCALING_OPTIONS")
+if SCALING_OPTIONS_STR:
+    #parse 1/10,1/5,1/4,1/3,1/2,2/3,1/1
+    #or even: 1:10, 1:5, ...
+    vs_options = []
+    for option in SCALING_OPTIONS_STR.split(","):
+        parts = option.strip().split("/")
+        try:
+            num, den = parts
+            vs_options.append((int(num), int(den)))
+        except ValueError:
+            scalinglog.warn("Warning: invalid scaling string '%s'", option.strip())
+    if vs_options:
+        SCALING_OPTIONS = tuple(vs_options)
+del SCALING_OPTIONS_STR
+scalinglog("scaling options: SCALING=%s, HARDCODED=%s, PPS_TARGET=%i, MIN_PPS=%i, OPTIONS=%s", SCALING, SCALING_HARDCODED, SCALING_PPS_TARGET, SCALING_MIN_PPS, SCALING_OPTIONS)
 
 FORCE_AV_DELAY = envint("XPRA_FORCE_AV_DELAY", 0)
 B_FRAMES = envbool("XPRA_B_FRAMES", True)
@@ -627,10 +645,13 @@ class WindowVideoSource(WindowSource):
         return vr
 
     def subregion_is_video(self):
-        vr = self.video_subregion.rectangle
+        vs = self.video_subregion
+        if not vs:
+            return False
+        vr = vs.rectangle
         if not vr:
             return False
-        events_count = self.statistics.damage_events_count - self.video_subregion.set_at
+        events_count = self.statistics.damage_events_count - vs.set_at
         min_video_events = MIN_VIDEO_EVENTS
         min_video_fps = MIN_VIDEO_FPS
         if self.content_type=="video":
@@ -638,7 +659,7 @@ class WindowVideoSource(WindowSource):
             min_video_fps //= 2
         if events_count<min_video_events:
             return False
-        if self.video_subregion.fps<min_video_fps:
+        if vs.fps<min_video_fps:
             return False
         return True
 
@@ -945,6 +966,8 @@ class WindowVideoSource(WindowSource):
         avsynclog("encode_from_queue: first due in %ims, due list=%s (av-sync delay=%i, actual=%i, for wid=%i)", first_due, still_due, self.av_sync_delay, av_delay, self.wid)
         self.idle_add(self.schedule_encode_from_queue, first_due)
 
+    def _more_lossless(self):
+        return self.subregion_is_video()
 
     def update_encoding_options(self, force_reload=False):
         """
@@ -975,10 +998,6 @@ class WindowVideoSource(WindowSource):
                 if newrect is None or old is None or newrect!=old:
                     self.cleanup_codecs()
                 if newrect:
-                    #when we have a video region, lower the lossless threshold
-                    #especially for small regions
-                    self._lossless_threshold_base = min(80, 10+self._current_speed//5)
-                    self._lossless_threshold_pixel_boost = 90-self._current_speed//5
                     #remove this from regular refresh:
                     if old is None or old!=newrect:
                         refreshlog("identified new video region: %s", newrect)
@@ -1224,10 +1243,16 @@ class WindowVideoSource(WindowSource):
             if width<=max_w and height<=max_h:
                 return default_value    #no problem
             #most encoders can't deal with that!
-            TRY_SCALE = ((2, 3), (1, 2), (1, 3), (1, 4), (1, 8), (1, 10))
-            for op, d in TRY_SCALE:
-                if width*op/d<=max_w and height*op/d<=max_h:
-                    return (op, d)
+            #sort them from smallest scaling to highest:
+            sopts = {}
+            for num, den in SCALING_OPTIONS:
+                sopts[float(num)/den] = (num, den)
+            for ratio in reversed(sorted(sopts.keys())):
+                num, den = sopts[ratio]
+                if num==1 and den==1:
+                    continue
+                if width*num/den<=max_w and height*num/den<=max_h:
+                    return (num, den)
             raise Exception("BUG: failed to find a scaling value for window size %sx%s", width, height)
         if not SCALING or not self.supports_video_scaling:
             #not supported by client or disabled by env
@@ -1280,31 +1305,31 @@ class WindowVideoSource(WindowSource):
                 if q>=q_noscaling or ffps==0:
                     scaling = get_min_required_scaling()
                 else:
-                    sscaling = {}
                     pps = ffps*width*height                 #Pixels/s
-                    target = self.bandwidth_limit//24*10    #assume 24 bits per pixel, compressed by 90%
-                    if target==0:
-                        target = SCALING_PPS_TARGET             #ie: 1080p
+                    if self.bandwidth_limit>0:
+                        #assume video compresses pixel data by ~95% (size is 20 times smaller)
+                        #(and convert to bytes per second)
+                        #ie: 240p minimum target
+                        target = max(SCALING_MIN_PPS, self.bandwidth_limit//8*20)
                     else:
-                        target = max(SCALING_MIN_PPS, target)   #ie: 240p minimum target
+                        target = SCALING_PPS_TARGET             #ie: 1080p
                     if self.is_shadow:
                         #shadow servers look ugly when scaled:
                         target *= 2
                     elif self.content_type=="text":
                         #try to avoid scaling:
                         target *= 4
-                    elif video:
-                        #we can downscale video content more:
-                        target //= 2
+                    elif not video:
+                        #downscale non-video content less:
+                        target *= 2
                     #high quality means less scaling:
                     target = target * (10+q)**2 // 50**2
                     #high speed means more scaling:
                     target = target * 60**2 // (q+20)**2
-                    for num, denom in (
-                        (1, 10), (1, 5), (1, 4), (1, 3), (1, 2), (2, 3), (1, 1),
-                        ):
+                    sscaling = OrderedDict()
+                    for num, denom in SCALING_OPTIONS:
                         #scaled pixels per second value:
-                        spps = pps*num/denom
+                        spps = pps*(num**2)/(denom**2)
                         ratio = float(target)/spps
                         #ideal ratio is 1, measure distance from 1:
                         score = int(abs(1-ratio)*100)

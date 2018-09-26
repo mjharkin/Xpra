@@ -63,7 +63,7 @@ SEND_TIMESTAMPS = envbool("XPRA_SEND_TIMESTAMPS", False)
 HARDCODED_ENCODING = os.environ.get("XPRA_HARDCODED_ENCODING")
 
 from xpra.server.window.windowicon_source import WindowIconSource
-from xpra.os_util import memoryview_to_bytes
+from xpra.os_util import memoryview_to_bytes, strtobytes
 from xpra.server.window.content_guesser import guess_content_type, get_content_type_properties
 from xpra.server.window.window_stats import WindowPerformanceStatistics
 from xpra.server.window.batch_config import DamageBatchConfig
@@ -700,10 +700,14 @@ class WindowSource(WindowIconSource):
         self.update_encoding_options()
         self.update_refresh_attributes()
 
+    def _more_lossless(self):
+        return False
+
     def update_encoding_options(self, force_reload=False):
         self._want_alpha = self.is_tray or (self.has_alpha and self.supports_transparency)
-        self._lossless_threshold_base = min(90, 60+self._current_speed//5)
-        if self.content_type=="text":
+        ml = self._more_lossless()
+        self._lossless_threshold_base = min(90-10*ml, 60-ml*20+self._current_speed//5)
+        if self.content_type=="text" or self.is_shadow:
             self._lossless_threshold_base -= 20
         self._lossless_threshold_pixel_boost = max(5, 20-self._current_speed//5)
         #calculate the threshold for using rgb
@@ -1064,7 +1068,8 @@ class WindowSource(WindowIconSource):
         self.do_set_auto_refresh_delay(min_delay, delay)
         rs = AUTO_REFRESH_SPEED
         rq = AUTO_REFRESH_QUALITY
-        if self._current_quality<70 and (cv>0.1 or (bwl>0 and bwl<=1000*1000)):
+        bits_per_pixel = float(bwl)/(1+ww*wh)
+        if self._current_quality<70 and (cv>0.1 or (bwl>0 and bits_per_pixel<1)):
             #when bandwidth is scarce, don't use lossless refresh,
             #switch to almost-lossless:
             rs = AUTO_REFRESH_SPEED//2
@@ -1116,7 +1121,7 @@ class WindowSource(WindowIconSource):
             damagelog("damage%s window size %ix%i ignored", (x, y, w, h, options), ww, wh)
             return
         now = monotonic_time()
-        if not options.get("auto_refresh", False):
+        if not options.get("auto_refresh", False) and not options.get("polling", False):
             self.statistics.last_damage_events.append((now, x,y,w,h))
         self.global_statistics.damage_events_count += 1
         self.statistics.damage_events_count += 1
@@ -1606,12 +1611,10 @@ class WindowSource(WindowIconSource):
         if not self.can_refresh():
             self.cancel_refresh_timer()
             return
-        encoding = packet[6]
+        encoding = strtobytes(packet[6])
         region = rectangle(*packet[2:6])    #x,y,w,h
         client_options = packet[10]     #info about this packet from the encoder
-        if encoding.startswith("png") or encoding.startswith("rgb"):
-            #FIXME: maybe we've sent png for 30bit image,
-            #in which case png is not actually lossless?
+        if (encoding.startswith(b"png") and (self.image_depth<=24 or self.image_depth==32)) or encoding.startswith(b"rgb"):
             actual_quality = 100
             lossy = False
         else:
@@ -2071,6 +2074,7 @@ class WindowSource(WindowIconSource):
             return  None
 
         coding, data, client_options, outw, outh, outstride, bpp = ret
+        coding = strtobytes(coding)
         #check cancellation list again since the code above may take some time:
         #but always send mmap data so we can reclaim the space!
         if coding!="mmap" and (self.is_cancelled(sequence) or self.suspended):
@@ -2135,7 +2139,7 @@ class WindowSource(WindowIconSource):
         return self.make_draw_packet(x, y, outw, outh, coding, data, outstride, client_options, options)
 
     def make_draw_packet(self, x, y, outw, outh, coding, data, outstride, client_options={}, _options={}):
-        packet = ("draw", self.wid, x, y, outw, outh, coding, data, self._damage_packet_sequence, outstride, client_options)
+        packet = ("draw", self.wid, x, y, outw, outh, strtobytes(coding), data, self._damage_packet_sequence, outstride, client_options)
         self.global_statistics.packet_count += 1
         self.statistics.packet_count += 1
         self._damage_packet_sequence += 1

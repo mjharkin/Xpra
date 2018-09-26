@@ -43,6 +43,7 @@ class ServerTestUtil(unittest.TestCase):
 		os.environ["XAUTHORITY"] = os.path.expanduser(cls.xauthority_temp.name)
 		os.environ["XPRA_LOG_DIR"] = find_log_dir()
 		os.environ["XPRA_NOTTY"] = "1"
+		os.environ["XPRA_WAIT_FOR_INPUT"] = "0"
 		os.environ["XPRA_FLATTEN_INFO"] = "0"
 		os.environ["XPRA_NOTTY"] = "1"
 		cls.default_env = os.environ.copy()
@@ -96,7 +97,7 @@ class ServerTestUtil(unittest.TestCase):
 
 	def get_run_env(self):
 		env = dict((k,v) for k,v in self.default_env.items() if
-				k.startswith("XPRA") or k in ("HOME", "HOSTNAME", "SHELL", "TERM", "USER", "USERNAME", "PATH", "XAUTHORITY", "PWD", "PYTHONPATH", ))
+				k.startswith("XPRA") or k in ("HOME", "HOSTNAME", "SHELL", "TERM", "USER", "USERNAME", "PATH", "XAUTHORITY", "PWD", "PYTHONPATH", "SYSTEMROOT"))
 		return env
 
 	@classmethod
@@ -170,9 +171,13 @@ class ServerTestUtil(unittest.TestCase):
 		def showfile(fileobj, filetype="stdout"):
 			if fileobj and fileobj.name and os.path.exists(fileobj.name):
 				log.warn("contents of %s file '%s':", filetype, fileobj.name)
-				with open(fileobj.name, 'rb') as f:
-					for line in f:
-						log.warn(" %s", line.rstrip(b"\n\r"))
+				try:
+					with fileobj as f:
+						f.seek(0)
+						for line in f:
+							log.warn(" %s", line.rstrip(b"\n\r"))
+				except Exception as e:
+					log.error("Error: failed to read '%s': %s", fileobj.name, e)
 			else:
 				log.warn("no %s file", filetype)
 		showfile(proc.stdout_file, "stdout")

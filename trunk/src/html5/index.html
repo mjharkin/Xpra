@@ -742,7 +742,7 @@
 						var elem = document.getElementById("fullscreen");
 				        var req = elem.requestFullScreen || elem.webkitRequestFullScreen || elem.mozRequestFullScreen || elem.msRequestFullscreen;
 						if (req) {
-							req.call(document.getElementById("screen"));
+							req.call(document.body);
 						}
 						//change icon to unfullscreen:
 						$('#fullscreen').attr('src', './icons/unfullscreen.png');

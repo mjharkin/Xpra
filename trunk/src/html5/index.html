@@ -96,7 +96,9 @@
 			function removeDropDownItem(itemId)
 			{
 				var element = document.getElementById("windowdropdowndiv" + itemId);
-				element.parentNode.removeChild(element);
+				if(element && element.parentNode){
+					element.parentNode.removeChild(element);
+				}
 			}
 
 			// Close the dropdown menu if the user clicks outside of it

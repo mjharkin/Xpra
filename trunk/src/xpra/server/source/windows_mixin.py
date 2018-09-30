@@ -13,6 +13,7 @@ cursorlog = Logger("cursor")
 metalog = Logger("metadata")
 bandwidthlog = Logger("bandwidth")
 eventslog = Logger("events")
+filterslog = Logger("filters")
 
 from xpra.server.source.stub_source_mixin import StubSourceMixin
 from xpra.server.window.metadata import make_window_metadata
@@ -132,7 +133,7 @@ class WindowsMixin(StubSourceMixin):
             for object_name, property_name, operator, value in c.listget("window-filters"):
                 self.add_window_filter(object_name, property_name, operator, value)
         except Exception as e:
-            log.error("Error parsing window-filters: %s", e)
+            filterslog.error("Error parsing window-filters: %s", e)
 
 
     def get_caps(self):
@@ -151,14 +152,6 @@ class WindowsMixin(StubSourceMixin):
             }
         if self.window_frame_sizes:
             info.setdefault("window", {}).update({"frame-sizes" : self.window_frame_sizes})
-        if self.window_filters:
-            i = 0
-            finfo = {}
-            for uuid, f in self.window_filters:
-                if uuid==self.uuid:
-                    finfo[i] = str(f)
-                    i += 1
-            info["window-filter"] = finfo
         info.update(self.get_window_info())
         return info
 
@@ -314,15 +307,20 @@ class WindowsMixin(StubSourceMixin):
         #we could also allow filtering for system tray windows?
         if self.window_filters and self.send_windows and not window.is_tray():
             for uuid, window_filter in self.window_filters:
+                filterslog("can_send_window(%s) checking %s for uuid=%s (client uuid=%s)", window, window_filter, uuid, self.uuid)
                 if window_filter.matches(window):
-                    return uuid=="*" or uuid==self.uuid
+                    v = uuid=="*" or uuid==self.uuid
+                    filterslog("can_send_window(%s)=%s", window, v)
+                    return v
         if self.send_windows and self.system_tray:
             #common case shortcut
-            return True
-        if window.is_tray():
-            return self.system_tray
+            v = True
+        elif window.is_tray():
+            v = self.system_tray
         else:
-            return self.send_windows
+            v = self.send_windows
+        filterslog("can_send_window(%s)=%s", window, v)
+        return v
 
 
     ######################################################################

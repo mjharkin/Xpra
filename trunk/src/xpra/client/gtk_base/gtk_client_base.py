@@ -18,14 +18,11 @@ from xpra.log import Logger
 log = Logger("gtk", "client")
 opengllog = Logger("gtk", "opengl")
 cursorlog = Logger("gtk", "client", "cursor")
-screenlog = Logger("gtk", "client", "screen")
 framelog = Logger("gtk", "client", "frame")
-menulog = Logger("gtk", "client", "menu")
 filelog = Logger("gtk", "client", "file")
 clipboardlog = Logger("gtk", "client", "clipboard")
 notifylog = Logger("gtk", "notify")
 grablog = Logger("client", "grab")
-authlog = Logger("client", "auth")
 
 from xpra.gtk_common.quit import (gtk_main_quit_really,
                            gtk_main_quit_on_fatal_exceptions_enable)
@@ -588,12 +585,12 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
                     wm_name = None
                 try:
                     if len(v)==8:
-                        v = v[4:]
                         if first_time("invalid-frame-extents"):
                             framelog.warn("Warning: invalid frame extents value '%s'", v)
                             if wm_name:
                                 framelog.warn(" this is probably a bug in '%s'", wm_name)
-                            framelog.warn(" using '%s' instead", v)
+                            framelog.warn(" using '%s' instead", v[4:])
+                        v = v[4:]
                     l, r, t, b = v
                     wfs["frame"] = (l, r, t, b)
                     wfs["offset"] = (l, t)

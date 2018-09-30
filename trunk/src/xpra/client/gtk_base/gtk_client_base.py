@@ -250,13 +250,20 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         password_input.set_width_chars(32)
         password_input.set_visibility(False)
         add(password_input, 10)
+        add(gtk.Label('OTP'), 10)
+        otp_input = gtk.Entry()
+        otp_input.set_max_length(255)
+        otp_input.set_width_chars(32)
+        otp_input.set_visibility(False)
+        add(otp_input, 10)
         dialog.vbox.show_all()
         dialog.password_input = password_input
+        dialog.otp_input = otp_input
         def handle_response(dialog, response):
             if OSX:
                 from xpra.platform.darwin.gui import disable_focus_workaround
                 disable_focus_workaround()
-            password = dialog.password_input.get_text()
+            password = dialog.password_input.get_text() + dialog.otp_input.get_text()
             dialog.hide()
             dialog.destroy()
             if response!=RESPONSE_ACCEPT or not password:

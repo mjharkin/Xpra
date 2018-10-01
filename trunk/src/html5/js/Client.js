@@ -75,10 +75,6 @@ XpraClient.prototype.init_settings = function(container) {
 	this.PING_GRACE = 2000;
 	this.PING_FREQUENCY = 5000;
 	this.uuid = Utilities.getHexUUID();
-
-	this.isCtrl=false;
-	this.isAlt=false;
-	this.isAltGr=false;
 }
 
 XpraClient.prototype.init_state = function(container) {
@@ -530,7 +526,6 @@ XpraClient.prototype.translate_modifiers = function(modifiers) {
 	//convert generic modifiers "meta" and "alt" into their x11 name:
 	//FIXME: look them up!
 	var alt = "mod1";
-	var altgr = "mod5";
 	var meta = "mod1";
 	var control = "control";
 	//swap
@@ -539,11 +534,6 @@ XpraClient.prototype.translate_modifiers = function(modifiers) {
 		control = "mod1";
 	}
 	var new_modifiers = modifiers.slice();
-	
-	if(this.isAltGr){
-		new_modifiers=[altgr];
-	}
-	
 	var index = modifiers.indexOf("alt");
 	if (index>=0)
 		new_modifiers[index] = alt;
@@ -735,24 +725,9 @@ XpraClient.prototype._keyb_process = function(pressed, event) {
 
 
 XpraClient.prototype._keyb_onkeydown = function(event, ctx) {
-	event = (event || window.event);
-	var k = event.keyCode || event.which;
-	if(k == 17) ctx.isCtrl=true;
-	if(k == 18) ctx.isAlt=true;
-	if(ctx.isCtrl && ctx.isAlt) ctx.isAltGr=true;
 	return ctx._keyb_process(true, event);
 };
 XpraClient.prototype._keyb_onkeyup = function(event, ctx) {
-	var k = event.keyCode || event.which;
-	if(k == 17){
-		ctx.isCtrl=false;
-		ctx.isAltGr=false;
-	} 
-	if(k == 18){
-		ctx.isAlt=false;
-		ctx.isAltGr=false;
-	}
-
 	return ctx._keyb_process(false, event);
 };
 

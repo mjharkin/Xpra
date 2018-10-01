@@ -507,6 +507,7 @@ XpraWindow.prototype.apply_size_constraints = function() {
 	}
 	if(minw>0 && minw==maxw && minh>0 && minh==maxh) {
 		jQuery(this.d_maximizebtn).hide();
+		jQuery('#windowdropdownmax' + String(this.wid)).hide();
 		jQuery(this.div).resizable('disable');
 	} else {
 		jQuery(this.d_maximizebtn).show();

@@ -15,7 +15,7 @@
 		<link rel="stylesheet" href="css/dropdown.css">
 		<link rel="stylesheet" href="css/client.css">
 		<link rel="stylesheet" href="css/spinner.css">
-		<script type="text/javascript" src="js/lib/es6-shim.js"></script>
+
 		<script type="text/javascript" src="js/lib/jquery.js"></script>
 		<script type="text/javascript" src="js/lib/jquery-ui.js"></script>
 		<script type="text/javascript" src="js/lib/jquery.ba-throttle-debounce.js"></script>
@@ -45,9 +45,6 @@
 	</head>
 
 	<body>
-		<script>
-			var console = console || { log: function(){} };
-		</script>
 		<script>
 			/* When the user clicks on the button, 
 			toggle between hiding and showing the dropdown content */
@@ -750,7 +747,7 @@
 					var f_el = document.fullscreenElement || document.mozFullScreen || document.webkitIsFullScreen || document.msFullscreenElement;
 					if (!f_el) {
 						var elem = document.getElementById("fullscreen");
-				        var req = elem.requestFullScreen || elem.webkitRequestFullScreen || elem.mozRequestFullScreen || elem.msRequestFullscreen;
+				        var req = elem.requestFullScreen || elem.webkitRequestFullScreen || elem.mozRequestFullScreen;
 						if (req) {
 							req.call(document.body);
 						}

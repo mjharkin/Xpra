@@ -335,18 +335,14 @@ var Utilities = {
 
 	saveFile : function(filename, data, mimetype) {
 	    var a = document.createElement("a");
-	    a.setAttribute("style","display: none");
+	    a.style = "display: none";
 	    document.body.appendChild(a);
 	    var blob = new Blob([data], mimetype);
 	    var url = window.URL.createObjectURL(blob);
-	    if(navigator.msSaveOrOpenBlob){
-	    	navigator.msSaveOrOpenBlob(blob, filename)
-	    }else{
-	        a.href = url;
-	        a.download = filename;
-	        a.click();
-	        window.URL.revokeObjectURL(url);
-	    }
+        a.href = url;
+        a.download = filename;
+        a.click();
+        window.URL.revokeObjectURL(url);
 	},
 
 	//IE is retarded:

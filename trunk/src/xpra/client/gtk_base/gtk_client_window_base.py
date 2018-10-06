@@ -370,25 +370,20 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
         focused = self._client._focused
         grablog("recheck_focus() wid=%i, focused=%s, latest=%s", self._id, focused, self._focus_latest)
         hasfocus = focused==self._id
-        if not focused:
-            #we should never own the grab if we don't have focus
-            self.keyboard_ungrab()
-            self.pointer_ungrab()
-            return
         if hasfocus==self._focus_latest:
             #we're already up to date
             return
         if not self._focus_latest:
-            self.keyboard_ungrab()
-            self.pointer_ungrab()
+            self._client.window_ungrab()
             self._client.update_focus(self._id, False)
         else:
             self._client.update_focus(self._id, True)
 
     def cancel_focus_timer(self):
-        if self.recheck_focus_timer:
-            self.source_remove(self.recheck_focus_timer)
+        rft = self.recheck_focus_timer
+        if rft:
             self.recheck_focus_timer = 0
+            self.source_remove(rft)
 
     def schedule_recheck_focus(self):
         if self.recheck_focus_timer==0:
@@ -1917,7 +1912,7 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
                         #gdkwin.raise_()
                         w.present()
                         return focused
-        return self._id
+        return ClientWindowBase.get_mouse_event_wid(self, x, y)
 
 
     def do_scroll_event(self, event):

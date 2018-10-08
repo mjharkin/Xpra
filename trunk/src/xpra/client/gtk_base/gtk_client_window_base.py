@@ -1779,8 +1779,8 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
                 ax = -w + 1
             elif ax >= mw:
                 ax = mw - 1
-            if (ay + h)<0:
-                ay = -y + 1
+            if ay < 0:
+                ay = 0
             elif ay >= mh:
                 ay = mh -1
         geomlog("validated window position for total screen area %ix%i : %ix%i", mw, mh, ax, ay)

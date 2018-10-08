@@ -273,6 +273,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         def password_activate(*_args):
             handle_response(dialog, RESPONSE_ACCEPT)
         password_input.connect("activate", password_activate)
+        otp_input.connect("activate", password_activate)
         dialog.connect("response", handle_response)
         if OSX:
             from xpra.platform.darwin.gui import enable_focus_workaround

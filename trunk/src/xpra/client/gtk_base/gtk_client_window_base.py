@@ -523,10 +523,30 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
         #this will create the backing:
         ClientWindowBase.setup_window(self, *args)
 
+        x,y = self._pos
+        
+        # Adjust for window centering on monitor instead of screen java
+        sw = self.get_screen().get_width()
+        sh = self.get_screen().get_height()
+        ss = self._client._current_screen_sizes
+        screen0 = ss[0]
+        monitors = screen0[5]
+        monitor = monitors[0]
+        mw = monitor[3]
+        mh = monitor[4]
+        w, h = self._size
+        geomlog("setup_window() sw=%s, sh=%s, mw=%s, mh=%s", sw, sh, mw, mh)
+        geomlog("setup_window() x=%s, y=%s, w=%s, h=%s", x, y, w, h)
+        geomlog("setup_window() sw//2=%s, x=%s, h//2=%s", sw//2, x, w//2)
+        if abs((sw//2) - (x+(w//2))) <= 10:
+            x = (mw-w)//2
+        if abs((sh//2) - (y+(h//2))) <= 10:
+            y = (mh-h)//2
+
         #try to honour the initial position
         geomlog("setup_window() position=%s, set_initial_position=%s, OR=%s, decorated=%s", self._pos, self._set_initial_position, self.is_OR(), self.get_decorated())
         if self._pos!=(0, 0) or self._set_initial_position or self.is_OR():
-            x,y = self._pos
+            #x,y = self._pos
             if self.is_OR():
                 #make sure OR windows are mapped on screen
                 if self._client._current_screen_sizes:
@@ -1745,6 +1765,24 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
         context.clip()
 
     def move_resize(self, x, y, w, h, resize_counter=0):
+        # Adjust for window centering on monitor instead of screen java
+        sw = self.get_screen().get_width()
+        sh = self.get_screen().get_height()
+        ss = self._client._current_screen_sizes
+        screen0 = ss[0]
+        monitors = screen0[5]
+        monitor = monitors[0]
+        mw = monitor[3]
+        mh = monitor[4]
+
+        geomlog("setup_window() sw=%s, sh=%s, mw=%s, mh=%s", sw, sh, mw, mh)
+        geomlog("setup_window() x=%s, y=%s, w=%s, h=%s", x, y, w, h)
+        geomlog("setup_window() sw//2=%s, x=%s, h//2=%s", sw//2, x, w//2)
+        if abs((sw//2) - (x+(w//2))) <= 10:
+            x = (mw-w)//2
+        if abs((sh//2) - (y+(h//2))) <= 10:
+            y = (mh-h)//2
+
         geomlog("window %i move_resize%s", self._id, (x, y, w, h, resize_counter))
         w = max(1, w)
         h = max(1, h)

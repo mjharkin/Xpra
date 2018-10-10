@@ -38,6 +38,7 @@ class SessionsGUI(gtk.Window):
         self.set_border_width(20)
         self.set_resizable(True)
         self.set_decorated(True)
+        self.set_size_request(440, 200)
         self.set_position(WIN_POS_CENTER)
         icon = self.get_pixbuf("xpra")
         if icon:
@@ -180,7 +181,11 @@ class SessionsGUI(gtk.Window):
 
     def get_session_info(self, sockpath):
         #the lazy way using a subprocess
-        cmd = get_nodock_command()+["id", "socket:%s" % sockpath]
+        if WIN32:
+            socktype = "namedpipe"
+        else:
+            socktype = "socket"
+        cmd = get_nodock_command()+["id", "%s:%s" % (socktype, sockpath)]
         p = subprocess.Popen(cmd, stdin=None, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         stdout, _ = p.communicate()
         log("get_sessions_info(%s) returncode(%s)=%s", sockpath, cmd, p.returncode)
@@ -205,7 +210,9 @@ class SessionsGUI(gtk.Window):
             self.table = gtk.Label("No sessions found")
             self.vbox.add(self.table)
             self.table.show()
+            self.set_size_request(440, 200)
             return
+        self.set_size_request(-1, -1)
         tb = TableBuilder(1, 6, False)
         tb.add_row(gtk.Label("Host"), gtk.Label("Display"), gtk.Label("Name"), gtk.Label("Platform"), gtk.Label("Type"), gtk.Label("URI"), gtk.Label("Connect"), gtk.Label("Open in Browser"))
         self.table = tb.get_table()
@@ -283,7 +290,9 @@ class SessionsGUI(gtk.Window):
     def attach(self, key, uri):
         self.warning.set_text("")
         cmd = get_xpra_command() + ["attach", uri]
-        proc = subprocess.Popen(cmd)
+        env = os.environ.copy()
+        env["XPRA_NOTTY"] = "1"
+        proc = subprocess.Popen(cmd, env=env)
         log("attach() Popen(%s)=%s", cmd, proc)
         def proc_exit(*args):
             log("proc_exit%s", args)

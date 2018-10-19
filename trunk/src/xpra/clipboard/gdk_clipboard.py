@@ -1,6 +1,6 @@
 # This file is part of Xpra.
 # Copyright (C) 2008 Nathaniel Smith <njs@pobox.com>
-# Copyright (C) 2012-2017 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2012-2017 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -57,7 +57,7 @@ class GDKClipboardProtocolHelper(ClipboardProtocolHelperBase):
     def _munge_wire_selection_to_raw(self, encoding, datatype, dataformat, data):
         if encoding==b"atoms" and gdk_atoms:
             atom_array = gdk_atoms.gdk_atom_array_from_atoms(data)
-            bdata = struct.pack("@" + "L" * len(atom_array), *atom_array)
+            bdata = struct.pack(b"@" + b"L" * len(atom_array), *atom_array)
             log("_munge_wire_selection_to_raw(%s, %s, %s, %s:%s)=%s=%s=%s", encoding, datatype, dataformat, type(data), len(data or ""), data, atom_array, tuple(bdata))
             return bdata
         return ClipboardProtocolHelperBase._munge_wire_selection_to_raw(self, encoding, datatype, dataformat, data)

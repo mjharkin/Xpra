@@ -1,6 +1,6 @@
 # This file is part of Xpra.
 # Copyright (C) 2008, 2009 Nathaniel Smith <njs@pobox.com>
-# Copyright (C) 2011-2018 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2011-2018 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -358,6 +358,7 @@ class BaseWindowModel(CoreX11WindowModel):
     def _handle_wm_hints_change(self):
         with xswallow:
             wm_hints = X11Window.getWMHints(self.xid)
+        metalog("getWMHints(%#x)=%s", self.xid, wm_hints)
         if wm_hints is None:
             return
         # GdkWindow or None

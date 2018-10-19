@@ -1,6 +1,6 @@
 # This file is part of Xpra.
 # Copyright (C) 2008, 2009 Nathaniel Smith <njs@pobox.com>
-# Copyright (C) 2010-2018 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -225,18 +225,18 @@ SBFirst = {
            LSBFirst : "LSBFirst"
            }
 
-RLE8    = "RLE8"
-RGB565  = "RGB565"
-BGR565  = "BGR565"
-XRGB    = "XRGB"
-BGRX    = "BGRX"
-ARGB    = "ARGB"
-BGRA    = "BGRA"
-RGB     = "RGB"
-RGBA    = "RGBA"
-RGBX    = "RGBX"
-R210    = "R210"
-r210    = "r210"
+RLE8    = b"RLE8"
+RGB565  = b"RGB565"
+BGR565  = b"BGR565"
+XRGB    = b"XRGB"
+BGRX    = b"BGRX"
+ARGB    = b"ARGB"
+BGRA    = b"BGRA"
+RGB     = b"RGB"
+RGBA    = b"RGBA"
+RGBX    = b"RGBX"
+R210    = b"R210"
+r210    = b"r210"
 
 RGB_FORMATS = [XRGB, BGRX, ARGB, BGRA, RGB, RGBA, RGBX, R210, r210, RGB565, BGR565, RLE8]
 

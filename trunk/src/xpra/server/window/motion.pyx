@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2016-2017 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2016-2017 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -46,7 +46,7 @@ def h(v):
     return hex(v).lstrip("0x").rstrip("L")
 
 cdef inline uint64_t hashtoint64(s):
-    return <uint64_t> struct.unpack("@L", s)[0]
+    return <uint64_t> struct.unpack(b"@L", s)[0]
 
 cdef da(uint64_t *a, uint16_t l):
     return repr_ellipsized(csv(h(a[i]) for i in range(l)))

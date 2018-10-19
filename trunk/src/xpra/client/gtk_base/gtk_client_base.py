@@ -1,6 +1,6 @@
 # This file is part of Xpra.
 # Copyright (C) 2011 Serviware (Arthur Huillet, <ahuillet@serviware.com>)
-# Copyright (C) 2010-2017 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2010-2017 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008, 2010 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -356,7 +356,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             from xpra.client.gtk_base.start_new_command import getStartNewCommand
             def run_command_cb(command, sharing=True):
                 self.send_start_command(command, command, False, sharing)
-            self.start_new_command = getStartNewCommand(run_command_cb, self.server_sharing and self.server_window_filters)
+            self.start_new_command = getStartNewCommand(run_command_cb, self.server_sharing and self.server_window_filters, self.xdg_menu)
         self.start_new_command.show()
         return self.start_new_command
 

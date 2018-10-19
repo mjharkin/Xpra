@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
 # Copyright (C) 2011 Serviware (Arthur Huillet, <ahuillet@serviware.com>)
-# Copyright (C) 2010-2017 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2010-2017 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -262,7 +262,7 @@ class X11ServerBase(X11ServerCore):
     def set_icc_profile(self):
         ui_clients = [s for s in self._server_sources.values() if s.ui_client]
         if len(ui_clients)!=1:
-            screenlog("%i UI clients, not setting ICC profile")
+            screenlog("%i UI clients, resetting ICC profile to default", len(ui_clients))
             self.reset_icc_profile()
             return
         icc = ui_clients[0].icc

@@ -1,6 +1,6 @@
 # This file is part of Xpra.
 # Copyright (C) 2010 Nathaniel Smith <njs@pobox.com>
-# Copyright (C) 2011-2017 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2011-2017 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -324,24 +324,6 @@ def command_info(message):
 
 def command_error(message):
     _show_message(message, MB_ICONEXCLAMATION | MB_SYSTEMMODAL)
-
-
-def get_main_fallback(cmd):
-    set_wait_for_input()
-    global _wait_for_input
-    if _wait_for_input:
-        #something will be shown in a console,
-        #so don't bother showing anything else
-        return None
-    if cmd.find("Xpra_Audio.exe")>=0:
-        #don't show the launcher when trying to use this command
-        return None
-    #try the launcher (better than nothing!)
-    try:
-        from xpra.client.gtk_base.client_launcher import main
-        return main
-    except:
-        return None
 
 
 def do_clean():

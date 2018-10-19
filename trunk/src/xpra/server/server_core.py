@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
 # Copyright (C) 2011 Serviware (Arthur Huillet, <ahuillet@serviware.com>)
-# Copyright (C) 2010-2018 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -1627,7 +1627,7 @@ class ServerCore(object):
             ctr = c.strget("connect_test_request")
             response = {"connect_test_response" : ctr}
             proto.send_now(("hello", response))
-            return
+            return True
         if is_req("id"):
             self.send_id_info(proto)
             return True

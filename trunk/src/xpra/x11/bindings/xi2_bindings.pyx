@@ -1,5 +1,5 @@
 # This file is part of Xpra.
-# Copyright (C) 2017-2018 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2017-2018 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -688,18 +688,18 @@ cdef class _X11XI2Bindings(_X11CoreBindings):
         fmt = None
         if prop_type=="INTEGER":
             fmt = {
-                8   : "b",
-                16  : "h",
-                32  : "i",
+                8   : b"b",
+                16  : b"h",
+                32  : b"i",
                 }.get(actual_format)
         elif prop_type=="CARDINAL":
             fmt = {
-                8   : "B",
-                16  : "H",
-                32  : "I",
+                8   : b"B",
+                16  : b"H",
+                32  : b"I",
                 }.get(actual_format)
         elif prop_type=="FLOAT":
-            fmt = "f"
+            fmt = b"f"
         if fmt:
             value = struct.unpack(fmt*nitems, data)
             if nitems==1:

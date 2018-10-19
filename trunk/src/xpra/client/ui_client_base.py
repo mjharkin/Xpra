@@ -1,6 +1,6 @@
 # This file is part of Xpra.
 # Copyright (C) 2011 Serviware (Arthur Huillet, <ahuillet@serviware.com>)
-# Copyright (C) 2010-2018 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008, 2010 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -16,7 +16,7 @@ from xpra.client.client_base import XpraClientBase
 from xpra.client.keyboard_helper import KeyboardHelper
 from xpra.platform import set_name
 from xpra.platform.features import MMAP_SUPPORTED
-from xpra.platform.gui import (ready as gui_ready, get_session_type, ClientExtras)
+from xpra.platform.gui import ready as gui_ready, get_wm_name, get_session_type, ClientExtras
 from xpra.version_util import full_version_str
 from xpra.net import compression, packet_encoding
 from xpra.child_reaper import reaper_cleanup
@@ -101,6 +101,9 @@ class UIXpraClient(ClientBaseClass):
             log.info(" running on %s", osinfo)
         except:
             log("platform name error:", exc_info=True)
+        wm = get_wm_name()
+        if wm:
+            log.info(" window manager is '%s'", wm)
 
         self._ui_events = 0
         self.title = ""
@@ -115,6 +118,7 @@ class UIXpraClient(ClientBaseClass):
         self.readonly = False
         self.xsettings_enabled = False
         self.server_start_new_commands = False
+        self.xdg_menu = {}
         self.start_new_commands  = []
         self.start_child_new_commands  = []
 
@@ -354,6 +358,8 @@ class UIXpraClient(ClientBaseClass):
         self.server_toggle_keyboard_sync = self.server_keyboard and c.boolget("toggle_keyboard_sync", True)
         self.server_pointer = c.boolget("pointer", True)
         self.server_start_new_commands = c.boolget("start-new-commands")
+        if self.server_start_new_commands:
+            self.xdg_menu = c.dictget("xdg-menu")
         if self.start_new_commands or self.start_child_new_commands:
             if self.server_start_new_commands:
                 self.after_handshake(self.send_start_new_commands)

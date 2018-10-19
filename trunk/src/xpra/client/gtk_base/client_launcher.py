@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # This file is part of Xpra.
-# Copyright (C) 2009-2018 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2009-2018 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -693,10 +693,6 @@ class ApplicationWindow:
         log("do_start_XpraClient(%s, %s) client=%s", conn, display_desc, self.client)
         self.client.encoding = self.config.encoding
         self.client.display_desc = display_desc
-        #we have already initialized it,
-        #but calling client.init will do it again - so we have to clear it:
-        from xpra.codecs.video_helper import getVideoHelper
-        getVideoHelper().cleanup()
         self.client.init_ui(self.config)
         self.client.setup_connection(conn)
         log("start_XpraClient() client initialized")
@@ -920,14 +916,14 @@ def exception_dialog(title):
     gtk_main()
 
 
-def main():
+def main(argv):
     from xpra.platform import program_context
     from xpra.log import enable_color
     with program_context("Xpra-Launcher", "Xpra Connection Launcher"):
         enable_color()
-        return do_main()
+        return do_main(argv)
 
-def do_main():
+def do_main(argv):
     from xpra.os_util import SIGNAMES
     from xpra.scripts.main import InitExit, InitInfo
     from xpra.gtk_common.quit import gtk_main_quit_on_fatal_exceptions_enable
@@ -937,7 +933,7 @@ def do_main():
     gui_init()
     try:
         from xpra.scripts.parsing import parse_cmdline, fixup_debug_option
-        options, args = parse_cmdline(sys.argv)
+        options, args = parse_cmdline(argv)
         debug = fixup_debug_option(options.debug)
         if debug:
             for x in debug.split(","):
@@ -992,23 +988,11 @@ def do_main():
             glib.idle_add(app.do_connect)
         if not has_file:
             app.reset_errors()
-        gui_ready()
         if not app.config.autoconnect or app.config.debug:
-            #FIXME: this is ugly as hell
-            #We have to wait for the main loop to be running
-            #to get the NSApplicationOpneFile signal,
-            #so we end up duplicating some of the logic from just above
-            #maybe we should always run this code from the main loop instead
-            if OSX:
-                def force_show():
-                    from xpra.platform.darwin.gui import enable_focus_workaround, disable_focus_workaround
-                    enable_focus_workaround()
-                    app.show()
-                    glib.timeout_add(500, disable_focus_workaround)
-                #wait a little bit for the "openFile" signal
-                app.__osx_open_signal = False
-                def do_open_file(filename):
-                    log.info("do_open_file(%s)", filename)
+            if OSX and not has_file:
+                from xpra.platform.darwin.gui import wait_for_open_handlers, show_with_focus_workaround
+                def open_file(filename):
+                    log("open_file(%s)", filename)
                     app.update_options_from_file(filename)
                     #the compressors and packet encoders cannot be changed from the UI
                     #so apply them now:
@@ -1018,12 +1002,9 @@ def do_main():
                         app.__osx_open_signal = True
                         glib.idle_add(app.do_connect)
                     else:
-                        force_show()
-                def open_file(_, filename):
-                    log.info("open_file(%s)", filename)
-                    glib.idle_add(do_open_file, filename)
-                def do_open_URL(url):
-                    log.info("do_open_URL(%s)", url)
+                        show_with_focus_workaround(app.show)
+                def open_URL(url):
+                    log("open_URL(%s)", url)
                     app.__osx_open_signal = True
                     app.update_options_from_URL(url)
                     #the compressors and packet encoders cannot be changed from the UI
@@ -1031,23 +1012,10 @@ def do_main():
                     configure_network(app.config)
                     app.update_gui_from_config()
                     glib.idle_add(app.do_connect)
-                def open_URL(url):
-                    log.info("open_URL(%s)", url)
-                    glib.idle_add(do_open_URL, url)
-                from xpra.platform.darwin.gui import get_OSXApplication, register_URL_handler
-                register_URL_handler(open_URL)
-                try:
-                    get_OSXApplication().connect("NSApplicationOpenFile", open_file)
-                except Exception as e:
-                    log.error("Error: cannot handle file associations:")
-                    log.error(" %s", e)
-                def may_show():
-                    log("may_show() osx open signal=%s", app.__osx_open_signal)
-                    if not app.__osx_open_signal:
-                        force_show()
-                glib.timeout_add(500, may_show)
+                wait_for_open_handlers(app.show, open_file, open_URL)
             else:
                 app.show()
+        gui_ready()
         app.run()
     except KeyboardInterrupt:
         pass
@@ -1055,5 +1023,5 @@ def do_main():
 
 
 if __name__ == "__main__":
-    v = main()
+    v = main(sys.argv)
     sys.exit(v)

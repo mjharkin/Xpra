@@ -1,5 +1,5 @@
 # This file is part of Xpra.
-# Copyright (C) 2011-2014 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2011-2014 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -19,12 +19,12 @@ LZO_FLAG        = 0x20
 FLAGS_NOHEADER  = 0x40
 
 
-_header_unpack_struct = struct.Struct('!cBBBL')
+_header_unpack_struct = struct.Struct(b'!cBBBL')
 def unpack_header(buf):
     return _header_unpack_struct.unpack_from(buf)
 
 #'P' + protocol-flags + compression_level + packet_index + data_size
-_header_pack_struct = struct.Struct('!BBBBL')
+_header_pack_struct = struct.Struct(b'!BBBBL')
 assert ord("P") == 80
 def pack_header(proto_flags, level, index, payload_size):
     return _header_pack_struct.pack(80, proto_flags, level, index, payload_size)

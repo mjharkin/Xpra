@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 # This file is part of Xpra.
-# Copyright (C) 2010-2018 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008, 2009, 2010 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -52,7 +52,7 @@ setup_options = {
                  "version"          : XPRA_VERSION,
                  "license"          : "GPLv2+",
                  "author"           : "Antoine Martin",
-                 "author_email"     : "antoine@devloop.org.uk",
+                 "author_email"     : "antoine@xpra.org",
                  "url"              : url,
                  "download_url"     : "http://xpra.org/src/",
                  "description"      : description,
@@ -1330,7 +1330,7 @@ if WIN32:
 
         #UI applications (detached from shell: no text output if ran from cmd.exe)
         if (client_ENABLED or server_ENABLED) and (gtk2_ENABLED or gtk3_ENABLED):
-            add_gui_exe("scripts/xpra",                         "xpra_txt.ico",     "Xpra")
+            add_gui_exe("scripts/xpra",                         "xpra.ico",         "Xpra")
             add_gui_exe("scripts/xpra_launcher",                "xpra.ico",         "Xpra-Launcher")
             add_console_exe("scripts/xpra_launcher",            "xpra.ico",         "Xpra-Launcher-Debug")
             add_gui_exe("xpra/gtk_common/gtk_view_keyboard.py", "keyboard.ico",     "GTK_Keyboard_Test")
@@ -1689,7 +1689,7 @@ else:
             'frameworks'        : ['CoreFoundation', 'Foundation', 'AppKit'],
             }
         setup_options["options"] = {"py2app": py2app_options}
-        setup_options["app"]     = ["xpra/client/gtk_base/client_launcher.py"]
+        setup_options["app"]     = ["xpra/scripts/main.py"]
 
     if OSX:
         #simply adding the X11 path to PKG_CONFIG_PATH breaks things in mysterious ways,

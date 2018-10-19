@@ -1,5 +1,5 @@
 # This file is part of Xpra.
-# Copyright (C) 2017-2018 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2017-2018 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -292,7 +292,7 @@ def get_uinput_device_path(device):
                             return dev_path
     except Exception as e:
         log.error("Error: cannot query uinput device path:")
-        log.error(" %", e)
+        log.error(" %s", e)
     return None
 
 def has_uinput():

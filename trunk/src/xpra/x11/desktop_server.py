@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2016-2018 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2016-2018 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -306,6 +306,9 @@ class XpraDesktopServer(DesktopServerBaseClass):
         with xswallow:
             cleanup_all_event_receivers()
 
+
+    def notify_dpi_warning(self, body):
+        pass
 
     def print_screen_info(self):
         super(XpraDesktopServer, self).print_screen_info()

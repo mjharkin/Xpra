@@ -1,7 +1,7 @@
 #!/bin/bash
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2017-2018 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2017-2018 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -20,6 +20,7 @@ DO_SIGN=${DO_SIGN:-1}
 BUNDLE_PUTTY=${BUNDLE_PUTTY:-1}
 BUNDLE_OPENSSH=${BUNDLE_OPENSSH:-1}
 BUNDLE_OPENSSL=${BUNDLE_OPENSSL:-1}
+ZIP_MODULES=${ZIP_MODULES:-1}
 
 PYTHON=${PYTHON:-python2}
 
@@ -235,7 +236,7 @@ mv lib/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader-*.dll lib/gdk-pixbuf-2.0/2.
 rm -fr lib/gdk-pixbuf-2.0/2.10.0/loaders
 mv lib/gdk-pixbuf-2.0/2.10.0/loaders.tmp lib/gdk-pixbuf-2.0/2.10.0/loaders
 #move libs that are likely to be common to the lib dir:
-for prefix in lib avcodec avformat avutil swscale swresample xvidcore zlib1; do
+for prefix in lib avcodec avformat avutil swscale swresample zlib1; do
 	find lib/Xpra -name "${prefix}*dll" -exec mv {} ./lib/ \;
 done
 for x in openblas gfortran quadmath; do
@@ -265,6 +266,46 @@ for x in `ls *dll`; do
 	find ./ -mindepth 2 -name "${x}" -exec rm {} \;
 done
 popd > /dev/null
+popd > /dev/null
+
+pushd ${DIST}/lib > /dev/null
+#remove test bits we don't need:
+rm -fr ./future/backports/test ./comtypes/test/ ./ctypes/macholib/fetch_macholib* ./distutils/tests ./distutils/command ./enum/doc ./websocket/tests ./email/test/
+#trim tests from numpy
+pushd numpy
+rm -fr ./f2py/docs
+for x in core distutils f2py lib linalg ma matrixlib oldnumeric polynomial random testing; do
+	rm -fr ./$x/tests
+done
+popd
+#remove source:
+find xpra -name "*.pyx" -exec rm {} \;
+find xpra -name "*.c" -exec rm {} \;
+find xpra -name "*.cpp" -exec rm {} \;
+find xpra -name "*.m" -exec rm {} \;
+find xpra -name "constants.txt" -exec rm {} \;
+find xpra -name "*.h" -exec rm {} \;
+find xpra -name "*.html" -exec rm {} \;
+find xpra -name "*.pxd" -exec rm {} \;
+find xpra -name "*.cu" -exec rm {} \;
+#remove empty directories:
+rmdir xpra/*/*/* 2> /dev/null
+rmdir xpra/*/* 2> /dev/null
+rmdir xpra/* 2> /dev/null
+#zip up some modules:
+if [ "${PYTHON_MAJOR_VERSION}" != "3" ]; then
+	rm -fr gtk-3.0 lib2to3
+fi
+if [ "${ZIP_MODULES}" == "1" ]; then
+	#these modules contain native code or data files,
+	#so they will require special treatment:
+	#xpra numpy cryptography PIL nacl cffi gtk rencode gobject glib > /dev/null
+	zip --move -ur library.zip OpenGL test encodings unittest ldap3 future paramiko html \
+			pyasn1 distutils comtypes asn1crypto ldap email websocket multiprocessing \
+			pkg_resources pyu2f pycparser idna ctypes websockify json pygtkcompat \
+			http enum sqlite3 winreg copyreg _thread _dummythread builtins importlib \
+			logging queue urllib xml xmlrpc pyasn1_modules concurrent pynvml collections > /dev/null
+fi
 popd > /dev/null
 
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # This file is part of Xpra.
-# Copyright (C) 2018 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2018 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -157,7 +157,7 @@ class ServerMixinsOptionTestUtil(ServerTestUtil):
                     log.warn("server socket for display %s should have been removed", display)
 
             if gui_client:
-                r = pollwait(gui_client, 5)
+                r = pollwait(gui_client, 20)
                 assert r is not None, "gui client should have been disconnected"
         finally:
             for x in (xvfb, rfb_client, gui_client, server, client):

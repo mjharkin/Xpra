@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
 # Copyright (C) 2011 Serviware (Arthur Huillet, <ahuillet@serviware.com>)
-# Copyright (C) 2010-2018 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -13,7 +13,7 @@ from math import sqrt
 from collections import deque
 
 from xpra.os_util import monotonic_time
-from xpra.util import envint, envbool, csv
+from xpra.util import envint, envbool, csv, typedict
 from xpra.log import Logger
 log = Logger("window", "encoding")
 refreshlog = Logger("window", "refresh")
@@ -276,7 +276,7 @@ class WindowSource(WindowIconSource):
             self._encoders["jpeg"] = self.jpeg_encode
         if self._mmap and self._mmap_size>0:
             self._encoders["mmap"] = self.mmap_encode
-        self.full_csc_modes = {}
+        self.full_csc_modes = typedict()
         self.parse_csc_modes(self.encoding_options.dictget("full_csc_modes", default_value=None))
 
     def init_vars(self):
@@ -288,7 +288,7 @@ class WindowSource(WindowIconSource):
         self.auto_refresh_encodings = ()
         self.core_encodings = ()
         self.rgb_formats = ()
-        self.full_csc_modes = {}
+        self.full_csc_modes = typedict()
         self.client_refresh_encodings = ()
         self.encoding_options = {}
         self.rgb_zlib = False
@@ -452,6 +452,7 @@ class WindowSource(WindowIconSource):
                                            "bucket"         : buckets_info,
                                            },
                 "property"              : self.get_property_info(),
+                "content-type"          : self.content_type or "",
                 "batch"                 : self.batch_config.get_info(),
                 "soft-timeout"          : {
                                            "expired"        : self.soft_expired,
@@ -608,8 +609,8 @@ class WindowSource(WindowIconSource):
     def parse_csc_modes(self, full_csc_modes):
         #only override if values are specified:
         log("parse_csc_modes(%s) current value=%s", full_csc_modes, self.full_csc_modes)
-        if full_csc_modes is not None and type(full_csc_modes)==dict:
-            self.full_csc_modes = full_csc_modes
+        if full_csc_modes is not None and isinstance(full_csc_modes, dict):
+            self.full_csc_modes = typedict(full_csc_modes)
 
 
     def set_auto_refresh_delay(self, d):
@@ -977,9 +978,13 @@ class WindowSource(WindowIconSource):
         else:
             info = {}
             speed = min(100, speed)
-        self._current_speed = int(speed)
-        statslog("update_speed() wid=%s, info=%s, speed=%s", self.wid, info, self._current_speed)
-        self._encoding_speed.append((monotonic_time(), info, self._current_speed))
+        speed = int(speed)
+        self._current_speed = speed
+        statslog("update_speed() wid=%s, info=%s, speed=%s", self.wid, info, speed)
+        self._encoding_speed.append((monotonic_time(), info, speed))
+        now = monotonic_time()
+        ww, wh = self.window_dimensions
+        self.global_statistics.speed.append((now, ww*wh, speed))
 
     def set_min_speed(self, min_speed):
         if self._fixed_min_speed!=min_speed:
@@ -1014,9 +1019,13 @@ class WindowSource(WindowIconSource):
         else:
             info = {}
             quality = min(100, quality)
-        self._current_quality = int(quality)
-        statslog("update_quality() wid=%i, info=%s, quality=%s", self.wid, info, self._current_quality)
-        self._encoding_quality.append((monotonic_time(), info, self._current_quality))
+        quality = int(quality)
+        self._current_quality = quality
+        statslog("update_quality() wid=%i, info=%s, quality=%s", self.wid, info, quality)
+        now = monotonic_time()
+        self._encoding_quality.append((now, info, quality))
+        ww, wh = self.window_dimensions
+        self.global_statistics.quality.append((now, ww*wh, quality))
 
     def set_min_quality(self, min_quality):
         if self._fixed_min_quality!=min_quality:
@@ -2159,7 +2168,7 @@ class WindowSource(WindowIconSource):
         #the native webp encoder only takes BGRX / BGRA as input,
         #but the client may be able to swap channels,
         #so it may be able to process RGBX / RGBA:
-        client_rgb_formats = self.full_csc_modes.get("webp", ("BGRA", "BGRX", ))
+        client_rgb_formats = self.full_csc_modes.strlistget("webp", ("BGRA", "BGRX", ))
         if pixel_format not in client_rgb_formats:
             if not rgb_reformat(image, client_rgb_formats, self.supports_transparency):
                 raise Exception("cannot find compatible rgb format to use for %s! (supported: %s)" % (pixel_format, self.rgb_formats))

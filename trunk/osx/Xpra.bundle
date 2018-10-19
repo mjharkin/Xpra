@@ -13,7 +13,7 @@
 
 	<plist>${project}/Info.plist</plist>
 	<main-binary>
-		${prefix}/bin/xpra_launcher
+		${prefix}/bin/xpra
 	</main-binary>
 
 	<!-- We need to pack our own Python to avoid compatibility problems. -->
@@ -94,6 +94,9 @@
 	</binary>
 	<binary>
 		${prefix}/lib/liblzo*.dylib
+	</binary>
+	<binary>
+		${prefix}/lib/liblz4*.dylib
 	</binary>
 	<binary>
 		${prefix}/lib/libssl*.dylib

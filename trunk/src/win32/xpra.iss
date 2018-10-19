@@ -1,6 +1,6 @@
 [Setup]
 AppName=Xpra
-AppVerName=Xpra 2.4
+AppVerName=Xpra 2.5
 AppPublisher=xpra.org
 AppPublisherURL=http://xpra.org/
 DefaultDirName={pf}\Xpra
@@ -13,7 +13,7 @@ OutputBaseFilename=Xpra_Setup
 Compression=lzma2/max
 SolidCompression=yes
 AllowUNCPath=false
-VersionInfoVersion=2.4
+VersionInfoVersion=2.5
 VersionInfoCompany=xpra.org
 VersionInfoDescription=multi-platform screen and application forwarding system
 WizardImageFile=win32\xpra-logo.bmp
@@ -31,7 +31,7 @@ Source: dist\*; Excludes: "etc\xpra"; DestDir: {app}; Flags: ignoreversion recur
 Source: dist\etc\xpra\*; DestDir: "{commonappdata}\Xpra"; Flags: recursesubdirs createallsubdirs uninsneveruninstall; AfterInstall: PostInstall()
 
 [Icons]
-Name: "{group}\Xpra"; Filename: {app}\Xpra-Launcher.exe; WorkingDir: {app}
+Name: "{group}\Xpra"; Filename: {app}\Xpra.exe; WorkingDir: {app}
 Name: "{group}\Xpra Session Browser"; Filename: {app}\Xpra_Browser.exe; WorkingDir: {app}
 Name: "{group}\Xpra Homepage"; Filename: "{app}\website.url"
 Name: "{group}\Xpra Command Manual"; Filename: "{app}\manual.html"
@@ -39,7 +39,7 @@ Name: "{group}\Xpra Shadow Server"; Filename: {app}\Xpra.exe; WorkingDir: {app};
 
 
 [Run]
-Filename: {app}\Xpra-Launcher.exe; Description: {cm:LaunchProgram,xpra}; Flags: nowait postinstall skipifsilent
+Filename: {app}\Xpra.exe; Description: {cm:LaunchProgram,xpra}; Flags: nowait postinstall skipifsilent
 
 [Registry]
 Root: HKCR; Subkey: ".xpra"; ValueType: string; ValueName: ""; ValueData: "Xpra.Session"; Flags: uninsdeletevalue

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2010-2018 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -8,13 +8,12 @@
 import os.path
 
 from xpra.log import Logger
-log = Logger("server")
 log = Logger("exec")
 
 from xpra.platform.features import COMMAND_SIGNALS
 from xpra.child_reaper import getChildReaper, reaper_cleanup
-from xpra.os_util import monotonic_time, OSX, WIN32
-from xpra.util import envint, csv
+from xpra.os_util import monotonic_time, OSX, WIN32, POSIX
+from xpra.util import envint, csv, first_time
 from xpra.scripts.parsing import parse_env
 from xpra.server import EXITING_CODE
 from xpra.server.mixins.stub_server_mixin import StubServerMixin
@@ -86,6 +85,13 @@ class ChildCommandServer(StubServerMixin):
             "server-commands-signals"   : COMMAND_SIGNALS,
             "server-commands-info"      : not WIN32 and not OSX,
             }
+
+    def get_caps(self, _source):
+        caps = {}
+        if self.start_new_commands and POSIX and not OSX:
+            from xpra.platform.xposix.xdg_helper import load_xdg_menu_data
+            caps["xdg-menu"] = load_xdg_menu_data()
+        return caps
 
 
     def get_info(self, _proto):

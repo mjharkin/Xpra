@@ -1,6 +1,6 @@
 # This file is part of Xpra.
 # Copyright (C) 2008 Nathaniel Smith <njs@pobox.com>
-# Copyright (C) 2012-2018 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2012-2018 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -156,6 +156,7 @@ class WindowBackingBase(object):
         if not self._alpha_enabled:
             target_rgb_modes = tuple(x for x in target_rgb_modes if x.find("A")<0)
         full_csc_modes = getVideoHelper().get_server_full_csc_modes_for_rgb(*target_rgb_modes)
+        full_csc_modes["webp"] = [x for x in rgb_modes if x in ("BGRX", "BGRA", "RGBX", "RGBA")]
         log("_get_full_csc_modes(%s)=%s (target_rgb_modes=%s)", rgb_modes, full_csc_modes, target_rgb_modes)
         return full_csc_modes
 
@@ -299,8 +300,7 @@ class WindowBackingBase(object):
             return self.paint_image("webp", img_data, x, y, width, height, options, callbacks)
         rgb_format = options.strget("rgb_format")
         has_alpha = options.boolget("has_alpha", False)
-        #log("paint_webp%s rgb_format=%s, has_alpha=%s, RGB_MODES=%s", (len(img_data), x, y, width, height, options, callbacks), rgb_format, has_alpha, self.RGB_MODES)
-        buffer_wrapper, width, height, stride, has_alpha, rgb_format = self.webp_decoder.decompress(img_data, has_alpha, rgb_format)
+        buffer_wrapper, width, height, stride, has_alpha, rgb_format = self.webp_decoder.decompress(img_data, has_alpha, rgb_format, self.RGB_MODES)
         def free_buffer(*_args):
             buffer_wrapper.free()
         callbacks.append(free_buffer)

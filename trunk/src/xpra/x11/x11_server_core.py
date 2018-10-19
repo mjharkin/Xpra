@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
 # Copyright (C) 2011 Serviware (Arthur Huillet, <ahuillet@serviware.com>)
-# Copyright (C) 2010-2018 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -697,7 +697,8 @@ class X11ServerCore(GTKServerBase):
                 actual_xdpi = iround(root_w * 25.4 / wmm)
                 actual_ydpi = iround(root_h * 25.4 / hmm)
                 if abs(actual_xdpi-xdpi)<=1 and abs(actual_ydpi-ydpi)<=1:
-                    screenlog.info("DPI set to %s x %s", xdpi, ydpi)
+                    screenlog.info("DPI set to %s x %s", actual_xdpi, actual_ydpi)
+                    screenlog("wanted: %s x %s", xdpi, ydpi)
                 else:
                     #should this be a warning:
                     l = screenlog.info
@@ -710,10 +711,7 @@ class X11ServerCore(GTKServerBase):
                     if maxdelta>=10:
                         messages.append("you may experience scaling problems, such as huge or small fonts, etc")
                         messages.append("to fix this issue, try the dpi switch, or use a patched Xorg dummy driver")
-                        sources = tuple(self._server_sources.values())
-                        if len(sources)==1:
-                            body = "\n".join(messages)
-                            sources[0].may_notify(XPRA_DPI_NOTIFICATION_ID, "DPI Issue", body, icon_name="font")
+                        self.notify_dpi_warning("\n".join(messages))
                     for i,message in enumerate(messages):
                         l("%s%s", ["", " "][i>0], message)
             #show dpi via idle_add so server has time to change the screen size (mm)
@@ -721,6 +719,11 @@ class X11ServerCore(GTKServerBase):
         except Exception as e:
             screenlog.error("ouch, failed to set new resolution: %s", e, exc_info=True)
         return root_w, root_h
+
+    def notify_dpi_warning(self, body):
+        sources = tuple(self._server_sources.values())
+        if len(sources)==1:
+            sources[0].may_notify(XPRA_DPI_NOTIFICATION_ID, "DPI Issue", body, icon_name="font")
 
 
     def _process_server_settings(self, _proto, packet):

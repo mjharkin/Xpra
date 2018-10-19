@@ -1,5 +1,5 @@
 # This file is part of Xpra.
-# Copyright (C) 2018 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2018 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -27,6 +27,8 @@ class WebSocketClientConnection(Connection):
     def untilConcludes(self, *args):
         try:
             return Connection.untilConcludes(self, *args)
+        except websocket.WebSocketConnectionClosedException as e:
+            raise ConnectionClosedException(e)
         except websocket.WebSocketTimeoutException as e:
             raise ConnectionClosedException(e)
 

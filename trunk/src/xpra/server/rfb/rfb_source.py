@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2017-2018 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2017-2018 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -81,7 +81,7 @@ class RFBSource(object):
         log("damage: %s", img)
         if not img or self.is_closed():
             return
-        fbupdate = struct.pack("!BBH", 0, 0, 1)
+        fbupdate = struct.pack(b"!BBH", 0, 0, 1)
         encoding = 0    #Raw
         rect = struct.pack(b"!HHHHi", x, y, w, h, encoding)
         if img.get_rowstride()!=w*4:

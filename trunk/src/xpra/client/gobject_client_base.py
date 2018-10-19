@@ -1,5 +1,5 @@
 # This file is part of Xpra.
-# Copyright (C) 2010-2017 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2010-2017 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008, 2010 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -298,7 +298,7 @@ class ConnectTestXpraClient(CommandConnectClient):
 
     def do_command(self):
         if self.server_capabilities:
-            ctr = self.server_capabilities.get("connect_test_response")
+            ctr = self.server_capabilities.strget("connect_test_response")
             log("do_command() expected connect test response='%s', got '%s'", self.value, ctr)
             if ctr==self.value:
                 self.quit(EXIT_OK)

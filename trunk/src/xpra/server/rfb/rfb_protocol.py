@@ -1,5 +1,5 @@
 # This file is part of Xpra.
-# Copyright (C) 2017 Antoine Martin <antoine@devloop.org.uk>
+# Copyright (C) 2017 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -136,7 +136,7 @@ class RFBProtocol(object):
         return len(response)
 
     def send_fail_challenge(self):
-        self.send(struct.pack("!I", 1))
+        self.send(struct.pack(b"!I", 1))
         self.close()
 
     def _parse_security_result(self, packet):

@@ -16,6 +16,24 @@ log = Logger("window", "util")
 DEFAULT_CONTENT_TYPE = os.environ.get("XPRA_DEFAULT_CONTENT_TYPE", "")
 
 
+def get_proc_cmdline(pid):
+    if pid and LINUX:
+        #try to find the command via /proc:
+        proc_cmd_line = os.path.join("/proc", "%s" % pid, "cmdline")
+        if os.path.exists(proc_cmd_line):
+            return load_binary_file(proc_cmd_line).rstrip("\0")
+    return None
+
+def getprop(window, prop):
+    try:
+        if prop not in window.get_property_names():
+            log("no '%s' property on window %s", prop, window)
+            return None
+        return window.get_property(prop)
+    except TypeError:
+        log.error("Error querying %s on %s", name, window, exc_info=True)
+
+
 content_type_defs = None
 def load_content_type_defs():
     global content_type_defs
@@ -60,7 +78,7 @@ def load_content_type_file(ct_file):
             #ie: "title:helloworld=text   #some comments here" -> "title:helloworld", "text   #some comments here"
             if len(parts)!=2:
                 log.warn("Warning: invalid content-type definition")
-                log.warn(" found in '%s' at line %i", ct_file, l)
+                log.warn(" found in '%s' at line %i", line, l)
                 log.warn(" '%s' is missing a '='", line)
                 continue
             match, content_type = parts
@@ -100,6 +118,11 @@ def guess_content_type_from_defs(window):
         if prop_name not in window.get_property_names():
             continue
         prop_value = window.get_property(prop_name)
+        #special case for "command":
+        #we can look it up using proc on Linux
+        if not prop_value and prop_name=="command":
+            pid = getprop(window, "pid")
+            prop_value = get_proc_cmdline(pid)
         #some properties return lists of values,
         #in which case we try to match any of them:
         if isinstance(prop_value, (list,tuple)):
@@ -114,32 +137,49 @@ def guess_content_type_from_defs(window):
                     return content_type
     return None
 
-#text, picture or video?
-CATEGORIES_TO_TYPE = {
-    "graphics"          : "picture",
-    "accessibility"     : "text",
-    #"Application"       : "",
-    "archiving"         : "text",
-    "audio"             : "text",
-    "video"             : "video",
-    "compression"       : "text",
-    "development"       : "text",
-    "documentation"     : "text",
-    "game"              : "video",
-    "graphics"          : "picture",
-    "ide"               : "text",
-    "webbrowser"        : "text",
-    "wordprocessor"     : "text",
-    "calculator"        : "text",
-    "documentation"     : "text",
-    "engineering"       : "picture",
-    "office"            : "text",
-    "spreadsheet"       : "text",
-    "math"              : "text",
-    "terminalemulator"  : "text",
-    "filemanager"       : "picture",
-    "remoteaccess"      : "picture",
-    }
+def load_categories_to_type():
+    d = os.path.join(get_app_dir(), "content-categories")
+    if not os.path.exists(d) or not os.path.isdir(d):
+        log("load_categories_to_type() directory '%s' not found", d)
+        return {}
+    categories_to_type = {}
+    for f in sorted(os.listdir(d)):
+        if f.endswith(".conf"):
+            cc_file = os.path.join(d, f)
+            if os.path.isfile(cc_file):
+                try:
+                    categories_to_type.update(load_content_categories_file(cc_file))
+                except Exception as e:
+                    log("load_content_type_file(%s)", cc_file, exc_info=True)
+                    log.error("Error loading content-type data from '%s'", cc_file)
+                    log.error(" %s", e)
+    log("load_categories_to_type()=%s", categories_to_type)
+    return categories_to_type
+def load_content_categories_file(cc_file):
+    if PYTHON2:
+        mode = "rU"
+    else:
+        mode = "r"
+    d = {}
+    with open(cc_file, mode) as f:
+        l = 0
+        for line in f:
+            l += 1
+            line = line.rstrip("\n\r")
+            if line.startswith("#") or not (line.strip()):
+                continue
+            parts = line.rsplit(":", 1)
+            #ie: "title:helloworld=text   #some comments here" -> "title:helloworld", "text   #some comments here"
+            if len(parts)!=2:
+                log.warn("Warning: invalid content-type definition")
+                log.warn(" found in '%s' at line %i", line, l)
+                log.warn(" '%s' is missing a '='", line)
+                continue
+            category, content_type = parts
+            d[category.strip("\t ").lower()] = content_type.strip("\t ")
+    log("load_content_categories_file(%s)=%s", cc_file, d)
+    return d  
+
 command_to_type = None
 def load_command_to_type():
     global command_to_type
@@ -147,7 +187,9 @@ def load_command_to_type():
         command_to_type = {}
         from xpra.platform.xposix.xdg_helper import load_xdg_menu_data
         xdg_menu = load_xdg_menu_data()
-        if xdg_menu:
+        categories_to_type = load_categories_to_type()
+        log("load_command_to_type() xdg_menu=%s, categories_to_type=%s", xdg_menu, categories_to_type) 
+        if xdg_menu and categories_to_type:
             for category, entries in xdg_menu.items():
                 log("category %s: %s", category, entries)
                 for name, props in entries.items():
@@ -156,10 +198,10 @@ def load_command_to_type():
                     log("Entry '%s': command=%s, categories=%s", name, command, categories)
                     if command and categories:
                         for c in categories:
-                            ctype = CATEGORIES_TO_TYPE.get(c.lower())
+                            ctype = categories_to_type.get(c.lower())
                             if not ctype:
                                 #try a more fuzzy match:
-                                for category,ct in CATEGORIES_TO_TYPE.items():
+                                for category,ct in categories_to_type.items():
                                     if c.lower().find(category)>=0:
                                         ctype = ct
                                         break
@@ -168,26 +210,15 @@ def load_command_to_type():
                                 if cmd:
                                     command_to_type[cmd] = ctype
                                     break
-        log("command_to_type()=%s", command_to_type)
+        log("load_command_to_type()=%s", command_to_type)
     return command_to_type
 
 def guess_content_type_from_command(window):
     if POSIX and not OSX:
-        def getprop(name):
-            try:
-                if name not in window.get_property_names():
-                    return None
-                return window.get_property(name)
-            except TypeError:
-                log.error("Error querying %s on %s", name, window, exc_info=True)
-        command = getprop("command")
+        command = getprop(window, "command")
         if not command and LINUX:
-            #try to find the command via /proc:
-            pid = getprop("pid")
-            if pid:
-                proc_cmd_line = os.path.join("/proc", "%s" % pid, "cmdline")
-                if os.path.exists(proc_cmd_line):
-                    command = load_binary_file(proc_cmd_line).rstrip("\0")
+            pid = getprop(window, "pid")
+            command = get_proc_cmdline(pid)
         log("guess_content_type_from_command(%s) command=%s", window, command)
         if command:
             ctt = load_command_to_type()

@@ -528,7 +528,8 @@ class WindowClient(StubClientMixin):
         assert tray_widget, "could not instantiate a system tray for tray id %s" % wid
         tray_widget.show()
         from xpra.client.client_tray import ClientTray
-        return ClientTray(client, wid, w, h, metadata, tray_widget, self.mmap_enabled, self.mmap)
+        mmap = getattr(self, "mmap", None)
+        return ClientTray(client, wid, w, h, metadata, tray_widget, self.mmap_enabled, mmap)
 
 
     def get_tray_window(self, app_name, hints):
@@ -707,8 +708,9 @@ class WindowClient(StubClientMixin):
         self._window_to_id[window] = wid
         window.show()
         if override_redirect and OR_FORCE_GRAB:
+            window_types = metadata.get("window-type")
             wm_class = metadata.get("class-instance")
-            if wm_class and len(wm_class)==2:
+            if "DIALOG" in window_types and wm_class and len(wm_class)==2:
                 c = wm_class[0]
                 if any(c.startswith(x) for x in OR_FORCE_GRAB):
                     grablog.warn("forcing grab for OR window %i, wm class '%s' matches %s", wid, c, OR_FORCE_GRAB)

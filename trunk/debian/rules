@@ -2,9 +2,10 @@
 
 #per-distro build options (builtbot will uncomment the right one):
 #xenial:export DEB_LDFLAGS_MAINT_APPEND=-Wl,--as-needed
-#yakkety:export DEB_LDFLAGS_MAINT_APPEND=-Wl,--as-needed
-#zesty:export DEB_LDFLAGS_MAINT_APPEND=-Wl,--as-needed
+#bionic:export DEB_LDFLAGS_MAINT_APPEND=-Wl,--as-needed
+#cosmic:export DEB_LDFLAGS_MAINT_APPEND=-Wl,--as-needed
 #stretch:export DEB_BUILD_MAINT_OPTIONS=hardening=+all
+#buster:export DEB_BUILD_MAINT_OPTIONS=hardening=+all
 
 PY2BUILDOPTS= --with-Xdummy --without-Xdummy_wrapper --pkg-config-path=/usr/lib/xpra/pkgconfig --rpath=/usr/lib/xpra/
 PY3BUILDOPTS= --with-Xdummy --without-Xdummy_wrapper --pkg-config-path=/usr/lib/xpra/pkgconfig --rpath=/usr/lib/xpra/ --without-html5 --without-printing
@@ -19,6 +20,10 @@ override_dh_auto_build:
 override_dh_auto_install:
 	python3 setup.py install --root=$(CURDIR)/debian/tmp --install-layout=deb $(PY3BUILDOPTS)
 	python2 setup.py install --root=$(CURDIR)/debian/tmp --install-layout=deb $(PY2BUILDOPTS)
+
+override_dh_install:
+	dh_movefiles
+	dh_install
 
 override_dh_installchangelogs:
 	dh_installchangelogs NEWS
@@ -45,4 +50,3 @@ override_dh_builddeb:
 # Ubuntu messes up the cups backend permissions, fix it:
 override_dh_fixperms:
 	dh_fixperms --exclude xpraforwarder
-	chmod 700 $(TMP)/usr/lib/cups/backend/xpraforwarder

@@ -150,7 +150,7 @@ shadow_ENABLED = SHADOW_SUPPORTED and DEFAULT
 server_ENABLED = (LOCAL_SERVERS_SUPPORTED or shadow_ENABLED) and DEFAULT
 rfb_ENABLED = server_ENABLED
 service_ENABLED = LINUX and server_ENABLED
-sd_listen_ENABLED = POSIX and pkg_config_ok("--exists", "libsystemd") and (not is_Ubuntu() or getUbuntuVersion()>[16, 4])
+sd_listen_ENABLED = POSIX and pkg_config_ok("--exists", "libsystemd") and (not is_Ubuntu() or getUbuntuVersion()>(16, 4))
 proxy_ENABLED  = DEFAULT
 client_ENABLED = DEFAULT
 scripts_ENABLED = not WIN32
@@ -718,6 +718,10 @@ def exec_pkgconfig(*pkgs_options, **ekw):
                 #needed on Debian and Ubuntu to avoid this error:
                 #/usr/include/gtk-2.0/gtk/gtkitemfactory.h:47:1: error: function declaration isn't a prototype [-Werror=strict-prototypes]
                 eifd.append("-Wno-error=strict-prototypes")
+                #the cython version shipped with Xenial emits warnings:
+                if getUbuntuVersion()<=(16,4):
+                    eifd.append("-Wno-error=shift-count-overflow")
+                    eifd.append("-Wno-error=sign-compare")
             if NETBSD:
                 #see: http://trac.cython.org/ticket/395
                 eifd += ["-fno-strict-aliasing"]
@@ -856,7 +860,7 @@ def build_xpra_conf(install_dir):
         return " ".join(cmd)
     #OSX doesn't have webcam support yet (no opencv builds on 10.5.x)
     #Ubuntu 16.10 has opencv builds that conflict with our private ffmpeg
-    webcam = webcam_ENABLED and not (OSX or getUbuntuVersion()==[16, 10])
+    webcam = webcam_ENABLED and not (OSX or getUbuntuVersion()==(16, 10))
     #no python-avahi on RH / CentOS, need dbus module on *nix:
     mdns = mdns_ENABLED and (OSX or WIN32 or (not is_RH() and dbus_ENABLED))
     SUBS = {
@@ -1716,6 +1720,7 @@ add_data_files(share_xpra,                      ["bell.wav"])
 add_data_files("%shttp-headers" % share_xpra,   glob.glob("http-headers/*"))
 add_data_files("%sicons" % share_xpra,          glob.glob("icons/*png"))
 add_data_files("%scontent-type" % share_xpra,   glob.glob("content-type/*"))
+add_data_files("%scontent-categories" % share_xpra, glob.glob("content-categories/*"))
 
 
 if html5_ENABLED:
@@ -1887,7 +1892,7 @@ elif gtk3_ENABLED or (gtk_x11_ENABLED and PYTHON3):
 
 if client_ENABLED and gtk3_ENABLED:
     #cairo workaround:
-    if OSX:
+    if OSX or is_Ubuntu() or is_Debian():
         pycairo = "py3cairo"
     else:
         pycairo = "pycairo"

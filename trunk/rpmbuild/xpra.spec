@@ -161,7 +161,14 @@ Conflicts:			xpra < 2.1
 %if 0%{?fedora}
 BuildRequires:		uglify-js
 BuildRequires:		js-jquery
+BuildRequires:		desktop-backgrounds-compat
 Requires:			js-jquery
+Requires:			desktop-backgrounds-compat
+%endif
+%if 0%{?el7}
+#don't depend on this package,
+#so we can also install on a pure RHEL distro:
+BuildRequires:		centos-logos
 %endif
 %description html5
 This package contains Xpra's HTML5 client.
@@ -377,6 +384,7 @@ BuildRequires:		python3-devel
 BuildRequires:		python3-Cython
 BuildRequires:		python3-gobject
 BuildRequires:		pygobject3-devel
+BuildRequires:		python3-cairo-devel
 BuildRequires:		x264-xpra-devel
 BuildRequires:		ffmpeg-xpra-devel
 BuildRequires:		libyuv-devel

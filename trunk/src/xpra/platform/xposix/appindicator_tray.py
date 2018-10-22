@@ -25,7 +25,7 @@ def get_appindicator():
     if _appindicator is False:
         try:
             import sys
-            if "gi" in sys.modules:
+            if "gi" in sys.modules or sys.version_info[0]==3:
                 if getUbuntuVersion()>=(18,4) and is_unity():
                     #causes segfaults just by importing it
                     #shambolic
@@ -139,6 +139,7 @@ def main():
         log("appindicator not available")
         return
 
+    log("main: appindicator=%s", appindicator)
     if not can_use_appindicator():
         log("appindicator may not be shown...")
 

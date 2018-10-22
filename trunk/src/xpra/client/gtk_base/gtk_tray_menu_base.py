@@ -41,6 +41,7 @@ SHOW_TRANSFERS = envbool("XPRA_SHOW_TRANSFERS", True)
 SHOW_CLIPBOARD_MENU = envbool("XPRA_SHOW_CLIPBOARD_MENU", True)
 SHOW_SHUTDOWN = envbool("XPRA_SHOW_SHUTDOWN", True)
 WINDOWS_MENU = envbool("XPRA_SHOW_WINDOWS_MENU", True)
+APPS_MENU = envbool("XPRA_SHOW_APPS_MENU", True)
 
 BANDWIDTH_MENU_OPTIONS = []
 for x in os.environ.get("XPRA_BANDWIDTH_MENU_OPTIONS", "1,2,5,10,20,50,100").split(","):
@@ -303,6 +304,8 @@ class GTKTrayMenuBase(object):
             menu.append(self.make_windowsmenuitem())
         if RUNCOMMAND_MENU or SHOW_SERVER_COMMANDS or SHOW_UPLOAD or SHOW_SHUTDOWN:
             menu.append(self.make_servermenuitem())
+        if mixin_features.windows and APPS_MENU:
+            menu.append(self.make_appsmenuitem())
         menu.append(self.make_disconnectmenuitem())
         if show_close:
             menu.append(self.make_closemenuitem())
@@ -1392,6 +1395,43 @@ class GTKTrayMenuBase(object):
         menu.append(self.make_reinitmenuitem())
         windows_menu_item.show_all()
         return windows_menu_item
+        
+    def make_appsmenuitem(self):
+        apps_menu_item = self.handshake_menuitem("Applications", "windows.png")
+        menu = gtk.Menu()
+        apps_menu_item.set_submenu(menu)
+        self.popup_menu_workaround(menu)
+        
+        def app_launch(item, category, app_name):
+            if self.client.xdg_menu:
+                log("category=%s", category)
+                entries = self.client.xdg_menu.get(category)
+                if entries:
+                    command_props = entries.get(app_name)
+                    log("command properties=%s", command_props)
+                    command = command_props.get("command")
+                    log("command=%s", command) 
+                    self.client.send_start_command(command, command, False, self.client.server_sharing)
+                    
+        
+        def app_menu_init(*_args):
+            log("app_menu_init")
+            if self.client.xdg_menu:
+                for category in sorted(self.client.xdg_menu.keys()):
+                    category_menu_item = self.handshake_menuitem(category, "windows.png", None)
+                    cat_menu = gtk.Menu()
+                    category_menu_item.set_submenu(cat_menu)
+                    self.popup_menu_workaround(cat_menu)
+                    menu.append(category_menu_item)
+                    entries = self.client.xdg_menu.get(category)
+                    for app_name in entries.keys():
+                        app_menu_item = self.handshake_menuitem(app_name, "windows.png", None)
+                        app_menu_item.connect("activate", app_launch, category, app_name)
+                        cat_menu.append(app_menu_item)
+        apps_menu_item.show_all()
+        self.client.after_handshake(app_menu_init)
+        
+        return apps_menu_item
 
     def make_refreshmenuitem(self):
         def force_refresh(*_args):

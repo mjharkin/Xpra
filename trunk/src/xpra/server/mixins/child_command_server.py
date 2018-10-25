@@ -13,7 +13,7 @@ log = Logger("exec")
 from xpra.platform.features import COMMAND_SIGNALS
 from xpra.child_reaper import getChildReaper, reaper_cleanup
 from xpra.os_util import monotonic_time, OSX, WIN32, POSIX
-from xpra.util import envint, csv, first_time
+from xpra.util import envint, csv
 from xpra.scripts.parsing import parse_env
 from xpra.server import EXITING_CODE
 from xpra.server.mixins.stub_server_mixin import StubServerMixin
@@ -175,7 +175,9 @@ class ChildCommandServer(StubServerMixin):
             self.children_started.append(procinfo)
             return proc
         except OSError as e:
-            log.error("Error spawning child '%s': %s\n" % (child_cmd, e))
+            log("start_command%s", (name, child_cmd, ignore, callback, use_wrapper, shell, kwargs), exc_info=True)
+            log.error("Error spawning child '%s': %s\n" % (child_cmd,))
+            log.error(" %s" % (e,))
             return None
 
 
@@ -248,7 +250,7 @@ class ChildCommandServer(StubServerMixin):
             log.warn(" but the feature is currently disabled")
             return
         name, command, ignore = packet[1:4]
-        proc = self.start_command(name, command, ignore)
+        proc = self.start_command(name.decode("utf-8"), command.decode("utf-8"), ignore)
         if len(packet)>=5:
             shared = packet[4]
             if proc and not shared:

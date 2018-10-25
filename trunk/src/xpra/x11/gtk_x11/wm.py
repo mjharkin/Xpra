@@ -4,31 +4,33 @@
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-from gtk import gdk
-
-import gobject
 import os
 
 from xpra.util import envbool
+from xpra.os_util import PYTHON2
 from xpra.gtk_common.error import xsync, xswallow
 from xpra.x11.gtk_x11.prop import prop_set, prop_get
 from xpra.x11.window_info import window_name, window_info
 from xpra.gtk_common.gobject_util import no_arg_signal, one_arg_signal
-from xpra.gtk_common.gtk_util import get_default_root_window, display_get_default
-
+from xpra.gtk_common.gtk_util import (
+    get_default_root_window, display_get_default, get_xwindow,
+    GDKWINDOW_FOREIGN, CLASS_INPUT_ONLY, GDKWindow,
+    )
 from xpra.x11.common import Unmanageable
-from xpra.x11.gtk2.selection import ManagerSelection
-from xpra.x11.gtk2.world_window import WorldWindow
-from xpra.x11.gtk2.window import WindowModel, configure_bits
-from xpra.x11.gtk2.gdk_bindings import (
-               add_event_receiver,                              #@UnresolvedImport
-               add_fallback_receiver, remove_fallback_receiver, #@UnresolvedImport
-               get_children,                                    #@UnresolvedImport
-               )
+from xpra.x11.gtk_x11.selection import ManagerSelection
+from xpra.x11.gtk_x11.world_window import WorldWindow
+from xpra.x11.models.window import WindowModel, configure_bits
+from xpra.x11.gtk_x11.gdk_bindings import (
+    add_event_receiver,                              #@UnresolvedImport
+    add_fallback_receiver, remove_fallback_receiver, #@UnresolvedImport
+    get_children,                                    #@UnresolvedImport
+    )
 from xpra.x11.bindings.window_bindings import constants, X11WindowBindings #@UnresolvedImport
 X11Window = X11WindowBindings()
 from xpra.x11.bindings.keyboard_bindings import X11KeyboardBindings #@UnresolvedImport
 X11Keyboard = X11KeyboardBindings()
+from xpra.gtk_common.gobject_compat import import_gobject, is_gtk3
+gobject = import_gobject()
 
 from xpra.log import Logger
 log = Logger("x11", "window")
@@ -147,6 +149,10 @@ if FRAME_EXTENTS:
 
 NET_SUPPORTED = [x for x in DEFAULT_NET_SUPPORTED if x not in NO_NET_SUPPORTED]
 
+def u(s):
+    if PYTHON2:
+        return s.decode("utf8")
+    return s
 
 class Wm(gobject.GObject):
 
@@ -211,16 +217,18 @@ class Wm(gobject.GObject):
         self.set_desktop_list((u"Main", ))
         self.set_current_desktop(0)
         # Start with the full display as workarea:
-        root_w, root_h = get_default_root_window().get_size()
+        root_w, root_h = get_default_root_window().get_geometry()[2:4]
         self.root_set("_NET_SUPPORTED", ["atom"], NET_SUPPORTED)
         self.set_workarea(0, 0, root_w, root_h)
         self.set_desktop_geometry(root_w, root_h)
         self.root_set("_NET_DESKTOP_VIEWPORT", ["u32"], [0, 0])
 
         # Load up our full-screen widget
-        self._world_window = WorldWindow(self._display.get_default_screen())
-        self.notify("toplevel")
-        self._world_window.show_all()
+        self._world_window = None
+        if not is_gtk3():
+            self._world_window = WorldWindow(self._display.get_default_screen())
+            self.notify("toplevel")
+            self._world_window.show_all()
 
         # Okay, ready to select for SubstructureRedirect and then load in all
         # the existing clients.
@@ -230,20 +238,22 @@ class Wm(gobject.GObject):
         #to a window that is already destroyed
         #and we don't want to miss those events, so:
         add_fallback_receiver("child-map-request-event", self)
-        X11Window.substructureRedirect(self._root.xid)
+        rxid = get_xwindow(self._root)
+        X11Window.substructureRedirect(rxid)
 
         for w in get_children(self._root):
             # Checking for FOREIGN here filters out anything that we've
             # created ourselves (like, say, the world window), and checking
             # for mapped filters out any withdrawn windows.
-            if (w.get_window_type() == gdk.WINDOW_FOREIGN
-                and not X11Window.is_override_redirect(w.xid)
-                and X11Window.is_mapped(w.xid)):
-                log("Wm managing pre-existing child window %#x", w.xid)
+            xid = get_xwindow(w)
+            if (w.get_window_type() == GDKWINDOW_FOREIGN
+                and not X11Window.is_override_redirect(xid)
+                and X11Window.is_mapped(xid)):
+                log("Wm managing pre-existing child window %#x", xid)
                 self._manage_client(w)
 
         # Also watch for focus change events on the root window
-        X11Window.selectFocusChange(self._root.xid)
+        X11Window.selectFocusChange(rxid)
         X11Keyboard.selectBellNotification(True)
 
         # FIXME:
@@ -283,7 +293,7 @@ class Wm(gobject.GObject):
             v = (0, 0, 0, 0)
         self.root_set("DEFAULT_NET_FRAME_EXTENTS", ["u32"], v)
         #update the models that are using the global default value:
-        for win in list(self._windows.itervalues()):
+        for win in self._windows.values():
             if win.is_OR() or win.is_tray():
                 continue
             cur = win.get_property("frame")
@@ -293,7 +303,7 @@ class Wm(gobject.GObject):
 
     def do_get_property(self, pspec):
         if pspec.name == "windows":
-            return frozenset(self._windows.itervalues())
+            return frozenset(self._windows.values())
         elif pspec.name == "toplevel":
             return self._world_window
         else:
@@ -315,7 +325,7 @@ class Wm(gobject.GObject):
                 l = log.warn
             else:
                 l = log
-            l("Warning: failed to manage client window %#x:", gdkwindow.xid)
+            l("Warning: failed to manage client window %#x:", get_xwindow(gdkwindow))
             l(" %s", e)
             l("", exc_info=True)
             with xswallow:
@@ -367,13 +377,13 @@ class Wm(gobject.GObject):
             #so this must be a an unmapped window
             frame = (0, 0, 0, 0)
             with xswallow:
-                if not X11Window.is_override_redirect(event.window.xid):
+                if not X11Window.is_override_redirect(get_xwindow(event.window)):
                     #use the global default:
                     frame = prop_get(self._root, "DEFAULT_NET_FRAME_EXTENTS", ["u32"], ignore_errors=True)
                 if not frame:
                     #fallback:
                     frame = (0, 0, 0, 0)
-                framelog("_NET_REQUEST_FRAME_EXTENTS: setting _NET_FRAME_EXTENTS=%s on %#x", frame, event.window.xid)
+                framelog("_NET_REQUEST_FRAME_EXTENTS: setting _NET_FRAME_EXTENTS=%s on %#x", frame, get_xwindow(event.window))
                 prop_set(event.window, "_NET_FRAME_EXTENTS", ["u32"], frame)
 
     def _lost_wm_selection(self, selection):
@@ -386,7 +396,7 @@ class Wm(gobject.GObject):
     def cleanup(self):
         remove_fallback_receiver("xpra-client-message-event", self)
         remove_fallback_receiver("child-map-request-event", self)
-        for win in tuple(self._windows.itervalues()):
+        for win in tuple(self._windows.values()):
             win.unmanage(True)
 
     def do_child_map_request_event(self, event):
@@ -411,7 +421,7 @@ class Wm(gobject.GObject):
             return
         log("do_child_configure_request_event(%s) value_mask=%s, reconfigure on withdrawn window", event, configure_bits(event.value_mask))
         with xswallow:
-            xid = event.window.xid
+            xid = get_xwindow(event.window)
             x, y, w, h = X11Window.getGeometry(xid)[:4]
             if event.value_mask & CWX:
                 x = event.x
@@ -431,7 +441,7 @@ class Wm(gobject.GObject):
         # something real.  This is easy to detect -- a FocusIn event with
         # detail PointerRoot or None is generated on the root window.
         focuslog("wm.do_xpra_focus_in_event(%s)", event)
-        if event.detail in (NotifyPointerRoot, NotifyDetailNone):
+        if event.detail in (NotifyPointerRoot, NotifyDetailNone) and self._world_window:
             self._world_window.reset_x_focus()
 
     def do_xpra_focus_out_event(self, event):
@@ -440,7 +450,7 @@ class Wm(gobject.GObject):
     def set_desktop_list(self, desktops):
         log("set_desktop_list(%s)", desktops)
         self.root_set("_NET_NUMBER_OF_DESKTOPS", "u32", len(desktops))
-        self.root_set("_NET_DESKTOP_NAMES", ["utf8"], [d.decode("utf8") for d in desktops])
+        self.root_set("_NET_DESKTOP_NAMES", ["utf8"], [u(d) for d in desktops])
 
     def set_current_desktop(self, index):
         self.root_set("_NET_CURRENT_DESKTOP", "u32", index)
@@ -458,17 +468,11 @@ class Wm(gobject.GObject):
         # clobber any XSelectInput calls that *we* might have wanted to make
         # on this window.)  Also, GDK might silently swallow all events that
         # are detected on it, anyway.
-        self._ewmh_window = gdk.Window(self._root,
-                                           width=1,
-                                           height=1,
-                                           window_type=gdk.WINDOW_TOPLEVEL,
-                                           event_mask=0, # event mask
-                                           wclass=gdk.INPUT_ONLY,
-                                           title=self._wm_name)
+        self._ewmh_window = GDKWindow(self._root, wclass=CLASS_INPUT_ONLY, title=self._wm_name)
         prop_set(self._ewmh_window, "_NET_SUPPORTING_WM_CHECK",
                  "window", self._ewmh_window)
         self.root_set("_NET_SUPPORTING_WM_CHECK", "window", self._ewmh_window)
-        self.root_set("_NET_WM_NAME", "utf8", self._wm_name.decode("utf8"))
+        self.root_set("_NET_WM_NAME", "utf8", u(self._wm_name))
 
     def get_net_wm_name(self):
         try:

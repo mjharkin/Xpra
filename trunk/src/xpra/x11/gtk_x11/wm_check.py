@@ -29,7 +29,7 @@ def wm_check(display, wm_name, upgrading=False):
             cwm_so = X11Window.XGetSelectionOwner(cwm_prop)
             log("ewmh selection owner for %s: %s", wm_prop, wm_so)
             log("compositing window manager %s: %s", cwm_prop, cwm_so)
-    
+
             try:
                 ewmh_wm = prop_get(root, "_NET_SUPPORTING_WM_CHECK", "window", ignore_errors=True, raise_xerrors=False)
             except:
@@ -49,7 +49,7 @@ def wm_check(display, wm_name, upgrading=False):
                 if upgrading and name and name==wm_name:
                     log.info("found previous Xpra instance")
                 else:
-                    log.warn("Warning: found an existing window manager on screen %s using window %#x: %s", i, ewmh_wm.xid, name or "unknown")
+                    log.warn("Warning: found an existing window manager on screen %s using window %#x: %s", i, get_xwindow(ewmh_wm), name or "unknown")
                 if (wm_so is None or wm_so==0) and (cwm_so is None or cwm_so==0):
                     if FORCE_REPLACE_WM:
                         log.warn("XPRA_FORCE_REPLACE_WM is set, replacing it forcibly")

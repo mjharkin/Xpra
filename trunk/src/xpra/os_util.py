@@ -592,15 +592,21 @@ class nomodule_context(object):
     def __enter__(self):
         pass
     def __exit__(self, *_args):
-        if sys.modules[self.module_name] == None:
-            sys.modules[self.module_name] = self.saved_module
+        if sys.modules.get(self.module_name) == None:
+            if self.saved_module is None:
+                try:
+                    del sys.modules[self.module_name]
+                except KeyError:
+                    pass
+            else:
+                sys.modules[self.module_name] = self.saved_module
     def __repr__(self):
         return "nomodule_context(%s)" % self.module_name
 
 class umask_context(object):
 
     def __init__(self, umask):
-        self.umask = umask        
+        self.umask = umask
     def __enter__(self):
         self.orig_umask = os.umask(self.umask)
     def __exit__(self, *_args):

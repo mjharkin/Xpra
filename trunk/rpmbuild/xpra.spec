@@ -163,7 +163,7 @@ BuildRequires:		uglify-js
 BuildRequires:		js-jquery
 BuildRequires:		desktop-backgrounds-compat
 Requires:			js-jquery
-Requires:			desktop-backgrounds-compat
+%{Recommends}:		desktop-backgrounds-compat
 %endif
 %if 0%{?el7}
 #don't depend on this package,
@@ -191,8 +191,8 @@ Obsoletes:          libvpx-xpra
 Requires:			x264-xpra
 Requires:			ffmpeg-xpra
 Requires:			turbojpeg
-%if 0%{?fedora}
 Requires:			libyuv
+%if 0%{?fedora}
 Requires:			python2-numpy
 %if 0%{?run_tests}
 BuildRequires:		python2-numpy

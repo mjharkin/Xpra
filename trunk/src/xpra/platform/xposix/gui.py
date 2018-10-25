@@ -21,7 +21,6 @@ xinputlog = Logger("posix", "xinput")
 from xpra.os_util import bytestostr, hexstr
 from xpra.util import iround, envbool, envint, csv
 from xpra.gtk_common.gtk_util import get_xwindow
-from xpra.gtk_common.gobject_compat import is_gtk3
 from xpra.os_util import is_X11, is_Wayland
 
 X11WindowBindings = None
@@ -70,8 +69,10 @@ def get_wm_name():
                 traylog("_NET_SUPPORTING_WM_CHECK window=%#x", xid)
                 wm_name = _get_X11_window_property(xid, "_NET_WM_NAME", "UTF8_STRING")
                 traylog("_NET_WM_NAME=%s", wm_name)
-                return wm_name.decode("utf-8")
+                if wm_name:
+                    return wm_name.decode("utf-8")
         except Exception as e:
+            traylog("get_wm_name()", exc_info=True)
             traylog.error("Error accessing window manager information:")
             traylog.error(" %s", e)
     return wm_name
@@ -494,8 +495,8 @@ def system_bell(window, device, percent, _pitch, _duration, bell_class, bell_id,
 
 def _send_client_message(window, message_type, *values):
     try:
-        from xpra.x11.gtk_x11.gdk_display_source import init_display_source
-        init_display_source()
+        from xpra.x11.gtk_x11.gdk_display_source import init_gdk_display_source
+        init_gdk_display_source()
         from xpra.x11.bindings.window_bindings import constants #@UnresolvedImport
         X11Window = X11WindowBindings()
         root_xid = X11Window.getDefaultRootWindow()
@@ -661,7 +662,7 @@ class XI2_Window(object):
         valuators = event.valuators
         unused_valuators = valuators.copy()
         dx, dy = 0, 0
-        if (valuators and device and device.get("enabled") and 
+        if (valuators and device and device.get("enabled") and
             client.server_input_devices=="uinput" and client.server_precise_wheel):
             XIModeRelative = 0
             classes = device.get("classes")
@@ -760,10 +761,7 @@ class ClientExtras(object):
         if self.x11_filter:
             return
         try:
-            if is_gtk3():
-                from xpra.x11.gtk3.gdk_bindings import init_x11_filter  #@UnresolvedImport, @UnusedImport
-            else:
-                from xpra.x11.gtk2.gdk_bindings import init_x11_filter  #@UnresolvedImport, @Reimport
+            from xpra.x11.gtk_x11.gdk_bindings import init_x11_filter  #@UnresolvedImport, @UnusedImport
             self.x11_filter = init_x11_filter()
             log("x11_filter=%s", self.x11_filter)
         except Exception:
@@ -774,11 +772,8 @@ class ClientExtras(object):
     def cleanup(self):
         log("cleanup() xsettings_watcher=%s, root_props_watcher=%s", self._xsettings_watcher, self._root_props_watcher)
         if self.x11_filter:
-            if is_gtk3():
-                from xpra.x11.gtk3.gdk_bindings import cleanup_x11_filter   #@UnresolvedImport, @UnusedImport
-            else:
-                from xpra.x11.gtk2.gdk_bindings import cleanup_x11_filter   #@UnresolvedImport, @Reimport
             self.x11_filter = None
+            from xpra.x11.gtk_x11.gdk_bindings import cleanup_x11_filter   #@UnresolvedImport, @UnusedImport
             cleanup_x11_filter()
         if self._xsettings_watcher:
             self._xsettings_watcher.cleanup()
@@ -905,9 +900,6 @@ class ClientExtras(object):
         ROOT_PROPS = ["RESOURCE_MANAGER", "_NET_WORKAREA", "_NET_CURRENT_DESKTOP"]
         try:
             self.init_x11_filter()
-            if is_gtk3():
-                #xsettings still need porting
-                return
             from xpra.gtk_common.gtk_util import get_default_root_window
             from xpra.x11.xsettings import XSettingsWatcher
             from xpra.x11.xroot_props import XRootPropWatcher
@@ -1021,8 +1013,8 @@ class ClientExtras(object):
 
 def main():
     try:
-        from xpra.x11.gtk_x11.gdk_display_source import init_display_source
-        init_display_source()
+        from xpra.x11.gtk_x11.gdk_display_source import init_gdk_display_source
+        init_gdk_display_source()
     except:
         pass
     from xpra.platform.gui import main

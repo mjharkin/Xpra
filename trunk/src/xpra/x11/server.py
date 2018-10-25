@@ -16,23 +16,24 @@ from xpra.util import updict, rindex, envbool, envint
 from xpra.os_util import memoryview_to_bytes, strtobytes, monotonic_time
 from xpra.server import server_features
 from xpra.gtk_common.gobject_util import one_arg_signal
-from xpra.gtk_common.gtk_util import get_default_root_window, get_xwindow, pixbuf_new_from_data, SUBSTRUCTURE_MASK
+from xpra.gtk_common.gtk_util import (
+    get_default_root_window, get_xwindow, pixbuf_new_from_data, is_realized,
+    SUBSTRUCTURE_MASK, GDKWINDOW_TEMP,
+    )
 from xpra.x11.common import Unmanageable
 from xpra.x11.gtk_x11.prop import prop_set
 from xpra.x11.gtk_x11.tray import get_tray_window, SystemTray
 from xpra.x11.gtk_x11.gdk_bindings import (
-                               add_event_receiver,          #@UnresolvedImport
-                               get_children,                #@UnresolvedImport
-                               init_x11_filter,             #@UnresolvedImport
-                               cleanup_x11_filter,          #@UnresolvedImport
-                               cleanup_all_event_receivers  #@UnresolvedImport
-                               )
+   add_event_receiver, cleanup_all_event_receivers,
+   get_children,
+   init_x11_filter, cleanup_x11_filter,
+   )
 from xpra.x11.bindings.window_bindings import X11WindowBindings #@UnresolvedImport
 X11Window = X11WindowBindings()
 from xpra.x11.bindings.keyboard_bindings import X11KeyboardBindings #@UnresolvedImport
 X11Keyboard = X11KeyboardBindings()
 from xpra.gtk_common.error import xsync, xswallow
-from xpra.gtk_common.gobject_compat import import_gtk, import_gdk, import_glib, import_gobject
+from xpra.gtk_common.gobject_compat import import_gtk, import_gdk, import_glib, import_gobject, is_gtk3
 
 gtk = import_gtk()
 gdk = import_gdk()
@@ -77,7 +78,10 @@ class DesktopManager(gtk.Widget):
         self._models = {}
         gtk.Widget.__init__(self)
         self.set_property("can-focus", True)
-        self.set_flags(gtk.NO_WINDOW)
+        if is_gtk3():
+            self.realize()
+        else:
+            self.set_flags(gtk.NO_WINDOW)
 
     def __repr__(self):
         return "DesktopManager(%s)" % len(self._models)
@@ -85,7 +89,8 @@ class DesktopManager(gtk.Widget):
     ## For communicating with the main WM:
 
     def add_window(self, model, x, y, w, h):
-        assert self.flags() & gtk.REALIZED
+        if not is_gtk3():
+            assert is_realized(self)
         self._models[model] = DesktopState([x, y, w, h])
         model.managed_connect("unmanaged", self._unmanaged)
         model.managed_connect("ownership-election", self._elect_me)
@@ -157,11 +162,18 @@ class DesktopManager(gtk.Widget):
         else:
             return (-1, self)
 
-    def take_window(self, _model, window):
+    def take_window(self, model, window):
+        #log.info("take_window(%s, %s)", model, window)
+        if not is_realized(self):
+            assert is_gtk3()
+            #with GTK3, the widget is never realized??
+            return
+        gdkwin = self.get_window()
+        assert gdkwin, "DesktopManager does not have a gdk window"
         if REPARENT_ROOT:
-            parent = self.window.get_screen().get_root_window()
+            parent = gdkwin.get_screen().get_root_window()
         else:
-            parent = self.window
+            parent = gdkwin
         window.reparent(parent, 0, 0)
 
     def window_size(self, model):
@@ -232,9 +244,10 @@ class XpraServer(gobject.GObject, X11ServerBase):
         prop_set(root, "XPRA_SERVER", "latin1", strtobytes(XPRA_VERSION).decode())
         add_event_receiver(root, self)
         if self.sync_xvfb>0:
+            xid = get_xwindow(root)
             try:
                 with xsync:
-                    self.root_overlay = X11Window.XCompositeGetOverlayWindow(root.xid)
+                    self.root_overlay = X11Window.XCompositeGetOverlayWindow(xid)
                     if self.root_overlay:
                         #ugly: API expects a window object with a ".xid"
                         X11WindowModel = namedtuple("X11WindowModel", "xid")
@@ -242,7 +255,7 @@ class XpraServer(gobject.GObject, X11ServerBase):
                         prop_set(root_overlay, "WM_TITLE", "latin1", u"RootOverlay")
                         X11Window.AllowInputPassthrough(self.root_overlay)
             except Exception as e:
-                log("XCompositeGetOverlayWindow(%#x)", root.xid, exc_info=True)
+                log("XCompositeGetOverlayWindow(%#x)", xid, exc_info=True)
                 log.error("Error setting up xvfb synchronization:")
                 log.error(" %s", e)
                 if self.root_overlay:
@@ -251,7 +264,7 @@ class XpraServer(gobject.GObject, X11ServerBase):
                     self.root_overlay = None
 
         ### Create the WM object
-        from xpra.x11.gtk2.wm import Wm
+        from xpra.x11.gtk_x11.wm import Wm
         self._wm = Wm(self.clobber, self.wm_name)
         if server_features.windows:
             self._wm.connect("new-window", self._new_window_signaled)
@@ -410,10 +423,15 @@ class XpraServer(gobject.GObject, X11ServerBase):
         return self._desktop_manager.is_shown(window)
 
     def load_existing_windows(self):
+        if not self._wm:
+            return
 
         ### Create our window managing data structures:
         self._desktop_manager = DesktopManager()
-        self._wm.get_property("toplevel").add(self._desktop_manager)
+        add_to = self._wm.get_property("toplevel")
+        #may be missing with GTK3..
+        if add_to:
+            add_to.add(self._desktop_manager)
         self._desktop_manager.show_all()
 
         ### Load in existing windows:
@@ -455,7 +473,8 @@ class XpraServer(gobject.GObject, X11ServerBase):
         frame = None
         if ss.window_frame_sizes:
             frame = ss.window_frame_sizes.intlistget("frame", (0, 0, 0, 0), 4, 4)
-        self._wm.set_default_frame_extents(frame)
+        if self._wm:
+            self._wm.set_default_frame_extents(frame)
 
 
     def send_initial_windows(self, ss, sharing=False):
@@ -580,7 +599,7 @@ class XpraServer(gobject.GObject, X11ServerBase):
         if self.root_overlay and self.root_overlay==xid:
             windowlog("ignoring root overlay window %#x", self.root_overlay)
             return
-        if raw_window.get_window_type()==gdk.WINDOW_TEMP:
+        if raw_window.get_window_type()==GDKWINDOW_TEMP:
             #ignoring one of gtk's temporary windows
             #all the windows we manage should be gdk.WINDOW_FOREIGN
             windowlog("ignoring TEMP window %#x", xid)
@@ -607,15 +626,16 @@ class XpraServer(gobject.GObject, X11ServerBase):
             return
         try:
             tray_window = get_tray_window(raw_window)
-            from xpra.x11.gtk2.window import OverrideRedirectWindowModel, SystemTrayWindowModel
             if tray_window is not None:
                 assert self._tray
+                from xpra.x11.models.systray import SystemTrayWindowModel
                 window = SystemTrayWindowModel(raw_window)
                 wid = self._add_new_window_common(window)
                 raw_window.set_data(WINDOW_MODEL_KEY, wid)
                 window.call_setup()
                 self._send_new_tray_window_packet(wid, window)
             else:
+                from xpra.x11.models.or_window import OverrideRedirectWindowModel
                 window = OverrideRedirectWindowModel(raw_window)
                 wid = self._add_new_window_common(window)
                 raw_window.set_data(WINDOW_MODEL_KEY, wid)

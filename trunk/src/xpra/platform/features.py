@@ -8,10 +8,9 @@
 import os
 import sys
 from xpra.util import envbool
-from xpra.os_util import PYTHON2
 
 #defaults which may be overriden by platform_import:
-LOCAL_SERVERS_SUPPORTED = PYTHON2
+LOCAL_SERVERS_SUPPORTED = False
 SHADOW_SUPPORTED = True
 CAN_DAEMONIZE = True
 MMAP_SUPPORTED = True
@@ -37,7 +36,8 @@ COMMAND_SIGNALS = ()
 DEFAULT_ENV = []
 
 #DEFAULT_SSH_COMMAND = "ssh -x"
-DEFAULT_SSH_COMMAND = "paramiko"
+#DEFAULT_SSH_COMMAND = "paramiko"
+DEFAULT_SSH_COMMAND = "auto"
 DEFAULT_PULSEAUDIO_CONFIGURE_COMMANDS = [
                                          ["pactl", "set-default-sink", "Xpra-Speaker"],
                                          ["pactl", "set-default-source", "Xpra-Microphone.monitor"],

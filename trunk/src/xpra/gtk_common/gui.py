@@ -379,7 +379,7 @@ class StartSession(gtk.Window):
         if self.commands:
             self.command_combo.set_active(0)
         self.command_box.show()
-            
+
 
     def populate_command(self):
         log("populate_command()")
@@ -412,7 +412,7 @@ class StartSession(gtk.Window):
         else:
             self.desktop_entry = None
             self.run_btn.set_sensitive(False)
-            
+
 
     def seamless_toggled(self, *args):
         self.seamless = self.seamless_btn.get_active()
@@ -429,7 +429,10 @@ class StartSession(gtk.Window):
         self.hide()
         if xdg:
             if self.desktop_entry.getTryExec():
-                command = self.desktop_entry.findTryExec()
+                try:
+                    command = self.desktop_entry.findTryExec()
+                except:
+                    command = self.desktop_entry.getTryExec()
             else:
                 command = self.desktop_entry.getExec()
         else:

@@ -18,7 +18,7 @@ screenlog = Logger("screen")
 from xpra.server.server_core import ServerCore, get_thread_info
 from xpra.server.mixins.server_base_controlcommands import ServerBaseControlCommands
 
-from xpra.os_util import thread, monotonic_time, bytestostr, WIN32, PYTHON3
+from xpra.os_util import thread, monotonic_time, bytestostr, strtobytes, WIN32, PYTHON3
 from xpra.util import typedict, flatten_dict, updict, merge_dicts, envbool, \
     SERVER_EXIT, SERVER_ERROR, SERVER_SHUTDOWN, DETACH_REQUEST, NEW_CLIENT, DONE, SESSION_BUSY
 from xpra.net.bytestreams import set_socket_timeout
@@ -151,6 +151,8 @@ class ServerBase(ServerBaseClass):
     def threaded_init(self):
         log("threaded_init() start")
         sleep(0.1)
+        from xpra.platform import threaded_server_init
+        threaded_server_init()
         for c in SERVER_BASES:
             if c!=ServerCore:
                 c.threaded_setup(self)
@@ -334,42 +336,47 @@ class ServerBase(ServerBaseClass):
         self._server_sources[proto] = ss
         #process ui half in ui thread:
         send_ui = ui_client and not is_request
-        self.idle_add(self.parse_hello_ui, ss, c, auth_caps, send_ui, share_count)
+        self.idle_add(self._process_hello_ui, ss, c, auth_caps, send_ui, share_count)
 
-
-    def parse_hello_ui(self, ss, c, auth_caps, send_ui, share_count):
+    def _process_hello_ui(self, ss, c, auth_caps, send_ui, share_count):
         #adds try:except around parse hello ui code:
         try:
             if self._closing:
                 raise Exception("server is shutting down")
-            self.do_parse_hello_ui(ss, c, auth_caps, send_ui, share_count)
+
+            self.parse_hello(ss, c, send_ui)
+            #send_hello will take care of sending the current and max screen resolutions
+            root_w, root_h = self.get_root_window_size()
+            self.send_hello(ss, root_w, root_h, auth_caps)
+            self.add_new_client(ss, c, send_ui, share_count)
+            self.send_initial_data(ss, c, send_ui, share_count)
+            self.client_startup_complete(ss)
+
             if self._closing:
                 raise Exception("server is shutting down")
         except Exception as e:
             #log exception but don't disclose internal details to the client
             p = ss.protocol
-            log("parse_hello_ui%s", (ss, c, auth_caps, send_ui, share_count), exc_info=True)
+            log("_process_hello_ui%s", (ss, c, auth_caps, send_ui, share_count), exc_info=True)
             log.error("Error: processing new connection from %s:", p or ss)
             log.error(" %s", e)
             if p:
                 self.disconnect_client(p, SERVER_ERROR, "error accepting new connection")
 
-    def do_parse_hello_ui(self, ss, c, auth_caps, send_ui, share_count):
-        #process screen size (if needed)
-        if send_ui:
-            for bc in SERVER_BASES:
-                if bc!=ServerCore:
-                    bc.parse_hello(self, ss, c, send_ui)
-        root_w, root_h = self.get_root_window_size()
+    def parse_hello(self, ss, c, send_ui):
+        for bc in SERVER_BASES:
+            if bc!=ServerCore:
+                bc.parse_hello(self, ss, c, send_ui)
 
-        #send_hello will take care of sending the current and max screen resolutions
-        self.send_hello(ss, root_w, root_h, auth_caps)
+    def add_new_client(self, ss, c, send_ui, share_count):
+        for bc in SERVER_BASES:
+            if bc!=ServerCore:
+                bc.add_new_client(self, ss, c, send_ui, share_count)
 
-        if send_ui and server_features.windows:
-            self.send_initial_windows(ss, share_count>0)
-            self.send_initial_cursors(ss, share_count>0)
-        self.client_startup_complete(ss)
-
+    def send_initial_data(self, ss, c, send_ui, share_count):
+        for bc in SERVER_BASES:
+            if bc!=ServerCore:
+                bc.send_initial_data(self, ss, c, send_ui, share_count)
 
     def client_startup_complete(self, ss):
         ss.startup_complete()
@@ -612,6 +619,7 @@ class ServerBase(ServerBaseClass):
                 if v is None:
                     log.warn("removing invalid None property for %s", k)
                     continue
+                k = strtobytes(k)
                 if not k.startswith(b"encoding"):
                     ncp[k] = v
             if ncp:

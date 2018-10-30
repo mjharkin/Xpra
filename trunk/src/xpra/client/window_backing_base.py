@@ -13,7 +13,7 @@ from threading import Lock
 from xpra.net.mmap_pipe import mmap_read
 from xpra.net import compression
 from xpra.util import typedict, csv, envint, envbool, repr_ellipsized
-from xpra.codecs.loader import get_codec
+from xpra.codecs.loader import get_codec, is_loaded
 from xpra.codecs.video_helper import getVideoHelper
 from xpra.os_util import BytesIOClass, bytestostr, _buffer
 try:
@@ -92,14 +92,17 @@ class WindowBackingBase(object):
         self.pointer_overlay = None
         self.cursor_data = None
         self.default_cursor_data = None
-        PIL = get_codec("dec_pillow")
-        if PIL:
-            self._PIL_encodings = PIL.get_encodings()
+        self.jpeg_decoder = None
+        self.webp_decoder = None
+        if is_loaded():
+            PIL = get_codec("dec_pillow")
+            if PIL:
+                self._PIL_encodings = PIL.get_encodings()
+            self.jpeg_decoder = get_codec("dec_jpeg")
+            self.webp_decoder = get_codec("dec_webp")
         self.draw_needs_refresh = True
         self.mmap = None
         self.mmap_enabled = False
-        self.jpeg_decoder = get_codec("dec_jpeg")
-        self.webp_decoder = get_codec("dec_webp")
 
     def idle_add(self, *_args, **_kwargs):
         raise NotImplementedError()

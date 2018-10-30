@@ -20,12 +20,15 @@ import traceback
 from xpra.platform.dotxpra import DotXpra
 from xpra.util import csv, envbool, envint, repr_ellipsized, DEFAULT_PORT
 from xpra.exit_codes import EXIT_SSL_FAILURE, EXIT_STR
-from xpra.os_util import get_util_logger, getuid, getgid, monotonic_time, setsid, bytestostr, WIN32, OSX, POSIX, PYTHON3
+from xpra.os_util import (
+    get_util_logger, getuid, getgid, monotonic_time, setsid, bytestostr,
+    WIN32, OSX, POSIX, PYTHON3, SIGNAMES,
+    )
 from xpra.scripts.parsing import info, warn, error, \
     parse_vsock, parse_env, is_local, \
     fixup_defaults, validated_encodings, validate_encryption, do_parse_cmdline, show_sound_codec_help, \
     supports_shadow, supports_server, supports_proxy, supports_mdns
-from xpra.scripts.config import OPTION_TYPES, CLIENT_OPTIONS, NON_COMMAND_LINE_OPTIONS, CLIENT_ONLY_OPTIONS, START_COMMAND_OPTIONS, BIND_OPTIONS, PROXY_START_OVERRIDABLE_OPTIONS, OPTIONS_ADDED_SINCE_V1, OPTIONS_COMPAT_NAMES, \
+from xpra.scripts.config import OPTION_TYPES, TRUE_OPTIONS, CLIENT_OPTIONS, NON_COMMAND_LINE_OPTIONS, CLIENT_ONLY_OPTIONS, START_COMMAND_OPTIONS, BIND_OPTIONS, PROXY_START_OVERRIDABLE_OPTIONS, OPTIONS_ADDED_SINCE_V1, OPTIONS_COMPAT_NAMES, \
     InitException, InitInfo, InitExit, \
     fixup_options, dict_to_validated_config, \
     make_defaults_struct, parse_bool, has_sound_support, name_to_field
@@ -112,7 +115,11 @@ def main(script_file, cmdline):
 
 
 def configure_logging(options, mode):
-    if mode in ("showconfig", "info", "id", "control", "list", "list-mdns", "sessions", "mdns-gui", "attach", "launcher", "stop", "print", "opengl", "test-connect"):
+    if mode in (
+        "showconfig", "info", "id", "attach", "launcher", "stop", "print",
+        "control", "list", "list-mdns", "sessions", "mdns-gui",
+        "opengl", "opengl-probe", "test-connect",
+        ):
         s = sys.stdout
     else:
         s = sys.stderr
@@ -131,7 +138,13 @@ def configure_logging(options, mode):
     #the logging system every time, and just undo things here..
     from xpra.log import setloghandler, enable_color, enable_format, LOG_FORMAT, NOPREFIX_FORMAT
     setloghandler(logging.StreamHandler(to))
-    if mode in ("start", "start-desktop", "upgrade", "attach", "shadow", "proxy", "_sound_record", "_sound_play", "stop", "print", "showconfig", "request-start", "request-start-desktop", "request-shadow", "_dialog", "_pass"):
+    if mode in (
+        "start", "start-desktop", "upgrade", "attach", "shadow", "proxy",
+        "_sound_record", "_sound_play",
+        "stop", "print", "showconfig",
+        "request-start", "request-start-desktop", "request-shadow",
+        "_dialog", "_pass",
+        ):
         if "help" in options.speaker_codec or "help" in options.microphone_codec:
             info = show_sound_codec_help(mode!="attach", options.speaker_codec, options.microphone_codec)
             raise InitInfo("\n".join(info))
@@ -411,6 +424,8 @@ def run_mode(script_file, error_cb, options, args, mode, defaults):
             return run_pass(args)
         elif mode=="opengl":
             return run_glcheck(options)
+        elif mode=="opengl-probe":
+            return run_glprobe(options)
         elif mode == "initenv":
             from xpra.server.server_util import xpra_runner_shell_script, write_runner_shell_scripts
             script = xpra_runner_shell_script(script_file, os.getcwd(), options.socket_dir)
@@ -1271,6 +1286,28 @@ def get_client_app(error_cb, opts, extra_args, mode):
     else:
         if PYTHON3 and POSIX and os.environ.get("GDK_BACKEND") is None:
             os.environ["GDK_BACKEND"] = "x11"
+        if opts.opengl=="probe":
+            from xpra.os_util import pollwait
+            from xpra.platform.paths import get_xpra_command
+            cmd = get_xpra_command()+["opengl-probe"]
+            proc = Popen(cmd, shell=False, close_fds=True)
+            r = pollwait(proc)
+            from xpra.log import Logger
+            log = Logger("opengl")
+            log("OpenGL probe command returned %s", r)
+            if r==0:
+                opts.opengl = "probe-success"
+            elif r==1:
+                opts.opengl = "probe-warning"
+            elif r==2:
+                opts.opengl = "probe-error"
+            else:
+                if r is None:
+                    msg = "timeout"
+                else:
+                    msg = SIGNAMES.get(-r) or SIGNAMES.get(r-128) or r
+                log.warn("OpenGL probe failed: %s", msg)
+                opts.opengl = "probe-failed:%s" % msg
         try:
             from xpra.platform.gui import init as gui_init
             gui_init()
@@ -1574,6 +1611,41 @@ def no_gtk():
         return
     raise Exception("the gtk module is already loaded: %s" % gtk)
 
+
+def run_glprobe(opts):
+    #suspend all logging:
+    saved_level = None
+    from xpra.log import Logger, is_debug_enabled
+    log = Logger("opengl")
+    if not is_debug_enabled("opengl"):
+        saved_level = logging.root.getEffectiveLevel()
+        logging.root.setLevel(logging.WARN)
+    try:
+        from xpra.client.gl.window_backend import get_opengl_backends, get_gl_client_window_module, test_gl_client_window
+        opengl_str = (opts.opengl or "").lower()
+        force_enable = opengl_str.split(":")[0] in TRUE_OPTIONS
+        backends = get_opengl_backends(opengl_str)
+        log("run_glprobe() backends=%s", backends)
+        opengl_props, gl_client_window_module = get_gl_client_window_module(backends, force_enable)
+        log("run_glprobe() opengl_props=%s, gl_client_window_module=%s", opengl_props, gl_client_window_module)
+        if gl_client_window_module and opengl_props.get("safe", False):
+            gl_client_window_class = gl_client_window_module.GLClientWindow
+            pixel_depth = int(opts.pixel_depth)
+            log("run_glprobe() gl_client_window_class=%s, pixel_depth=%s", gl_client_window_class, pixel_depth)
+            if pixel_depth not in (0, 16, 24, 30) and pixel_depth<32:
+                pixel_depth = 0
+            draw_result = test_gl_client_window(gl_client_window_class, pixel_depth=pixel_depth)
+            if draw_result.get("success", False):
+                return 0
+        return 1
+    except Exception as e:
+        if is_debug_enabled("opengl"):
+            log("run_glprobe(..)", exc_info=True)
+        sys.stderr.write("error=%s\n" % e)
+        return 2
+    finally:
+        if saved_level is not None:
+            logging.root.setLevel(saved_level)
 
 def run_glcheck(opts):
     from xpra.util import pver

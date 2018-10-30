@@ -171,6 +171,12 @@ def get_fixed_cursor_size():
 def get_cursor_size():
     return -1
 
+def get_window_min_size():
+    return 0, 0
+
+def get_window_max_size():
+    return 2**15-1, 2**15-1
+
 def get_window_frame_size(_x, _y, _w, _h):
     return None
 
@@ -270,6 +276,7 @@ platform_import(globals(), "gui", False,
                 "get_number_of_desktops", "get_desktop_names",
                 "get_antialias_info", "get_icc_info", "get_display_icc_info", "get_xdpi", "get_ydpi",
                 "get_icon_size",
+                "get_window_min_size", "get_window_max_size",
                 "get_mouse_config",
                 "get_double_click_time", "get_double_click_distance",
                 "get_fixed_cursor_size", "get_cursor_size", "get_window_frame_sizes",

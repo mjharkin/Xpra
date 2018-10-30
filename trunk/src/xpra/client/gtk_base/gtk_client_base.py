@@ -7,7 +7,7 @@
 
 import os
 import weakref
-from xpra.gtk_common.gobject_compat import import_gobject, import_gtk, import_gdk, import_pango, gtk_version, is_gtk3
+from xpra.gtk_common.gobject_compat import import_gobject, import_gtk, import_gdk, import_pango, is_gtk3
 from xpra.client.gtk_base.gtk_client_window_base import HAS_X11_BINDINGS, XSHAPE
 gobject = import_gobject()
 gtk = import_gtk()
@@ -26,9 +26,9 @@ grablog = Logger("client", "grab")
 
 from xpra.gtk_common.quit import (gtk_main_quit_really,
                            gtk_main_quit_on_fatal_exceptions_enable)
-from xpra.util import updict, pver, iround, flatten_dict, envbool, typedict, repr_ellipsized, csv, first_time, \
+from xpra.util import updict, pver, iround, flatten_dict, envbool, repr_ellipsized, csv, first_time, \
     DEFAULT_METADATA_SUPPORTED, XPRA_OPENGL_NOTIFICATION_ID
-from xpra.os_util import bytestostr, strtobytes, hexstr, WIN32, OSX, POSIX, PYTHON3
+from xpra.os_util import bytestostr, strtobytes, hexstr, WIN32, OSX, POSIX
 from xpra.simple_stats import std_unit
 from xpra.exit_codes import EXIT_PASSWORD_REQUIRED
 from xpra.scripts.config import TRUE_OPTIONS, FALSE_OPTIONS
@@ -797,6 +797,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
                         missing_cursor_names.add(cursor_name)
         #create cursor from the pixel data:
         encoding, _, _, w, h, xhot, yhot, serial, pixels = cursor_data[0:9]
+        encoding = strtobytes(encoding)
         if encoding!=b"raw":
             cursorlog.warn("Warning: invalid cursor encoding: %s", encoding)
             return None
@@ -926,23 +927,29 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             window.present()
 
 
+    def opengl_setup_failure(self, summary = "Xpra OpenGL Acceleration Failure", body=""):
+        def delayed_notify():
+            if self.exit_code is None:
+                self.may_notify(XPRA_OPENGL_NOTIFICATION_ID, summary, body, icon_name="opengl")
+        #wait for the main loop to run:
+        self.timeout_add(2*1000, delayed_notify)
+
     #OpenGL bits:
     def init_opengl(self, enable_opengl):
         opengllog("init_opengl(%s)", enable_opengl)
-        #enable_opengl can be True, False or None (auto-detect)
+        #enable_opengl can be True, False, probe-failed, probe-success, or None (auto-detect)
         #ie: "on:native,gtk", "auto", "no"
+        #ie: "probe-failed:SIGSEGV"
+        #ie: "probe-success"
         enable_opengl = (enable_opengl or "").lower()
         parts = enable_opengl.split(":", 1)
         enable_option = parts[0]            #ie: "on"
-        if len(parts)==2:
-            backends = parts[1].split(",")  #ie: "native", "gtk"
-        else:
-            if enable_opengl in ("native", "gtk") or enable_opengl.find(",")>0:
-                backends = enable_opengl.split(",")
-            elif PYTHON3:
-                backends = "native",
-            else:
-                backends = "gtk", "native"
+        opengllog("init_opengl: enable_option=%s", enable_option)
+        if enable_option=="probe-failed":
+            msg = "probe failed: %s" % csv(parts[1:])
+            self.opengl_props["info"] = "disabled, %s" % msg
+            self.opengl_setup_failure(body=msg)
+            return
         if enable_option in FALSE_OPTIONS:
             self.opengl_props["info"] = "disabled by configuration"
             return
@@ -965,12 +972,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             for x in str(e).split("\n"):
                 opengllog.error(" %s", x)
             self.opengl_props["info"] = str(e)
-            summary = "Xpra OpenGL Acceleration Failure"
-            body = str(e)
-            def delayed_notify():
-                if self.exit_code is None:
-                    self.may_notify(XPRA_OPENGL_NOTIFICATION_ID, summary, body, icon_name="opengl")
-            self.timeout_add(2*1000, delayed_notify)
+            self.opengl_setup_failure(body=str(e))
 
         if warnings:
             if enable_option in ("", "auto"):
@@ -979,33 +981,21 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
                     opengllog.warn(" %s", warning)
                 self.opengl_props["info"] = "disabled: %s" % csv(warnings)
                 return
-            opengllog.warn("OpenGL safety warning (enabled at your own risk):")
+            elif enable_option=="probe-success":
+                opengllog.warn("OpenGL enabled, despite some warnings:")
+            else:
+                opengllog.warn("OpenGL safety warning (enabled at your own risk):")
             for warning in warnings:
                 opengllog.warn(" %s", warning)
-            self.opengl_props["info"] = "forced enabled despite: %s" % csv(warnings)
+            self.opengl_props["info"] = "enabled despite: %s" % csv(warnings)
         try:
             opengllog("init_opengl: going to import xpra.client.gl")
             __import__("xpra.client.gl", {}, {}, [])
+            from xpra.client.gl.window_backend import get_opengl_backends, get_gl_client_window_module, test_gl_client_window
+            backends = get_opengl_backends(enable_opengl)
             opengllog("init_opengl: backend options: %s", backends)
-            gl_client_window_module = None
-            for impl in backends:
-                opengllog("attempting to load '%s' OpenGL backend", impl)
-                GL_CLIENT_WINDOW_MODULE = "xpra.client.gl.gtk%s.%sgl_client_window" % (gtk_version(), impl)
-                opengllog("importing %s", GL_CLIENT_WINDOW_MODULE)
-                try:
-                    gl_client_window_module = __import__(GL_CLIENT_WINDOW_MODULE, {}, {}, ["GLClientWindow", "check_support"])
-                except ImportError as e:
-                    opengllog("cannot import %s", GL_CLIENT_WINDOW_MODULE, exc_info=True)
-                    opengllog.warn("Warning: cannot import %s OpenGL module", impl)
-                    opengllog.warn(" %s", e)
-                    del e
-                    continue
-                opengllog("%s=%s", GL_CLIENT_WINDOW_MODULE, gl_client_window_module)
-                force_enable = enable_option in TRUE_OPTIONS
-                self.opengl_props = gl_client_window_module.check_support(force_enable)
-                opengllog("check_support(%s)=%s", force_enable, self.opengl_props)
-                if self.opengl_props:
-                    break
+            force_enable = enable_option in TRUE_OPTIONS
+            self.opengl_props, gl_client_window_module = get_gl_client_window_module(backends, force_enable)
             if not gl_client_window_module:
                 opengllog.warn("Warning: no OpenGL backends found")
                 self.client_supports_opengl = False
@@ -1042,38 +1032,8 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
                 l("Warning: OpenGL windows will be clamped to the maximum texture size %ix%i", self.gl_texture_size_limit, self.gl_texture_size_limit)
                 l(" for OpenGL %s renderer '%s'", pver(self.opengl_props.get("opengl", "")), self.opengl_props.get("renderer", "unknown"))
             if self.opengl_enabled:
-                #try to render using a temporary window:
-                draw_result = {}
-                window = None
-                try:
-                    w, h = 50, 50
-                    window = self.GLClientWindowClass(self, None, None, 2**32-1, -100, -100, w, h, w, h, typedict({}), False, typedict({}), self.border, self.max_window_size, self.default_cursor_data, self.pixel_depth)
-                    window.realize()
-                    pixel_format = "BGRX"
-                    bpp = len(pixel_format)
-                    options = typedict({"pixel_format" : pixel_format})
-                    stride = bpp*w
-                    img_data = "\0"*stride*h
-                    coding = "rgb32"
-                    #we have to suspend idle_add to make this synchronous
-                    #we can do this because this method must be running in the UI thread already:
-                    def no_idle_add(*args, **kwargs):
-                        args[0](*args[1:], **kwargs)
-                    window._backing.idle_add = no_idle_add
-                    widget = window._backing._backing
-                    widget.realize()
-                    def paint_callback(success, message):
-                        opengllog("paint_callback(%s, %s)", success, message)
-                        draw_result.update({
-                            "success"   : success,
-                            "message"   : message,
-                            })
-                    opengllog("OpenGL: testing draw on %s widget %s with %s : %s", window, widget, coding, pixel_format)
-                    window.draw_region(0, 0, w, h, coding, img_data, stride, 1, options, [paint_callback])
-                finally:
-                    if window:
-                        window.destroy()
-                if not draw_result.get("success"):
+                draw_result = test_gl_client_window(self.GLClientWindowClass, max_window_size=self.max_window_size, pixel_depth=self.pixel_depth)
+                if not draw_result.get("success", False):
                     err("OpenGL test rendering failed:", draw_result.get("message", "unknown error"))
                     return
                 log("OpenGL test rendering succeeded")

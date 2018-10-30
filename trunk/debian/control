@@ -143,7 +143,9 @@ Depends:
         libjs-jquery
         ,libjs-jquery-ui
 Recommends: gnome-backgrounds
-Description: the html5 xpra client
+Description: html5 xpra client
+ This package can be used by the xpra server to provide an integrated
+ HTML5 client, directly accessible via the server's builtin http server.
 
 
 Package: python2-xpra

@@ -15,7 +15,7 @@ except:
     from urllib.parse import unquote    #python3 @Reimport @UnresolvedImport
 
 from xpra.log import Logger
-focuslog = Logger("focus")
+focuslog = Logger("focus", "grab")
 workspacelog = Logger("workspace")
 log = Logger("window")
 keylog = Logger("keyboard")
@@ -333,10 +333,7 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
         #hook up the X11 gdk event notifications so we can get focus-out when grabs are active:
         if POSIX and not OSX:
             try:
-                if is_gtk3():
-                    from xpra.x11.gtk3.gdk_bindings import add_event_receiver   #@UnresolvedImport
-                else:
-                    from xpra.x11.gtk2.gdk_bindings import add_event_receiver   #@UnresolvedImport, @Reimport
+                from xpra.x11.gtk_x11 import add_event_receiver
             except ImportError as e:
                 log.warn("Warning: missing gdk bindings:")
                 log.warn(" %s", e)
@@ -346,10 +343,10 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
                 add_event_receiver(self.get_window(), self)
         #other platforms should bet getting regular focus events instead:
         def focus_in(_window, event):
-            grablog("focus-in-event for wid=%s", self._id)
+            focuslog("focus-in-event for wid=%s", self._id)
             self.do_xpra_focus_in_event(event)
         def focus_out(_window, event):
-            grablog("focus-out-event for wid=%s", self._id)
+            focuslog("focus-out-event for wid=%s", self._id)
             self.do_xpra_focus_out_event(event)
         self.connect("focus-in-event", focus_in)
         self.connect("focus-out-event", focus_out)
@@ -359,7 +356,7 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
     def _focus_change(self, *args):
         assert not self._override_redirect
         htf = self.has_toplevel_focus()
-        focuslog("%s focus_change(%s) has-toplevel-focus=%s, _been_mapped=%s", self, args, htf, self._been_mapped)
+        focuslog("%s focus_change%s has-toplevel-focus=%s, _been_mapped=%s", self, args, htf, self._been_mapped)
         if self._been_mapped:
             self._client.update_focus(self._id, htf)
 
@@ -368,7 +365,7 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
         #we receive pairs of FocusOut + FocusIn following a keyboard grab,
         #so we recheck the focus status via this timer to skip unnecessary churn
         focused = self._client._focused
-        grablog("recheck_focus() wid=%i, focused=%s, latest=%s", self._id, focused, self._focus_latest)
+        focuslog("recheck_focus() wid=%i, focused=%s, latest=%s", self._id, focused, self._focus_latest)
         hasfocus = focused==self._id
         if hasfocus==self._focus_latest:
             #we're already up to date
@@ -391,12 +388,12 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
         return True
 
     def do_xpra_focus_out_event(self, event):
-        grablog("do_xpra_focus_out_event(%s)", event)
+        focuslog("do_xpra_focus_out_event(%s)", event)
         self._focus_latest = False
         return self.schedule_recheck_focus()
 
     def do_xpra_focus_in_event(self, event):
-        grablog("do_xpra_focus_in_event(%s)", event)
+        focuslog("do_xpra_focus_in_event(%s)", event)
         self._focus_latest = True
         return self.schedule_recheck_focus()
 

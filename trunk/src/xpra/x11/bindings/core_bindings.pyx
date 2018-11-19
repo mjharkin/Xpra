@@ -133,8 +133,12 @@ cdef class _X11CoreBindings:
 
     def XGetAtomName(self, Atom atom):
         self.context_check()
-        v = XGetAtomName(self.display, atom)
-        return v[:]
+        cdef char *v = XGetAtomName(self.display, atom)
+        if v==NULL:
+            return None
+        r = v[:]
+        XFree(v)
+        return r
 
     def get_error_text(self, code):
         assert self.display!=NULL, "display is closed"

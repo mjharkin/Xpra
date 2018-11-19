@@ -160,9 +160,9 @@
 
 	<distutils id="python-cryptography">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/22/21/233e38f74188db94e8451ef6385754a98f3cad9b59bedf3a8e8b14988be4/cryptography-2.3.1.tar.gz"
-			hash="sha256:8d10113ca826a4c29d5b85b2c4e045ffa8bad74fb525ee0eceb1d38d4c70dfd6"
-			version="2.3.1"/>
+			module="/packages/d2/5f/6ed3135eb1e775187f7ecd4e7713f1415516725365e51f9786143f36e024/cryptography-2.4.1.tar.gz"
+			hash="sha256:e85b410885addaeb31a867eabcefc9ef4a7e904ad45eac9e60a763a54b244626"
+			version="2.4.1"/>
 		<dependencies>
 			<dep package="python"/>
 			<dep package="openssl"/>
@@ -240,10 +240,10 @@
 
 	<distutils id="python-numpy">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/45/ba/2a781ebbb0cd7962cc1d12a6b65bd4eff57ffda449fdbbae4726dc05fbc3/numpy-1.15.2.zip"
-			checkoutdir="numpy-1.15.2"
-			version="1.15.2"
-			hash="sha256:27a0d018f608a3fe34ac5e2b876f4c23c47e38295c47dd0775cc294cd2614bc1"/>
+			module="/packages/2d/80/1809de155bad674b494248bcfca0e49eb4c5d8bee58f26fe7a0dd45029e2/numpy-1.15.4.zip"
+			checkoutdir="numpy-1.15.4"
+			version="1.15.4"
+			hash="sha256:3d734559db35aa3697dadcea492a423118c5c55d176da2f3be9c98d4803fc2a7"/>
 		<dependencies>
 			<dep package="python"/>
 		</dependencies>
@@ -280,9 +280,9 @@
 
 	<distutils id="python-paramiko">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/29/65/83181630befb17cd1370a6abb9a87957947a43c2332216e5975353f61d64/paramiko-2.4.1.tar.gz"
-			hash="sha256:33e36775a6c71790ba7692a73f948b329cf9295a72b0102144b031114bd2a4f3"
-			version="2.4.1"/>
+			module="/packages/a4/57/86681372e7a8d642718cadeef38ead1c24c4a1af21ae852642bf974e37c7/paramiko-2.4.2.tar.gz"
+			hash="sha256:a8975a7df3560c9f1e2b43dc54ebd40fd00a7017392ca5445ce7df409f900fcb"
+			version="2.4.2"/>
 		<dependencies>
 			<dep package="python"/>
 			<dep package="python-bcrypt"/>
@@ -309,9 +309,9 @@
 
 	<distutils id="python-websocket-client">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/30/c8/82ac8ae45073034af51c6296c35346caab4fa26456c19f9cf64d2b978971/websocket_client-0.52.0.tar.gz"
-			hash="sha256:3c9924675eaf0b27ae22feeeab4741bb4149b94820bd3a143eeaf8b62f64d821"
-			version="0.52.0"/>
+			module="/packages/35/d4/14e446a82bc9172d088ebd81c0b02c5ca8481bfeecb13c9ef07998f9249b/websocket_client-0.54.0.tar.gz"
+			hash="sha256:e51562c91ddb8148e791f0155fdb01325d99bb52c4cdbb291aee7a3563fd0849"
+			version="0.54.0"/>
 		<dependencies>
 			<dep package="python"/>
 		</dependencies>
@@ -389,11 +389,9 @@
 
 	<distutils id="python-lz4">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/13/3f/8b3e574344c7ed9fb76c240f8fe96a95648762dce3bb481527d3a414670c/lz4-2.1.0.tar.gz"
-			hash="sha256:166aff2fbb2fee39f4ed58e8e7c1ed8a8ce72915832a100ced7a1634ac655a6f"
-			version="2.1.0">
-			<!-- Warning: must update the patch with any version bump -->
-			<patch file="http://xpra.org/svn/Xpra/trunk/osx/jhbuild/patches/python-lz4-distributionnotfound.patch" strip="1" />
+			module="/packages/f1/4f/878f1827042c5b6828bc23d160f31e242ec820810b8bd04b30b631029952/lz4-2.1.2.tar.gz"
+			hash="sha256:ec265f7c3fc3df706e9579bde632ceeef9278858d7ae87c376a2954d11e9ea39"
+			version="2.1.2">
 		</branch>
 		<dependencies>
 			<dep package="lz4"/>
@@ -581,9 +579,9 @@
 
 	<distutils id="python-pyopengl">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/2e/4a/626c0b35740515b8cac9c6c21825189c65a7224e821d7f12b313ce0d7a3f/PyOpenGL-3.1.3b1.tar.gz"
-			hash="sha256:85cd5372636b8bda173a261b0d572500b2a3432105eaad1311ecd61b372bd6e8"
-			version="3.1.3b1"/>
+			module="/packages/df/fe/b9da75e85bcf802ed5ef92a5c5e4022bf06faa1d41b9630b9bb49f827483/PyOpenGL-3.1.1a1.tar.gz"
+			hash="sha256:c96d909b359abe3271b746bacf7e6ba52935141e2406a8f90231e4e44dfa4075"
+			version="3.1.1a1"/>
 		<dependencies>
 			<dep package="python"/>
 		</dependencies>
@@ -594,9 +592,9 @@
 
 	<distutils id="python-pyopengl-accelerate">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/1e/09/1d1dba973e447686e4764c121b46ec77fb3facb54fd05820cd64917f822b/PyOpenGL-accelerate-3.1.3b1.tar.gz"
-			hash="sha256:e687eea7e006d65f531933b49b3b3d2feaaf51279147a904247f9d189762a36f"
-			version="3.1.3b1"/>
+			module="/packages/84/74/b48e413c97cbe51d778cba58a431bb8348d826a1576ab48b3c5340628bd8/PyOpenGL-accelerate-3.1.1a1.tar.gz"
+			hash="sha256:3d37af9f2565febf214e1da2a5fe019561992d34026ce2a5f51972e121b84cdd"
+			version="3.1.a1"/>
 		<dependencies>
 			<dep package="python"/>
 		</dependencies>
@@ -607,9 +605,9 @@
 
 	<distutils id="python-pyobjc-core">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/9c/3c/09d2c37e3266fc7d1b0b2e46df838cf7603adca85d5132382a36e1e0b0c3/pyobjc-core-4.2.2.tar.gz"
-			hash="sha256:f76ed67ae902ea4bf6b673962520334b0ae26910c294b6ffbd2ac1af9b62ea0f"
-			version="4.2.2"/>
+			module="https://files.pythonhosted.org/packages/75/80/dbd2c1c6381a45f16a002387bd52cebd073240c0f5004ecd3d6598878760/pyobjc-core-5.1.1.tar.gz"
+			hash="sha256:3a817e0e5c05d98ac944a9f56b2ac02f699f5cc58216083f20e102b2cc1248e8"
+			version="5.1.1"/>
 		<dependencies>
 			<dep package="python"/>
 		</dependencies>
@@ -620,9 +618,9 @@
 
 	<distutils id="python-pyobjc-framework-cocoa">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/a2/32/45607f1f46d0813173b544b35d4b0d538fa7f57517adec70b7e4d4536045/pyobjc-framework-Cocoa-4.2.2.tar.gz"
-			hash="sha256:99b33ab038b90e8866e4cb510213f235c3010982fa425d8f34850c45ece30c43"
-			version="4.2.2"/>
+			module="/packages/33/45/189b405ad47b19828dacaca43d154c3cfa897ed8a47990c4e3b7280d807a/pyobjc-framework-Cocoa-5.1.1.tar.gz"
+			hash="sha256:60d016356a7ce417ff143309bb336ae426f7cc977ffb93f2f95e3d655af7bee4"
+			version="5.1.1"/>
 		<dependencies>
 			<dep package="python"/>
 		</dependencies>
@@ -633,9 +631,9 @@
 
 	<distutils id="python-pyobjc-framework-quartz">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/a3/c8/e949e274d3068bf97613fc13df8e1f97d45c7548599b6b354365a2c78c60/pyobjc-framework-Quartz-4.2.2.tar.gz"
-			hash="sha256:541a9bc32909936f49a753317576f7c8772eaadace8e462845bb19aee79531d5"
-			version="4.2.2"/>
+			module="/packages/ae/46/08a8f3a0e9fcb6d911ebbc905af41263a90f71b0dca27cac6a1ccbfef5e9/pyobjc-framework-Quartz-5.1.1.tar.gz"
+			hash="sha256:fac08a6fbc9ca63bff6888a9ddaf4e1ad00d377fb4a6f1c227696a2fedc48af7"
+			version="5.1.1"/>
 		<dependencies>
 			<dep package="python"/>
 		</dependencies>
@@ -646,9 +644,9 @@
 
 	<distutils id="python-pyobjc-framework-avfoundation">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/2b/06/487eefe0f4fd47dd1fa22ee532e7e123a3d3b3018be701ac23bcd61467b8/pyobjc-framework-AVFoundation-4.2.2.tar.gz"
-			hash="sha256:9e18d0795df7e2758cb8b7a76d80ed8b73057cb40ca1e28786473f62bcf19364"
-			version="4.2.2"/>
+			module="https://files.pythonhosted.org/packages/70/a2/7295de041bccb361070892b1cdf611b7ab44532483c79c426cf641503ece/pyobjc-framework-AVFoundation-5.1.1.tar.gz"
+			hash="sha256:82664fe65d9a062046463ed6f4f4946fc5992e04a4bc4701b77484daaad71e5b"
+			version="5.1.1"/>
 		<dependencies>
 			<dep package="python"/>
 		</dependencies>
@@ -659,9 +657,9 @@
 
 	<distutils id="python-pyobjc-framework-SystemConfiguration">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/82/28/4b9c46bd466b4188123d2b0bfdf8adea584152f2704dda18e5d5b6eeebd0/pyobjc-framework-SystemConfiguration-4.2.2.tar.gz"
-			hash="sha256:af1f25825974b148ed01ab095dd3796f07df6c575c52d802e37f908af5135096"
-			version="4.2.2"/>
+			module="/packages/72/d0/5d6b99d8b93bb8cf81f47ff1931b80c79b8528d45008acd7778eb7b21d86/pyobjc-framework-SystemConfiguration-5.1.1.tar.gz"
+			hash="sha256:830e50384b7bbaf3587b5c93cd8970ad65fc338fb4a329ad8ceacf73a4e57371"
+			version="5.1.1"/>
 		<dependencies>
 			<dep package="python"/>
 		</dependencies>

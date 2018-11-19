@@ -35,7 +35,7 @@ from xpra.platform.features import SYSTEM_TRAY_SUPPORTED
 from xpra.platform.paths import get_icon_filename
 from xpra.scripts.config import FALSE_OPTIONS
 from xpra.make_thread import make_thread
-from xpra.os_util import BytesIOClass, Queue, bytestostr, monotonic_time, memoryview_to_bytes, OSX, POSIX, is_Ubuntu
+from xpra.os_util import BytesIOClass, Queue, bytestostr, monotonic_time, memoryview_to_bytes, OSX, POSIX, PYTHON3, is_Ubuntu
 from xpra.util import iround, envint, envbool, typedict, make_instance, updict
 from xpra.client.mixins.stub_client_mixin import StubClientMixin
 
@@ -68,6 +68,7 @@ ICON_SHRINKAGE = envint("XPRA_ICON_SHRINKAGE", 75)
 SAVE_WINDOW_ICONS = envbool("XPRA_SAVE_WINDOW_ICONS", False)
 SAVE_CURSORS = envbool("XPRA_SAVE_CURSORS", False)
 MODAL_WINDOWS = envbool("XPRA_MODAL_WINDOWS", False)
+SIGNAL_WATCHER = envbool("XPRA_SIGNAL_WATCHER", PYTHON3)
 
 
 DRAW_TYPES = {bytes : "bytes", str : "bytes", tuple : "arrays", list : "arrays"}
@@ -733,21 +734,24 @@ class WindowClient(StubClientMixin):
         if not OR_FORCE_GRAB:
             return
         window_types = metadata.get("window-type", [])
-        wm_class = metadata.get("class-instance")
+        wm_class = metadata.strlistget("class-instance", [None, None], 2, 2)
         c = None
         if wm_class:
             c = wm_class[0]
-        for window_type, force_wm_classes in OR_FORCE_GRAB.items():
-            #ie: DIALOG : ["sun-awt-X11"]
-            if window_type=="*" or window_type in window_types:
-                for wmc in force_wm_classes:
-                    if wmc=="*" or c and c.startswith(wmc):
-                        return True
+        if c:
+            for window_type, force_wm_classes in OR_FORCE_GRAB.items():
+                #ie: DIALOG : ["sun-awt-X11"]
+                if window_type=="*" or window_type in window_types:
+                    for wmc in force_wm_classes:
+                        if wmc=="*" or c and c.startswith(wmc):
+                            return True
         return False
 
     ######################################################################
     # listen for process signals using a watcher process:
     def assign_signal_watcher_pid(self, wid, pid):
+        if not SIGNAL_WATCHER:
+            return 0
         if not POSIX or OSX or not pid:
             return 0
         proc = self._pid_to_signalwatcher.get(pid)
@@ -755,7 +759,7 @@ class WindowClient(StubClientMixin):
             from xpra.child_reaper import getChildReaper
             import subprocess
             try:
-                proc = subprocess.Popen("xpra_signal_listener", stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True, preexec_fn=os.setsid)
+                proc = subprocess.Popen("xpra_signal_listener", stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, close_fds=True, preexec_fn=os.setsid)
             except OSError as e:
                 log("assign_signal_watcher_pid(%s, %s)", wid, pid, exc_info=True)
                 log.error("Error: cannot execute signal listener")
@@ -788,6 +792,9 @@ class WindowClient(StubClientMixin):
         log("signal_watcher_event%s", (fd, cb_condition, proc, pid, wid))
         if cb_condition==glib.IO_HUP:
             proc.stdout_io_watch = None
+            return False
+        if proc.stdout_io_watch is None:
+            #no longer watched
             return False
         if cb_condition==glib.IO_IN:
             try:
@@ -1025,7 +1032,7 @@ class WindowClient(StubClientMixin):
             if window:
                 metadata = getattr(window, "_metadata", {})
                 log("window_close_event(%i) metadata=%s", wid, metadata)
-                class_instance = metadata.get("class-instance")
+                class_instance = metadata.strlistget("class-instance", (None, None), 2, 2)
                 title = metadata.get("title", "")
                 log("window_close_event(%i) title=%s, class-instance=%s", wid, title, class_instance)
                 matching_title_close = [x for x in TITLE_CLOSEEXIT if x and title.startswith(x)]
@@ -1077,14 +1084,32 @@ class WindowClient(StubClientMixin):
                     log("last window, removing watcher %s", signalwatcher)
                     try:
                         del self._signalwatcher_to_wids[signalwatcher]
-                        if signalwatcher.poll() is None:
-                            os.kill(signalwatcher.pid, signal.SIGKILL)
+                        self.kill_signalwatcher(signalwatcher)
                     except:
                         log("destroy_window(%i, %s) error killing signal watcher %s", wid, window, signalwatcher, exc_info=True)
                     #now remove any pids that use this watcher:
                     for pid, w in tuple(self._pid_to_signalwatcher.items()):
                         if w==signalwatcher:
                             del self._pid_to_signalwatcher[pid]
+
+    def kill_signalwatcher(self, proc):
+        log("kill_signalwatcher(%s)", proc)
+        if proc.poll() is None:
+            stdout_io_watch = proc.stdout_io_watch
+            if stdout_io_watch:
+                proc.stdout_io_watch = None
+                self.source_remove(stdout_io_watch)
+            try:
+                proc.stdin.write(b"exit\n")
+                proc.stdin.flush()
+            except:
+                log.warn("Warning: failed to tell the signal watcher to exit", exc_info=True)
+            def force_kill():
+                if proc.poll() is None:
+                    log.warn("Warning: signal watcher %i is still running", proc.pid)
+                    log.warn(" killing it")
+                    os.kill(proc.pid, signal.SIGKILL)
+            self.timeout_add(1000, force_kill)
 
     def destroy_all_windows(self):
         for wid, window in self._id_to_window.items():
@@ -1099,8 +1124,7 @@ class WindowClient(StubClientMixin):
         #make sure we don't leave any behind:
         for signalwatcher in tuple(self._signalwatcher_to_wids.keys()):
             try:
-                if signalwatcher.poll() is None:
-                    os.kill(signalwatcher.pid, signal.SIGKILL)
+                self.kill_signalwatcher(signalwatcher)
             except:
                 log("destroy_all_windows() error killing signal watcher %s", signalwatcher, exc_info=True)
 

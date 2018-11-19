@@ -265,7 +265,7 @@ if [ "$STRIP_OPENGL" == "1" ]; then
 fi
 if [ "${ZIP_MODULES}" == "1" ]; then
 	pushd $LIBDIR/python
-	zip --move -ur site-packges.zip OpenGL
+	zip --move -ur site-packages.zip OpenGL
 	popd
 fi
 echo " * add gobject-introspection (py2app refuses to do it)"
@@ -282,8 +282,8 @@ done
 if [ "$STRIP_NUMPY" == "1" ]; then
 	echo " * trim numpy"
 	pushd $LIBDIR/python/numpy
-	rm -fr ./f2py/docs
-	for x in core distutils f2py lib linalg ma matrixlib oldnumeric polynomial random testing; do
+	rm -fr ./f2py/docs ./tests ./doc
+	for x in core distutils f2py lib linalg ma matrixlib oldnumeric polynomial random testing compat fft; do
 		rm -fr ./$x/tests
 	done
 	popd

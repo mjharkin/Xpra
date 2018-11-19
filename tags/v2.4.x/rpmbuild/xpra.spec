@@ -3,7 +3,7 @@
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-%define version 2.4
+%define version 2.4.2
 
 %{!?__python2: %global __python2 python2}
 %{!?__python3: %define __python3 python3}
@@ -58,7 +58,7 @@ exit 1
 
 Name:				xpra
 Version:			%{version}
-Release:			2%{?revision_no}%{?dist}
+Release:			1%{?revision_no}%{?dist}
 Summary:			Xpra gives you "persistent remote applications" for X.
 Group:				Networking
 License:			GPL-2.0+ AND BSD-3-Clause AND LGPL-3.0+ AND MIT
@@ -822,13 +822,47 @@ fi
 
 
 %changelog
-* Fri Oct 26 2018 Antoine Martin <antoine@devloop.org.uk> 2.4-2
-- TODO
+* Mon Nov 05 2018 Antoine Martin <antoine@devloop.org.uk> 2.4.2-1
+- fix server crash with application setting invalid X11 atoms
+- fix missing windows with some mono applications (ignore invalid X11 atoms)
+- fix small X11 memory leak
+- fix encoding of empty areas (hard to trigger)
+- fix client hangs due to signal-watcher (now disabled with python2)
+- handle property change handlers errors more gracefully
+- avoid recycling video contexts unnecessarily
+- don't flush video encoders when doing a regular content refresh
+
+* Wed Oct 31 2018 Antoine Martin <antoine@devloop.org.uk> 2.4.1-1
+- fix popup window focus for some Java applications
+- fix popup window focus issue (ie: xterm menu)
+- fix system tray errors when mmap is disabled
+- fix missing system tray under Ubuntu's Unity (DEB dependency issue)
+- fix error in debug logging on MS Windows
+- fix missing codecs (numpy was blocked from loading)
+- fix nvenc compatibility with more python / cython / OS versions
+- fix backwards compatibility in keyboard mapping
+- fix session info errors when connecting to older servers
+- fix man page typo
+- fix default value 'auto' for ssh option, better compatibility
+- fix dead code triggering some debug warnings
+- fix rare race condition when closing a connection
+- fix 'flush' client encoding options parsing
+- fix overzealous clipboard sanitization code
+- fix missing notification messages
+- fix ssh client authentication: try all keys found
+- fix version update check
+- fix usability issues with GTK3, especially on MS Windows
+- fix cython compilation warnings
+- fix x264 dependency for Debian Buster
+- update default DEB build options for newer distributions
+- removed outdated DEB dependency on xvidcore
+- avoid ethtool warning spam
+- use correct headers for building python3 cairo workaround module
 
 * Mon Oct 15 2018 Antoine Martin <antoine@devloop.org.uk> 2.4-2
 - force rebuild on CentOS 7.x
 
-* Sat Oct 13 2018 Antoine Martin <antoine@devloop.org.uk> 2.4-1
+* Sat Oct 13 2018 Antoine Martin <antoine@devloop.org.uk> 2.4.2
 - SSH client integration (paramiko)
 - builtin server support for TCP socket upgrades to SSH (paramiko)
 - automatic TCP port allocation
@@ -1260,7 +1294,7 @@ fi
 - fix exception handling in client when called from the launcher
 - fix libav dependencies for Debian and Ubuntu builds
 
-* Wed Apr 23 2014 Antoine Martin <antoine@devloop.org.uk> 0.12.4-1
+* Wed Apr 23 2014 Antoine Martin <antoine@devloop.org.uk> 0.12.4.2
 - fix xpra shadow subcommand
 - fix xpra shadow keyboard mapping support for non-posix clients
 - avoid Xorg dummy warning in log

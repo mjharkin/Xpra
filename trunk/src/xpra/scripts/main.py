@@ -117,7 +117,7 @@ def main(script_file, cmdline):
 def configure_logging(options, mode):
     if mode in (
         "showconfig", "info", "id", "attach", "launcher", "stop", "print",
-        "control", "list", "list-mdns", "sessions", "mdns-gui",
+        "control", "list", "list-mdns", "sessions", "mdns-gui", "bug-report",
         "opengl", "opengl-probe", "test-connect",
         ):
         s = sys.stdout
@@ -410,6 +410,9 @@ def run_mode(script_file, error_cb, options, args, mode, defaults):
         elif mode == "gui":
             from xpra.gtk_common.gui import main        #@Reimport
             return main()
+        elif mode == "bug-report":
+            from xpra.scripts.bug_report import main    #@Reimport
+            main(["xpra"]+args)
         elif mode in ("_proxy", "_proxy_start", "_proxy_start_desktop", "_shadow_start") and (supports_server or supports_shadow):
             nox()
             return run_proxy(error_cb, options, script_file, args, mode, defaults)
@@ -514,13 +517,22 @@ def parse_display_name(error_cb, opts, display_name, session_name_lookup=False):
     scpos = display_name.find(":")
     slpos = display_name.find("/")
     if scpos<0 and slpos<0:
-        if session_name_lookup:
+        match = None
+        if POSIX:
+            #maybe this is just the display number without the ":" prefix?
+            try:
+                display_name = ":%i" % int(display_name)
+                match = True
+            except ValueError:
+                pass
+        if session_name_lookup and not match:
             #try to find a session whose "session-name" matches:
             match = find_session_by_name(opts, display_name)
             if match:
                 display_name = match
-                scpos = display_name.find(":")
-                slpos = display_name.find("/")
+    #display_name may have been updated, re-parse it:
+    scpos = display_name.find(":")
+    slpos = display_name.find("/")
     if scpos<0 and slpos<0:
         error_cb("unknown format for display name: %s" % display_name)
     if scpos<0:

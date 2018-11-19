@@ -97,7 +97,7 @@ HONOUR_SCREEN_MAPPING = envbool("XPRA_HONOUR_SCREEN_MAPPING", POSIX and not DISP
 DRAGNDROP = envbool("XPRA_DRAGNDROP", True)
 CLAMP_WINDOW_TO_SCREEN = envbool("XPRA_CLAMP_WINDOW_TO_SCREEN", True)
 
-OSX_FOCUS_WORKAROUND = envbool("XPRA_OSX_FOCUS_WORKAROUND", True)
+OSX_FOCUS_WORKAROUND = envbool("XPRA_OSX_FOCUS_WORKAROUND", False)
 SAVE_WINDOW_ICONS = envbool("XPRA_SAVE_WINDOW_ICONS", False)
 UNDECORATED_TRANSIENT_IS_OR = envint("XPRA_UNDECORATED_TRANSIENT_IS_OR", 1)
 XSHAPE = envbool("XPRA_XSHAPE", True)
@@ -333,8 +333,9 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
         #hook up the X11 gdk event notifications so we can get focus-out when grabs are active:
         if POSIX and not OSX:
             try:
-                from xpra.x11.gtk_x11 import add_event_receiver
+                from xpra.x11.gtk_x11.gdk_bindings import add_event_receiver
             except ImportError as e:
+                log("do_init_focus()", exc_info=True)
                 log.warn("Warning: missing gdk bindings:")
                 log.warn(" %s", e)
             else:

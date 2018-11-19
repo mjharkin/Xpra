@@ -236,7 +236,7 @@ mv lib/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader-*.dll lib/gdk-pixbuf-2.0/2.
 rm -fr lib/gdk-pixbuf-2.0/2.10.0/loaders
 mv lib/gdk-pixbuf-2.0/2.10.0/loaders.tmp lib/gdk-pixbuf-2.0/2.10.0/loaders
 #move libs that are likely to be common to the lib dir:
-for prefix in lib avcodec avformat avutil swscale swresample zlib1; do
+for prefix in lib avcodec avformat avutil swscale swresample zlib1 xvidcore; do
 	find lib/Xpra -name "${prefix}*dll" -exec mv {} ./lib/ \;
 done
 for x in openblas gfortran quadmath; do
@@ -273,8 +273,8 @@ pushd ${DIST}/lib > /dev/null
 rm -fr ./future/backports/test ./comtypes/test/ ./ctypes/macholib/fetch_macholib* ./distutils/tests ./distutils/command ./enum/doc ./websocket/tests ./email/test/
 #trim tests from numpy
 pushd numpy > /dev/null
-rm -fr ./f2py/docs
-for x in core distutils f2py lib linalg ma matrixlib oldnumeric polynomial random testing; do
+rm -fr ./f2py/docs ./tests ./doc
+for x in core distutils f2py lib linalg ma matrixlib oldnumeric polynomial random testing compat fft; do
 	rm -fr ./$x/tests
 done
 popd > /dev/null

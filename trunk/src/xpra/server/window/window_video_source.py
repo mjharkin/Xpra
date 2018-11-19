@@ -71,6 +71,8 @@ if SCALING_OPTIONS_STR:
 del SCALING_OPTIONS_STR
 scalinglog("scaling options: SCALING=%s, HARDCODED=%s, PPS_TARGET=%i, MIN_PPS=%i, OPTIONS=%s", SCALING, SCALING_HARDCODED, SCALING_PPS_TARGET, SCALING_MIN_PPS, SCALING_OPTIONS)
 
+DEBUG_VIDEO_CLEAN = envbool("XPRA_DEBUG_VIDEO_CLEAN", False)
+
 FORCE_AV_DELAY = envint("XPRA_FORCE_AV_DELAY", 0)
 B_FRAMES = envbool("XPRA_B_FRAMES", True)
 VIDEO_SKIP_EDGE = envbool("XPRA_VIDEO_SKIP_EDGE", False)
@@ -292,9 +294,15 @@ class WindowVideoSource(WindowSource):
         csce = self._csc_encoder
         ve = self._video_encoder
         if csce or ve:
+            if DEBUG_VIDEO_CLEAN:
+                log.warn("video_context_clean() for wid %i: %s and %s", self.wid, csce, ve)
+                import traceback
+                traceback.print_stack()
             self._csc_encoder = None
             self._video_encoder = None
             def clean():
+                if DEBUG_VIDEO_CLEAN:
+                    log.warn("video_context_clean() done")
                 self.csc_clean(csce)
                 self.ve_clean(ve)
             self.call_in_encode_thread(False, clean)
@@ -431,33 +439,30 @@ class WindowVideoSource(WindowSource):
             #raise the quality as the areas around video tend to not be graphics
             return nonvideo(quality+30, "not the video region")
 
-        if now-self.global_statistics.last_congestion_time>5:
-            lde = tuple(self.statistics.last_damage_events)
-            lim = now-4
-            pixels_last_4secs = sum(w*h for when,_,_,w,h in lde if when>lim)
-            if pixels_last_4secs<3*videomin:
-                return nonvideo(quality+30, "not enough frames")
-            lim = now-1
-            pixels_last_sec = sum(w*h for when,_,_,w,h in lde if when>lim)
-            if pixels_last_sec<pixels_last_4secs//8:
-                #framerate is dropping?
-                return nonvideo(quality+30, "framerate lowered")
+        if not video_hint and not self.is_shadow:
+            if now-self.global_statistics.last_congestion_time>5:
+                lde = tuple(self.statistics.last_damage_events)
+                lim = now-4
+                pixels_last_4secs = sum(w*h for when,_,_,w,h in lde if when>lim)
+                text_hint = self.content_type=="text"
+                if pixels_last_4secs<((3+text_hint*3)*videomin):
+                    return nonvideo(quality+30, "not enough frames")
+                lim = now-1
+                pixels_last_sec = sum(w*h for when,_,_,w,h in lde if when>lim)
+                if pixels_last_sec<pixels_last_4secs//8:
+                    #framerate is dropping?
+                    return nonvideo(quality+30, "framerate lowered")
 
-        #calculate the threshold for using video vs small regions:
-        factors = (max(1, (speed-75)/5.0),                      #speed multiplier
-                   1 + int(self.is_OR or self.is_tray)*2,       #OR windows tend to be static
-                   max(1, 10-self._sequence),                   #gradual discount the first 9 frames, as the window may be temporary
-                   1.0 / (int(bool(self._video_encoder)) + 1),  #if we have a video encoder already, make it more likely we'll use it:
-                   (1-video_hint/2.0),                          #video hint lowers the threshold
-                   )
-        max_nvp = int(reduce(operator.mul, factors, MAX_NONVIDEO_PIXELS))
-        if pixel_count<=max_nvp:
-            #below threshold
-            return nonvideo(quality+30, "not enough pixels")
-
-        if cww<self.min_w or cww>self.max_w or cwh<self.min_h or cwh>self.max_h:
-            #failsafe:
-            return nonvideo(info="size out of range")
+            #calculate the threshold for using video vs small regions:
+            factors = (max(1, (speed-75)/5.0),                      #speed multiplier
+                       1 + int(self.is_OR or self.is_tray)*2,       #OR windows tend to be static
+                       max(1, 10-self._sequence),                   #gradual discount the first 9 frames, as the window may be temporary
+                       1.0 / (int(bool(self._video_encoder)) + 1),  #if we have a video encoder already, make it more likely we'll use it:
+                       )
+            max_nvp = int(reduce(operator.mul, factors, MAX_NONVIDEO_PIXELS))
+            if pixel_count<=max_nvp:
+                #below threshold
+                return nonvideo(quality+30, "not enough pixels")
         return current_encoding
 
     def get_best_nonvideo_encoding(self, ww, wh, speed, quality, current_encoding=None, options=[]):
@@ -569,11 +574,6 @@ class WindowVideoSource(WindowSource):
         #maybe the stream is now corrupted..
         self.cleanup_codecs()
         WindowSource.client_decode_error(self, error, message)
-
-
-    def timer_full_refresh(self):
-        self.flush_video_encoder_now()
-        WindowSource.timer_full_refresh(self)
 
 
     def get_refresh_exclude(self):
@@ -849,16 +849,17 @@ class WindowVideoSource(WindowSource):
         if coding in self.video_encodings and self.edge_encoding and not VIDEO_SKIP_EDGE:
             dw = w - (w & self.width_mask)
             dh = h - (h & self.height_mask)
-            if dw>0:
+            if dw>0 and h>0:
                 sub = image.get_sub_image(w-dw, 0, dw, h)
                 call_encode(dw, h, sub, self.edge_encoding, flush+1+int(dh>0))
                 w = w & self.width_mask
-            if dh>0:
+            if dh>0 and w>0:
                 sub = image.get_sub_image(0, h-dh, w, dh)
                 call_encode(dw, h, sub, self.edge_encoding, flush+1)
                 h = h & self.height_mask
         #the main area:
-        call_encode(w, h, image, coding, flush)
+        if w>0 and h>0:
+            call_encode(w, h, image, coding, flush)
 
     def get_frame_encode_delay(self, options):
         if FORCE_AV_DELAY>0:
@@ -995,8 +996,18 @@ class WindowVideoSource(WindowSource):
                 ww, wh = self.window_dimensions
                 vs.identify_video_subregion(ww, wh, self.statistics.damage_events_count, self.statistics.last_damage_events, self.statistics.last_resized)
                 newrect = vs.rectangle
-                if newrect is None or old is None or newrect!=old:
-                    self.cleanup_codecs()
+                if ((newrect is None) ^ (old is None)) or newrect!=old:
+                    if old is None and newrect and newrect.get_geometry()==(0, 0, ww, wh):
+                        #not actually changed!
+                        #the region is the whole window
+                        pass
+                    elif newrect is None and old and old.get_geometry()==(0, 0, ww, wh):
+                        #not actually changed!
+                        #the region is the whole window
+                        pass
+                    else:
+                        videolog("video subregion was %s, now %s (window size: %i,%i)", old, newrect, ww, wh)
+                        self.cleanup_codecs()
                 if newrect:
                     #remove this from regular refresh:
                     if old is None or old!=newrect:
@@ -1032,6 +1043,9 @@ class WindowVideoSource(WindowSource):
 
             Can be called from any thread.
         """
+        if self._mmap and self._mmap_size>0:
+            scorelog("cannot score: mmap enabled")
+            return
         elapsed = monotonic_time()-self._last_pipeline_check
         max_elapsed = 0.75
         if self.is_idle:
@@ -1315,7 +1329,7 @@ class WindowVideoSource(WindowSource):
                         target = SCALING_PPS_TARGET             #ie: 1080p
                     if self.is_shadow:
                         #shadow servers look ugly when scaled:
-                        target *= 2
+                        target *= 4
                     elif self.content_type=="text":
                         #try to avoid scaling:
                         target *= 4

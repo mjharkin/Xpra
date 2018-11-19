@@ -33,6 +33,7 @@ XPRA_NEW_USER_NOTIFICATION_ID   = XPRA_NOTIFICATIONS_OFFSET+7
 XPRA_CLIPBOARD_NOTIFICATION_ID  = XPRA_NOTIFICATIONS_OFFSET+8
 XPRA_FAILURE_NOTIFICATION_ID    = XPRA_NOTIFICATIONS_OFFSET+9
 XPRA_DPI_NOTIFICATION_ID        = XPRA_NOTIFICATIONS_OFFSET+10
+XPRA_DISCONNECT_NOTIFICATION_ID = XPRA_NOTIFICATIONS_OFFSET+11
 
 
 #constants shared between client and server:
@@ -346,7 +347,7 @@ class typedict(dict):
         return self.listget(k, default_value, int, min_items, max_items)
 
     def listget(self, k, default_value=[], item_type=None, min_items=None, max_items=None):
-        v = self.capsget(k, default_value)
+        v = self.capsget(k)
         if v is None:
             return default_value
         if type(v) not in (list, tuple):
@@ -357,7 +358,7 @@ class typedict(dict):
         if item_type:
             for i in range(len(aslist)):
                 x = aslist[i]
-                if sys.version > '3' and type(x)==bytes and item_type==str:
+                if sys.version_info[0]>=3 and type(x)==bytes and item_type==str:
                     from xpra.os_util import bytestostr
                     x = bytestostr(x)
                     aslist[i] = x
@@ -421,6 +422,8 @@ def prettify_plug_name(s, default=""):
     s = re.sub(r"[0-9\.]*\\", "-", s).lstrip("-")
     if s.startswith("WinSta-"):
         s = s[len("WinSta-"):]
+    if s=="0":
+        s = default
     return s
 
 def do_log_screen_sizes(root_w, root_h, sizes):
@@ -461,7 +464,7 @@ def do_log_screen_sizes(root_w, root_h, sizes):
                 log.info("    %s", m)
                 continue
             plug_name, plug_x, plug_y, plug_width, plug_height, plug_width_mm, plug_height_mm = m[:7]
-            info = ['%s' % prettify_plug_name(plug_name, "monitor %i" % i)]
+            info = ['%s' % prettify_plug_name(plug_name, "monitor %i" % (i+1))]
             if plug_width!=width or plug_height!=height or plug_x!=0 or plug_y!=0:
                 info.append("%ix%i" % (plug_width, plug_height))
                 if plug_x!=0 or plug_y!=0:

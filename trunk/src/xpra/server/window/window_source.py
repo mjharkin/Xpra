@@ -192,7 +192,7 @@ class WindowSource(WindowIconSource):
         self.content_type = ""
         self.window_signal_handlers = []
         #watch for changes to properties that are used to derive the content-type:
-        for x in get_content_type_properties():
+        for x in ["content-type"] + list(get_content_type_properties()):
             if x in window.get_dynamic_property_names():
                 sid = window.connect("notify::%s" % x, self.content_type_changed)
                 self.window_signal_handlers.append(sid)
@@ -226,7 +226,9 @@ class WindowSource(WindowIconSource):
 
         # general encoding tunables (mostly used by video encoders):
         self._encoding_quality = deque(maxlen=100)   #keep track of the target encoding_quality: (event time, info, encoding speed)
+        self._encoding_quality_info = {}
         self._encoding_speed = deque(maxlen=100)     #keep track of the target encoding_speed: (event time, info, encoding speed)
+        self._encoding_speed_info = {}
         # they may have fixed values:
         def capr(v):
             return min(100, max(0, int(v)))
@@ -337,7 +339,9 @@ class WindowSource(WindowIconSource):
         self.small_packet_cost = 0
         #
         self._encoding_quality = []
+        self._encoding_quality_info = {}
         self._encoding_speed = []
+        self._encoding_speed_info = {}
         #
         self._fixed_quality = 0
         self._fixed_min_quality = 0
@@ -481,19 +485,18 @@ class WindowSource(WindowIconSource):
 
     def get_quality_speed_info(self):
         info = {}
-        def add_list_info(prefix, v):
+        def add_list_info(prefix, v, vinfo):
             if not v:
                 return
             l = tuple(v)
             if len(l)==0:
-                return
-            li = get_list_stats(x for _, _, x in l)
-            #last record
-            _, descr, _ = l[-1]
-            li.update(descr)
+                li = {}
+            else:
+                li = get_list_stats(x for _, x in l)
+            li.update(vinfo)
             info[prefix] = li
-        add_list_info("quality", self._encoding_quality)
-        add_list_info("speed", self._encoding_speed)
+        add_list_info("quality", self._encoding_quality, self._encoding_quality_info)
+        add_list_info("speed", self._encoding_speed, self._encoding_speed_info)
         return info
 
     def get_property_info(self):
@@ -574,10 +577,10 @@ class WindowSource(WindowIconSource):
         else:
             self.no_idle()
 
-    def content_type_changed(self, window, *_args):
+    def content_type_changed(self, window, *args):
         self.content_type = window.get("content-type") or guess_content_type(window)
-        log("class-changed(%s, %s) content-type=%s", window, _args, self.content_type)
-
+        log("content_type_changed(%s, %s) content-type=%s", window, args, self.content_type)
+        return True
 
     def set_client_properties(self, properties):
         #filter out stuff we don't care about
@@ -964,24 +967,32 @@ class WindowSource(WindowIconSource):
         self.may_update_av_sync_delay()
 
     def update_speed(self):
-        if self.suspended or self._mmap or self._sequence<10:
+        if self.suspended:
+            self._encoding_speed_info = {"suspended" : True}
+            return
+        if self._mmap:
+            self._encoding_speed_info = {"mmap" : True}
+            return
+        if self._sequence<10:
+            self._encoding_speed_info = {"pending" : True}
             return
         speed = self._fixed_speed
-        if speed<=0:
-            #make a copy to work on (and discard "info")
-            speed_data = [(event_time, speed) for event_time, _, speed in tuple(self._encoding_speed)]
-            info, target_speed = get_target_speed(self.window_dimensions, self.batch_config, self.global_statistics, self.statistics, self.bandwidth_limit, self._fixed_min_speed, speed_data)
-            speed_data.append((monotonic_time(), target_speed))
-            speed = max(self._fixed_min_speed, time_weighted_average(speed_data, min_offset=1, rpow=1.1))
-            speed = min(99, speed)
-        else:
-            info = {}
-            speed = min(100, speed)
-        speed = int(speed)
-        self._current_speed = speed
-        statslog("update_speed() wid=%s, info=%s, speed=%s", self.wid, info, speed)
-        self._encoding_speed.append((monotonic_time(), info, speed))
+        if speed>0:
+            self._current_speed = speed
+            self._encoding_speed_info = {"fixed" : True}
+            return
         now = monotonic_time()
+        #make a copy to work on:
+        speed_data = list(self._encoding_speed)
+        info, target, max_speed = get_target_speed(self.window_dimensions, self.batch_config, self.global_statistics, self.statistics, self.bandwidth_limit, self._fixed_min_speed, speed_data)
+        speed_data.append((monotonic_time(), target))
+        speed = int(time_weighted_average(speed_data, min_offset=1, rpow=1.1))
+        speed = max(0, self._fixed_min_speed, speed)
+        speed = int(min(max_speed, speed))
+        self._current_speed = speed
+        statslog("update_speed() speed=%2i (target=%2i, max=%2i) for wid=%i, info=%s", speed, target, max_speed, self.wid, info)
+        self._encoding_speed_info = info
+        self._encoding_speed.append((monotonic_time(), speed))
         ww, wh = self.window_dimensions
         self.global_statistics.speed.append((now, ww*wh, speed))
 
@@ -1000,29 +1011,38 @@ class WindowSource(WindowIconSource):
 
 
     def update_quality(self):
-        if self.suspended or self._mmap or self._sequence<10:
+        if self.suspended:
+            self._encoding_quality_info = {"suspended" : True}
+            return
+        if self._mmap:
+            self._encoding_quality_info = {"mmap" : True}
+            return
+        if self._sequence<10:
+            self._encoding_quality_info = {"pending" : True}
             return
         if self.encoding in LOSSLESS_ENCODINGS:
             #the user has selected an encoding which does not use quality
             #so skip the calculations!
+            self._encoding_quality_info = {"lossless" : self.encoding}
             self._current_quality = 100
             return
         quality = self._fixed_quality
-        if quality<=0:
-            info, quality = get_target_quality(self.window_dimensions, self.batch_config, self.global_statistics, self.statistics, self.bandwidth_limit, self._fixed_min_quality, self._fixed_min_speed)
-            #make a copy to work on (and discard "info")
-            ves_copy = [(event_time, speed) for event_time, _, speed in tuple(self._encoding_quality)]
-            ves_copy.append((monotonic_time(), quality))
-            quality = max(self._fixed_min_quality, time_weighted_average(ves_copy, min_offset=0.1, rpow=1.2))
-            quality = min(99, quality)
-        else:
-            info = {}
-            quality = min(100, quality)
-        quality = int(quality)
-        self._current_quality = quality
-        statslog("update_quality() wid=%i, info=%s, quality=%s", self.wid, info, quality)
+        if quality>0:
+            self._current_quality = int(min(100, quality))
+            self._encoding_quality_info = {"fixed" : True}
+            return
         now = monotonic_time()
-        self._encoding_quality.append((now, info, quality))
+        info, target = get_target_quality(self.window_dimensions, self.batch_config, self.global_statistics, self.statistics, self.bandwidth_limit, self._fixed_min_quality, self._fixed_min_speed)
+        #make a copy to work on:
+        ves_copy = list(self._encoding_quality)
+        ves_copy.append((now, target))
+        quality = int(time_weighted_average(ves_copy, min_offset=0.1, rpow=1.2))
+        quality = max(0, self._fixed_min_quality, quality)
+        quality = int(min(99, quality))
+        self._current_quality = quality
+        statslog("update_quality() quality=%2i (target=%2i) for wid=%i, info=%s", quality, target, self.wid, info)
+        self._encoding_quality_info = info
+        self._encoding_quality.append((now, quality))
         ww, wh = self.window_dimensions
         self.global_statistics.quality.append((now, ww*wh, quality))
 
@@ -1129,7 +1149,7 @@ class WindowSource(WindowIconSource):
             damagelog("damage%s window size %ix%i ignored", (x, y, w, h, options), ww, wh)
             return
         now = monotonic_time()
-        if not options.get("auto_refresh", False) and not options.get("polling", False):
+        if not options.get("auto_refresh", False) and not options.get("polling", False) and not self.is_shadow:
             self.statistics.last_damage_events.append((now, x,y,w,h))
         self.global_statistics.damage_events_count += 1
         self.statistics.damage_events_count += 1
@@ -1137,7 +1157,7 @@ class WindowSource(WindowIconSource):
             self.statistics.last_resized = now
             self.window_dimensions = ww, wh
             log("window dimensions changed: %ix%i", ww, wh)
-            self.encode_queue_max_size = max(2, min(30, MAX_SYNC_BUFFER_SIZE/(ww*wh*4)))
+            self.encode_queue_max_size = max(2, min(30, MAX_SYNC_BUFFER_SIZE//(ww*wh*4)))
         if self.full_frames_only:
             x, y, w, h = 0, 0, ww, wh
         self.do_damage(ww, wh, x, y, w, h, options)
@@ -1463,7 +1483,7 @@ class WindowSource(WindowIconSource):
 
         regions = tuple(set(regions))
         if MERGE_REGIONS:
-            bytes_threshold = ww*wh*self.max_bytes_percent/100
+            bytes_threshold = ww*wh*self.max_bytes_percent//100
             pixel_count = sum(rect.width*rect.height for rect in regions)
             bytes_cost = pixel_count+self.small_packet_cost*len(regions)
             log("send_delayed_regions: bytes_cost=%s, bytes_threshold=%s, pixel_count=%s", bytes_cost, bytes_threshold, pixel_count)
@@ -1669,14 +1689,14 @@ class WindowSource(WindowIconSource):
             if not self.refresh_timer:
                 #we must schedule a new refresh timer
                 self.refresh_event_time = now
-                sched_delay = max(self.min_auto_refresh_delay, int(self.base_auto_refresh_delay * sqrt(pct) / 10.0))
+                sched_delay = max(self.min_auto_refresh_delay, int(self.base_auto_refresh_delay * sqrt(pct) // 10))
                 self.refresh_target_time = now + sched_delay/1000.0
                 self.refresh_timer = self.timeout_add(sched_delay, self.refresh_timer_function, options)
                 msg += ", scheduling refresh in %sms (pct=%i, batch=%i)" % (sched_delay, pct, self.batch_config.delay)
             else:
                 #add to the target time,
                 #but don't use sqrt() so this will not move it forwards for small updates following bigger ones:
-                sched_delay = max(self.min_auto_refresh_delay, int(self.base_auto_refresh_delay * pct / 100.0))
+                sched_delay = max(self.min_auto_refresh_delay, int(self.base_auto_refresh_delay * pct // 100))
                 target_time = self.refresh_target_time
                 self.refresh_target_time = max(target_time, now + sched_delay/1000.0)
                 msg += ", re-scheduling refresh (due in %ims, %ims added - sched_delay=%s, pct=%i, batch=%i)" % (1000*(self.refresh_target_time-now), 1000*(self.refresh_target_time-target_time), sched_delay, pct, self.batch_config.delay)
@@ -1869,7 +1889,7 @@ class WindowSource(WindowIconSource):
             if t>=4 and t<=10:
                 #calculate the send speed over that interval:
                 bcount = svalue1-svalue2
-                avg_send_speed = int(bcount*8/t)
+                avg_send_speed = int(bcount*8//t)
                 if cur_send_speed:
                     #weighted average,
                     #when we're very late, the value is much more likely to be correct
@@ -2142,7 +2162,7 @@ class WindowSource(WindowIconSource):
             client_options["ts"] = image.get_timestamp()
         end = monotonic_time()
         compresslog("compress: %5.1fms for %4ix%-4i pixels at %4i,%-4i for wid=%-5i using %9s with ratio %5.1f%%  (%5iKB to %5iKB), sequence %5i, client_options=%s",
-                 (end-start)*1000.0, outw, outh, x, y, self.wid, coding, 100.0*csize/psize, psize/1024, csize/1024, self._damage_packet_sequence, client_options)
+                 (end-start)*1000.0, outw, outh, x, y, self.wid, coding, 100.0*csize/psize, psize//1024, csize//1024, self._damage_packet_sequence, client_options)
         self.statistics.encoding_stats.append((end, coding, w*h, bpp, csize, end-start))
         return self.make_draw_packet(x, y, outw, outh, coding, data, outstride, client_options, options)
 

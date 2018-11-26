@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
 # Copyright (C) 2012-2018 Antoine Martin <antoine@xpra.org>
@@ -168,3 +169,33 @@ class ShadowX11Server(GTKShadowServerBase, X11ServerCore):
         assert encoding=="png"  #use fixed encoding for now
         from xpra.net.compression import Compressed
         return ["screenshot", w, h, encoding, rowstride, Compressed(encoding, data)]
+
+
+def main(filename):
+    from xpra.os_util import StringIOClass, memoryview_to_bytes
+    from xpra.gtk_common.gtk_util import get_default_root_window, get_root_size
+    root = get_default_root_window()
+    capture = setup_capture(root)
+    capture.refresh()
+    w, h = get_root_size()
+    image = capture.get_image(0, 0, w, h)
+    from PIL import Image
+    fmt = image.get_pixel_format().replace("X", "A")
+    pixels = memoryview_to_bytes(image.get_pixels())
+    pil_image = Image.frombuffer("RGBA", (w, h), pixels, "raw", fmt, image.get_rowstride())
+    pil_image = pil_image.convert("RGB")
+    buf = StringIOClass()
+    pil_image.save(buf, "png")
+    data = buf.getvalue()
+    buf.close()
+    with open(filename, "wb") as f:
+        f.write(data)
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv)!=2:
+        print("usage: %s filename.png" % sys.argv[0])
+        v = 1
+    else:
+        v = main(sys.argv[1])
+    sys.exit(v)

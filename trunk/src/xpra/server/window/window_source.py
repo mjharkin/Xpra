@@ -31,7 +31,7 @@ AUTO_REFRESH = envbool("XPRA_AUTO_REFRESH", True)
 AUTO_REFRESH_QUALITY = envint("XPRA_AUTO_REFRESH_QUALITY", 100)
 AUTO_REFRESH_SPEED = envint("XPRA_AUTO_REFRESH_SPEED", 50)
 
-INITIAL_QUALITY = envint("XPRA_INITIAL_QUALITY", 40)
+INITIAL_QUALITY = envint("XPRA_INITIAL_QUALITY", 65)
 INITIAL_SPEED = envint("XPRA_INITIAL_SPEED", 40)
 
 LOCKED_BATCH_DELAY = envint("XPRA_LOCKED_BATCH_DELAY", 1000)
@@ -121,6 +121,7 @@ class WindowSource(WindowIconSource):
 
         self.init_vars()
 
+        self.start_time = monotonic_time()
         self.ui_thread = threading.current_thread()
 
         self.record_congestion_event = record_congestion_event  #callback for send latency problems
@@ -472,16 +473,21 @@ class WindowSource(WindowIconSource):
         ma = self.mapped_at
         if ma:
             info["mapped-at"] = ma
-        now = monotonic_time()
-        cutoff = now-5
-        lde = [x for x in tuple(self.statistics.last_damage_events) if x[0]>=cutoff]
-        dfps = 0
-        if lde:
-            dfps = len(lde) // 5
-        info["damage.fps"] = dfps
+        info["damage.fps"] = self.get_damage_fps()
         if self.pixel_format:
             info["pixel-format"] = self.pixel_format
         return info
+
+    def get_damage_fps(self):
+        now = monotonic_time()
+        cutoff = now-5
+        lde = tuple(x[0] for x in tuple(self.statistics.last_damage_events) if x[0]>=cutoff)
+        fps = 0
+        if len(lde)>=2:
+            elapsed = now-min(lde)
+            if elapsed>0:
+                fps = len(lde) // elapsed
+        return fps
 
     def get_quality_speed_info(self):
         info = {}
@@ -1149,10 +1155,11 @@ class WindowSource(WindowIconSource):
             damagelog("damage%s window size %ix%i ignored", (x, y, w, h, options), ww, wh)
             return
         now = monotonic_time()
-        if not options.get("auto_refresh", False) and not options.get("polling", False) and not self.is_shadow:
+        if options.pop("damage", False):
+            damagelog("damage%s wid=%i", (x, y, w, h, options), self.wid)
             self.statistics.last_damage_events.append((now, x,y,w,h))
-        self.global_statistics.damage_events_count += 1
-        self.statistics.damage_events_count += 1
+            self.global_statistics.damage_events_count += 1
+            self.statistics.damage_events_count += 1
         if self.window_dimensions != (ww, wh):
             self.statistics.last_resized = now
             self.window_dimensions = ww, wh
@@ -1185,7 +1192,7 @@ class WindowSource(WindowIconSource):
                         continue
                     if override or k not in existing_options:
                         existing_options[k] = options[k]
-            damagelog("damage%-24s wid=%s, using existing delayed %s regions created %.1fms ago",
+            damagelog("do_damage%-24s wid=%s, using existing delayed %s regions created %.1fms ago",
                 (x, y, w, h, options), self.wid, delayed[3], now-delayed[0])
             if not self.expire_timer and not self.soft_timer and self.soft_expired==0:
                 log.error("Error: bug, found a delayed region without a timer!")
@@ -1224,7 +1231,7 @@ class WindowSource(WindowIconSource):
         # - no more than 10 regions waiting to be encoded
         if not self.must_batch(delay) and (packets_backlog==0 and pixels_encoding_backlog<ww*wh and enc_backlog_count<=10):
             #send without batching:
-            damagelog("damage%-24s wid=%s, sending now with sequence %s", (x, y, w, h, options), self.wid, self._sequence)
+            damagelog("do_damage%-24s wid=%s, sending now with sequence %s", (x, y, w, h, options), self.wid, self._sequence)
             actual_encoding = options.get("encoding")
             if actual_encoding is None:
                 q = options.get("quality") or self._current_quality
@@ -1249,7 +1256,7 @@ class WindowSource(WindowIconSource):
         self._damage_delayed_expired = False
         actual_encoding = options.get("encoding", self.encoding)
         self._damage_delayed = now, regions, actual_encoding, options or {}
-        damagelog("damage%-24s wid=%s, scheduling batching expiry for sequence %s in %i ms", (x, y, w, h, options), self.wid, self._sequence, delay)
+        damagelog("do_damage%-24s wid=%s, scheduling batching expiry for sequence %s in %i ms", (x, y, w, h, options), self.wid, self._sequence, delay)
         self.batch_config.last_delays.append((now, delay))
         self.expire_timer = self.timeout_add(delay, self.expire_delayed_region, delay)
 
@@ -1298,26 +1305,29 @@ class WindowSource(WindowIconSource):
             #got sent
             return False
         #the region has not been sent yet because we are waiting for damage ACKs from the client
-        if self.soft_expired<self.max_soft_expired:
+        max_soft_expired = min(1+self.statistics.damage_events_count//2, self.max_soft_expired)
+        if self.soft_expired<max_soft_expired:
             #there aren't too many regions soft expired yet
             #so use the "soft timer":
             self.soft_expired += 1
             #we have already waited for "delay" to get here, wait more as we soft expire more regions:
             self.soft_timer = self.timeout_add(int(self.soft_expired*delay), self.delayed_region_soft_timeout)
         else:
-            #only record this congestion if this is a new event,
-            #otherwise we end up perpetuating it
-            #because congestion events lower the latency tolerance
-            #which makes us more sensitive to packets backlog
-            celapsed = monotonic_time()-self.global_statistics.last_congestion_time
-            if celapsed<10:
-                late_pct = 2*100*self.soft_expired
-                self.networksend_congestion_event("soft-expire limit: %ims, %i/%i" % (delay, self.soft_expired, self.max_soft_expired), late_pct)
+            if max_soft_expired==self.max_soft_expired:
+                #only record this congestion if this is a new event,
+                #otherwise we end up perpetuating it
+                #because congestion events lower the latency tolerance
+                #which makes us more sensitive to packets backlog
+                celapsed = monotonic_time()-self.global_statistics.last_congestion_time
+                if celapsed<10 and max_soft_expired==self.max_soft_expired:
+                    late_pct = 2*100*self.soft_expired
+                    self.networksend_congestion_event("soft-expire limit: %ims, %i/%i" % (delay, self.soft_expired, self.max_soft_expired), late_pct)
             #NOTE: this should never happen...
             #the region should now get sent when we eventually receive the pending ACKs
             #but if somehow they go missing... clean it up from a timeout:
-            delayed_region_time = delayed[0]
-            self.timeout_timer = self.timeout_add(self.batch_config.timeout_delay, self.delayed_region_timeout, delayed_region_time)
+            if not self.timeout_timer:
+                delayed_region_time = delayed[0]
+                self.timeout_timer = self.timeout_add(self.batch_config.timeout_delay, self.delayed_region_timeout, delayed_region_time)
         return False
 
     def delayed_region_soft_timeout(self):
@@ -1461,81 +1471,68 @@ class WindowSource(WindowIconSource):
         def get_encoding(w, h):
             return get_best_encoding(w, h, speed, quality, coding)
 
-        def send_full_window_update():
+        def send_full_window_update(cause):
             actual_encoding = get_encoding(ww, wh)
-            log("send_delayed_regions: using full window update %sx%s as %5s, from %s", ww, wh, actual_encoding, get_best_encoding)
+            log("send_delayed_regions: using full window update %sx%s as %5s: %s, from %s", ww, wh, actual_encoding, cause, get_best_encoding)
             assert actual_encoding is not None
             self.process_damage_region(damage_time, 0, 0, ww, wh, actual_encoding, options)
 
         if exclude_region is None:
             if self.full_frames_only:
-                send_full_window_update()
+                send_full_window_update("full-frames-only set")
                 return
 
             if len(regions)>self.max_small_regions:
                 #too many regions!
-                send_full_window_update()
+                send_full_window_update("too many regions: %i" % len(regions))
                 return
             if ww*wh<=MIN_WINDOW_REGION_SIZE:
                 #size is too small to bother with regions:
-                send_full_window_update()
+                send_full_window_update("small window: %ix%i" % (ww, wh))
                 return
-
-        regions = tuple(set(regions))
-        if MERGE_REGIONS:
-            bytes_threshold = ww*wh*self.max_bytes_percent//100
-            pixel_count = sum(rect.width*rect.height for rect in regions)
-            bytes_cost = pixel_count+self.small_packet_cost*len(regions)
-            log("send_delayed_regions: bytes_cost=%s, bytes_threshold=%s, pixel_count=%s", bytes_cost, bytes_threshold, pixel_count)
-            if bytes_cost>=bytes_threshold:
-                #too many bytes to send lots of small regions..
-                if exclude_region is None:
-                    send_full_window_update()
-                    return
-                #make regions out of the rest of the window area:
-                non_exclude = rectangle(0, 0, ww, wh).substract_rect(exclude_region)
-                #and keep those that have damage areas in them:
-                regions = [x for x in non_exclude if len([y for y in regions if x.intersects_rect(y)])>0]
-                #TODO: should verify that is still better than what we had before..
-            elif len(regions)>1:
-                #try to merge all the regions to see if we save anything:
-                merged = merge_all(regions)
-                #remove the exclude region if needed:
-                if exclude_region:
-                    merged_rects = merged.substract_rect(exclude_region)
-                else:
-                    merged_rects = [merged]
-                merged_pixel_count = sum(r.width*r.height for r in merged_rects)
-                merged_bytes_cost = merged_pixel_count+self.small_packet_cost*len(merged_rects)
-                log("send_delayed_regions: merged=%s, merged_bytes_cost=%s, bytes_cost=%s, merged_pixel_count=%s, pixel_count=%s",
-                         merged_rects, merged_bytes_cost, bytes_cost, merged_pixel_count, pixel_count)
-                if merged_bytes_cost<bytes_cost or merged_pixel_count<pixel_count:
-                    #better, so replace with merged regions:
-                    regions = merged_rects
-
-            if not regions:
-                #nothing left after removing the exclude region
-                return
-            elif len(regions)==1:
-                merged = regions[0]
-            else:
-                merged = merge_all(regions)
-            #if we find one region covering almost the entire window,
-            #refresh the whole window (ie: when the video encoder mask rounded the dimensions down)
-            if merged.x<=1 and merged.y<=1 and abs(ww-merged.width)<2 and abs(wh-merged.height)<2:
-                send_full_window_update()
-                return
-
-        #we're processing a number of regions separately,
-        #start by removing the exclude region if there is one:
-        if exclude_region:
-            e_regions = []
+            regions = tuple(set(regions))
+        else:
+            non_ex = set()
             for r in regions:
                 for v in r.substract_rect(exclude_region):
-                    e_regions.append(v)
-            regions = e_regions
-            log("send_delayed_regions: remaining regions for exclude=%s : %s", exclude_region, len(regions))
-        #then figure out which encoding will get used,
+                    non_ex.add(v)
+            regions = tuple(non_ex)
+
+        if MERGE_REGIONS and len(regions)>1:
+            merge_threshold = ww*wh*self.max_bytes_percent//100
+            pixel_count = sum(rect.width*rect.height for rect in regions)
+            packet_cost = pixel_count+self.small_packet_cost*len(regions)
+            log("send_delayed_regions: packet_cost=%s, merge_threshold=%s, pixel_count=%s", packet_cost, merge_threshold, pixel_count)
+            if packet_cost>=merge_threshold and exclude_region is None:
+                send_full_window_update("bytes cost (%i) too high (max %i)" % (packet_cost, merge_threshold))
+                return
+            #try to merge all the regions to see if we save anything:
+            merged = merge_all(regions)
+            if exclude_region:
+                merged_rects = merged.substract_rect(exclude_region)
+                merged_pixel_count = sum(r.width*r.height for r in merged_rects)
+            else:
+                merged_rects = (merged,)
+                merged_pixel_count = merged.width*merged.height
+            merged_packet_cost = merged_pixel_count+self.small_packet_cost*len(merged_rects)
+            log("send_delayed_regions: merged=%s, merged_bytes_cost=%s, bytes_cost=%s, merged_pixel_count=%s, pixel_count=%s",
+                     merged_rects, merged_packet_cost, packet_cost, merged_pixel_count, pixel_count)
+            if merged_packet_cost<packet_cost or merged_pixel_count<pixel_count:
+                #better, so replace with merged regions:
+                regions = merged_rects
+
+        if not regions:
+            #nothing left after removing the exclude region
+            return
+        elif len(regions)==1:
+            merged = regions[0]
+            #if we end up with just one region covering almost the entire window,
+            #refresh the whole window (ie: when the video encoder mask rounded the dimensions down)
+            if merged.x<=1 and merged.y<=1 and abs(ww-merged.width)<2 and abs(wh-merged.height)<2:
+                send_full_window_update("merged region covers almost the whole window")
+                return
+
+        #figure out which encoding will get used,
         #and shortcut out if this needs to be a full window update:
         i_reg_enc = []
         for i,region in enumerate(regions):

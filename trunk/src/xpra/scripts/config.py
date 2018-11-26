@@ -198,7 +198,7 @@ def OpenGL_safety_check():
             return "VirtualBox is present (VBoxMiniRdrDN)"
     return None
 
-OPENGL_DEFAULT = "auto"       #will auto-detect by probing
+OPENGL_DEFAULT = "probe"       #will auto-detect by probing
 def get_opengl_default():
     global OPENGL_DEFAULT
     if OpenGL_safety_check() is not None:
@@ -221,11 +221,16 @@ def get_build_info():
     except Exception as e:
         warn("Error: could not find the source information: %s" % e)
     try:
-        from xpra.build_info import BUILT_BY, BUILT_ON, BUILD_DATE, BUILD_TIME, BUILD_BIT, CYTHON_VERSION, COMPILER_VERSION    #@UnresolvedImport
+        from xpra.build_info import BUILD_DATE, BUILD_TIME, BUILD_BIT, CYTHON_VERSION, COMPILER_VERSION    #@UnresolvedImport
         if BUILD_BIT:
             info.insert(0, "")
             info.insert(0, BUILD_BIT)
-        info.append("built on %s by %s" % (BUILT_ON, BUILT_BY))
+        try:
+            from xpra.build_info import BUILT_BY, BUILT_ON
+            info.append("built on %s by %s" % (BUILT_ON, BUILT_BY))
+        except ImportError:
+            #reproducible builds dropped this info
+            pass
         if BUILD_DATE and BUILD_TIME:
             info.append("%s %s" % (BUILD_DATE, BUILD_TIME))
         if CYTHON_VERSION!="unknown" or COMPILER_VERSION!="unknown":
@@ -602,6 +607,8 @@ OPTION_TYPES = {
                     "start-child-after-connect" : list,
                     "start-on-connect"          : list,
                     "start-child-on-connect"    : list,
+                    "start-on-last-client-exit" : list,
+                    "start-child-on-last-client-exit"   : list,
                     "bind"              : list,
                     "bind-vsock"        : list,
                     "bind-tcp"          : list,
@@ -637,6 +644,7 @@ START_COMMAND_OPTIONS = [
     "start", "start-child",
     "start-after-connect", "start-child-after-connect",
     "start-on-connect", "start-child-on-connect",
+    "start-on-last-client-exit", "start-child-on-last-client-exit",
     ]
 BIND_OPTIONS = ["bind", "bind-tcp", "bind-udp", "bind-ssl", "bind-ws", "bind-wss", "bind-vsock", "bind-rfb"]
 
@@ -717,6 +725,7 @@ PROXY_START_OVERRIDABLE_OPTIONS = [
     "start", "start-child",
     "start-after-connect", "start-child-after-connect",
     "start-on-connect", "start-child-on-connect",
+    "start-on-last-client-exit", "start-child-on-last-client-exit",
     ]
 tmp = os.environ.get("XPRA_PROXY_START_OVERRIDABLE_OPTIONS", "")
 if tmp:
@@ -1015,6 +1024,8 @@ def get_defaults():
                     "start-child-after-connect" : [],
                     "start-on-connect"          : [],
                     "start-child-on-connect"    : [],
+                    "start-on-last-client-exit" : [],
+                    "start-child-on-last-client-exit"   : [],
                     "start-env"         : DEFAULT_ENV,
                     "env"               : [],
                     }

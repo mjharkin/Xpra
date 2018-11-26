@@ -58,7 +58,7 @@ class WindowServer(StubServerMixin):
         #self._id_to_window = {}
 
 
-    def reset_state(self):
+    def last_client_exited(self):
         self._focus(None, 0, [])
 
 
@@ -239,7 +239,11 @@ class WindowServer(StubServerMixin):
         if ss:
             ss.client_ack_damage(packet_sequence, wid, width, height, decode_time, message)
 
-    def _damage(self, window, x, y, width, height, options={}):
+    def refresh_window(self, window):
+        ww, wh = window.get_dimensions()
+        self.refresh_window_area(window, 0, 0, ww, wh)
+
+    def refresh_window_area(self, window, x, y, width, height, options={}):
         wid = self._window_to_id[window]
         for ss in tuple(self._server_sources.values()):
             ss.damage(wid, window, x, y, width, height, options)
@@ -270,7 +274,7 @@ class WindowServer(StubServerMixin):
         if options.get("refresh-now", True):
             refresh_opts = {"quality"           : qual,
                             "override_options"  : True}
-            self.refresh_windows(proto, wid_windows, refresh_opts)
+            self._refresh_windows(proto, wid_windows, refresh_opts)
 
 
     def update_batch_config(self, proto, wid_windows, batch_props, client_properties):
@@ -283,7 +287,7 @@ class WindowServer(StubServerMixin):
             self._set_client_properties(proto, wid, window, client_properties)
             ss.update_batch(wid, window, batch_props)
 
-    def refresh_windows(self, proto, wid_windows, opts={}):
+    def _refresh_windows(self, proto, wid_windows, opts={}):
         ss = self._server_sources.get(proto)
         if ss is None:
             return
@@ -296,7 +300,7 @@ class WindowServer(StubServerMixin):
             ss.refresh(wid, window, opts)
 
     def _idle_refresh_all_windows(self, proto):
-        self.idle_add(self.refresh_windows, proto, self._id_to_window)
+        self.idle_add(self._refresh_windows, proto, self._id_to_window)
 
 
     def get_window_position(self, _window):

@@ -121,11 +121,11 @@ def get_target_speed(window_dimensions, batch, global_statistics, statistics, ba
     mpixels = low_limit/1024.0/1024.0
     #for larger window sizes, we should be downscaling,
     #and don't want to wait too long for those anyway:
-    ref_damage_latency = 0.010 + 0.025 * (1+mathlog(max(1, mpixels)))
+    ref_damage_latency = (10 + 25 * (1+mathlog(max(1, mpixels))))/1000.0
 
     adil = statistics.avg_damage_in_latency or 0
     #abs: try to never go higher than N times the reference latency:
-    dam_lat_abs = max(0, (adil-ref_damage_latency) / (ref_damage_latency * 3.0))
+    dam_lat_abs = max(0, (adil-ref_damage_latency)) / (ref_damage_latency * 3)
 
     if batch.locked:
         target_damage_latency = ref_damage_latency
@@ -140,7 +140,7 @@ def get_target_speed(window_dimensions, batch, global_statistics, statistics, ba
             #average recent actual delay:
             avg_delay = time_weighted_average(delays)
         #and average that with the current delay (which is lower or equal):
-        frame_delay = int((avg_delay + batch.delay) // 2)
+        frame_delay = max(10, int((avg_delay + batch.delay) // 2))
         #ensure we always spend at least as much time encoding as we spend batching:
         #(one frame encoding whilst one frame is batching is our ideal result)
         target_damage_latency = max(ref_damage_latency, frame_delay/1000.0)
@@ -196,12 +196,11 @@ def get_target_speed(window_dimensions, batch, global_statistics, statistics, ba
     if ads>0:
         dec_lat = min_decode_speed/float(ads)
 
-    max_speed = max(0, min(pixels_bl_s, dam_lat_s, pixel_rate_s, bandwidth_s, congestion_s))
+    ms = min(100, max(min_speed, 0))
+    max_speed = max(ms, min(pixels_bl_s, dam_lat_s, pixel_rate_s, bandwidth_s, congestion_s))
     #combine factors: use the highest one:
     target = min(1, max(dam_lat_abs, dam_lat_rel, dec_lat, pps, 0))
     #scale target between min_speed and 100:
-    ms = min(100, max(min_speed, 0))
-    max_speed = max(ms, max_speed)
     speed = int(ms + (100-ms) * target)
     speed = max(ms, min(max_speed, speed))
 
@@ -259,9 +258,11 @@ def get_target_quality(window_dimensions, batch, global_statistics, statistics, 
             #weighted average between start delay and min_delay
             #so when we start and we don't have any records, we don't lower quality
             #just because the start delay is higher than min_delay
-            ref_delay = (batch.START_DELAY*10 + batch.min_delay*recs) // (recs+10)
             #anything less than N times the reference delay is good enough:
-            N = 4
+            N = 3.0-min_speed/50.0
+            #if the min-speed is high, reduce tolerance:
+            tolerance = 10-int(min_speed//10)
+            ref_delay = max(0, tolerance+N*(batch.START_DELAY*10 + batch.min_delay*recs) // (recs+10))
             batch_q = float(N * ref_delay) / max(1, batch.min_delay, batch.delay)
 
     #latency limit factor:

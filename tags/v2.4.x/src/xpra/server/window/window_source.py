@@ -1296,8 +1296,9 @@ class WindowSource(WindowIconSource):
             #NOTE: this should never happen...
             #the region should now get sent when we eventually receive the pending ACKs
             #but if somehow they go missing... clean it up from a timeout:
-            delayed_region_time = delayed[0]
-            self.timeout_timer = self.timeout_add(self.batch_config.timeout_delay, self.delayed_region_timeout, delayed_region_time)
+            if not self.timeout_timer:
+                delayed_region_time = delayed[0]
+                self.timeout_timer = self.timeout_add(self.batch_config.timeout_delay, self.delayed_region_timeout, delayed_region_time)
         return False
 
     def delayed_region_soft_timeout(self):
@@ -1498,13 +1499,11 @@ class WindowSource(WindowIconSource):
                 return
             elif len(regions)==1:
                 merged = regions[0]
-            else:
-                merged = merge_all(regions)
-            #if we find one region covering almost the entire window,
-            #refresh the whole window (ie: when the video encoder mask rounded the dimensions down)
-            if merged.x<=1 and merged.y<=1 and abs(ww-merged.width)<2 and abs(wh-merged.height)<2:
-                send_full_window_update()
-                return
+                #if we find one region covering almost the entire window,
+                #refresh the whole window (ie: when the video encoder mask rounded the dimensions down)
+                if merged.x<=1 and merged.y<=1 and abs(ww-merged.width)<2 and abs(wh-merged.height)<2:
+                    send_full_window_update()
+                    return
 
         #we're processing a number of regions separately,
         #start by removing the exclude region if there is one:

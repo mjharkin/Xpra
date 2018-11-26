@@ -47,6 +47,8 @@ cdef int YUV420_ENABLED = envbool("XPRA_NVENC_YUV420P", True)
 cdef int YUV444_ENABLED = envbool("XPRA_NVENC_YUV444P", True)
 cdef int DEBUG_API = envbool("XPRA_NVENC_DEBUG_API", False)
 cdef int GPU_MEMCOPY = envbool("XPRA_NVENC_GPU_MEMCOPY", True)
+cdef int CONTEXT_LIMIT = envint("XPRA_NVENC_CONTEXT_LIMIT", 32)
+
 
 cdef int QP_MAX_VALUE = 51   #newer versions of ffmpeg can decode up to 63
 
@@ -1316,11 +1318,11 @@ cdef double last_context_failure = 0
 def get_runtime_factor():
     global last_context_failure, context_counter
     device_count = len(init_all_devices())
-    max_contexts = 32 * device_count
+    max_contexts = CONTEXT_LIMIT * device_count
     cc = context_counter.get()
     #try to avoid using too many contexts
     #(usually, we can have up to 32 contexts per card)
-    low_limit = 16
+    low_limit = min(CONTEXT_LIMIT, 1 + CONTEXT_LIMIT// 2) * device_count
     f = max(0, 1.0 - (max(0, cc-low_limit)/max(1, max_contexts-low_limit)))
     #if we have had errors recently, lower our chances further:
     cdef double failure_elapsed = monotonic_time()-last_context_failure
@@ -1428,7 +1430,6 @@ cdef class Encoder:
     cdef unsigned int input_height
     cdef unsigned int encoder_width
     cdef unsigned int encoder_height
-    cdef unsigned int b_frames
     cdef object encoding
     cdef object src_format
     cdef object dst_formats
@@ -2213,7 +2214,7 @@ cdef class Encoder:
                 driver.memcpy_dtod(self.cudaInputBuffer, int(gpu_buffer), stride*h)
                 log("GPU memcopy %i bytes from %#x to %#x", stride*h, int(gpu_buffer), int(self.cudaInputBuffer))
             else:
-                stride = self.copy_image(image, self.inputBuffer, self.inputPitch, False)
+                stride = self.copy_image(image, False)
                 driver.memcpy_htod(self.cudaInputBuffer, self.inputBuffer)
             self.exec_kernel(w, h, stride)
             input_size = self.inputPitch * self.input_height
@@ -2223,7 +2224,7 @@ cdef class Encoder:
                 driver.memcpy_dtod(self.cudaOutputBuffer, int(gpu_buffer), stride*h)
                 log("GPU memcopy %i bytes from %#x to %#x", stride*h, int(gpu_buffer), int(self.cudaOutputBuffer))
             else:
-                stride = self.copy_image(image, self.inputBuffer, self.inputPitch, True)
+                stride = self.copy_image(image, True)
                 driver.memcpy_htod(self.cudaOutputBuffer, self.inputBuffer)
             input_size = stride * self.encoder_height
         self.bytes_in += input_size
@@ -2235,12 +2236,13 @@ cdef class Encoder:
         finally:
             self.unmap_input_resource(mappedResource)
 
-    cdef unsigned int copy_image(self, image, target_buffer, unsigned int target_stride, int strict_stride) except -1:
+    cdef unsigned int copy_image(self, image, int strict_stride) except -1:
         if DEBUG_API:
-            log("copy_image(%s, %s, %i, %i)", image, target_buffer, target_stride, strict_stride)
+            log("copy_image(%s, %s, %i, %i)", image, strict_stride)
         cdef unsigned int image_stride = image.get_rowstride()
-        cdef unsigned int h = image.get_height()
-        cdef unsigned int i, stride, min_stride
+        #input_height may be smaller if we have rounded down:
+        cdef unsigned int h = min(image.get_height(), self.input_height)
+        cdef unsigned int i, stride, min_stride, x, y
         pixels = image.get_pixels()
         assert pixels is not None, "failed to get pixels from %s" % image
         #copy to input buffer:
@@ -2249,36 +2251,54 @@ cdef class Encoder:
             pixels = memoryview(pixels)
         if isinstance(pixels, memoryview):
             #copy memoryview to inputBuffer directly:
-            buf = target_buffer
+            buf = self.inputBuffer
         else:
             #this is a numpy.ndarray type:
-            buf = target_buffer.data
+            buf = self.inputBuffer.data
         cdef double start = monotonic_time()
         cdef unsigned long copy_len
         cdef unsigned long pix_len = len(pixels)
         assert pix_len>=(h*image_stride), "image pixel buffer is too small: expected at least %ix%i=%i bytes but got %i bytes" % (h, image_stride, h*image_stride, pix_len)
-        if image_stride<=target_stride and not strict_stride:
+        if image_stride<=self.inputPitch and not strict_stride:
             stride = image_stride
             copy_len = h*image_stride
             #assert pix_len<=input_size, "too many pixels (expected %s max, got %s) image: %sx%s stride=%s, input buffer: stride=%s, height=%s" % (input_size, pix_len, w, h, stride, self.inputPitch, self.input_height)
-            log("copying %s bytes from %s into %s (len=%i), in one shot", pix_len, type(pixels), type(target_buffer), len(target_buffer))
+            log("copying %s bytes from %s into %s (len=%i), in one shot", pix_len, type(pixels), type(self.inputBuffer), len(self.inputBuffer))
             #log("target: %s, %s, %s", buf.shape, buf.size, buf.dtype)
             if isinstance(pixels, memoryview):
                 tmp = numpy.asarray(pixels, numpy.int8)
             else:
                 tmp = numpy.frombuffer(pixels, numpy.int8)
-            buf[:copy_len] = tmp[:copy_len]
+            try:
+                buf[:copy_len] = tmp[:copy_len]
+            except Exception as e:
+                log("copy_image%s", (image, strict_stride), exc_info=True)
+                log.error("Error: numpy one shot buffer copy failed")
+                log.error(" from %s to %s, length=%i", tmp, buf, copy_len)
+                log.error(" original pixel buffer: %s", type(pixels))
+                log.error(" for image %s", image)
+                log.error(" input buffer: %i x %i", self.inputPitch, self.input_height)
         else:
             #ouch, we need to copy the source pixels into the smaller buffer
             #before uploading to the device... this is probably costly!
-            stride = target_stride
-            min_stride = min(stride, image_stride)
-            log("copying %s bytes from %s into %s, %i stride at a time (from image stride=%i, target stride=%i)", stride*h, type(pixels), type(target_buffer), min_stride, image_stride, target_stride)
+            stride = self.inputPitch
+            min_stride = min(self.inputPitch, image_stride)
+            log("copying %s bytes from %s into %s, %i stride at a time (from image stride=%i, target stride=%i)", stride*h, type(pixels), type(self.inputBuffer), min_stride, image_stride, self.inputPitch)
+            try:
+                for i in range(h):
+                    x = i*self.inputPitch
+                    y = i*image_stride
+                    buf[x:x+min_stride] = pixels[y:y+min_stride]
+            except Exception as e:
+                log("copy_image%s", (image, strict_stride), exc_info=True)
+                log.error("Error: numpy partial line buffer copy failed")
+                log.error(" from %s to %s, length=%i", pixels, buf, min_stride)
+                log.error(" for image %s", image)
+                log.error(" original pixel buffer: %s", type(pixels))
+                log.error(" input buffer: %i x %i", self.inputPitch, self.input_height)
+                log.error(" at line %i of %i", i+1, h)
+                raise
             copy_len = min_stride * h
-            for i in range(h):
-                x = i*stride
-                y = i*image_stride
-                buf[x:x+min_stride] = pixels[y:y+min_stride]
         cdef double end = monotonic_time()
         cdef double elapsed = end-start
         if elapsed==0:
@@ -2720,7 +2740,8 @@ cdef class Encoder:
             log(msg)
             raise TransientCodecException(msg)
         if self.context==NULL:
-            raise TransientCodecException("cannot open encoding session, context is NULL")
+            last_context_failure = monotonic_time()
+            raise TransientCodecException("cannot open encoding session, context is NULL, %i contexts are in use" % context_counter.get())
         raiseNVENC(r, "opening session")
         context_counter.increase()
         context_gen_counter.increase()

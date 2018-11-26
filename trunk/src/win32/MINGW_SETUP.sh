@@ -52,13 +52,16 @@ for x in rencode lz4 websocket-client netifaces comtypes websockify nvidia-ml-py
     easy_install-2.7 -U -Z $x
     easy_install-3.7 -U -Z $x
 done
+#last version to support python2:
 easy_install-2.7 -U -Z zeroconf==0.19.1
+easy_install-3.7 -U -Z zeroconf
 
 #pyopengl problems:
 #use 3.1.1a1 as there are bugs in later versions on win32:
 easy_install-2.7 -U -Z PyOpenGL==3.1.1a1
-easy_install-3.7 -U -Z PyOpenGL==3.1.1a1
 easy_install-2.7 -U -Z PyOpenGL_accelerate==3.1.1a1
+#get the latest:
+easy_install-3.7 -U -Z PyOpenGL
 #doesn't build with python 3.7:
 #easy_install-3.7 -U -Z PyOpenGL_accelerate==3.1.1a1
 

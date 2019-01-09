@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2013-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2013-2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -13,7 +13,7 @@ from collections import OrderedDict
 
 from xpra.net.compression import Compressed, LargeStructure
 from xpra.codecs.codec_constants import TransientCodecException, RGB_FORMATS, PIXEL_SUBSAMPLING
-from xpra.server.window.window_source import WindowSource, STRICT_MODE, AUTO_REFRESH_SPEED, AUTO_REFRESH_QUALITY, MAX_RGB
+from xpra.server.window.window_source import WindowSource, DelayedRegions, STRICT_MODE, AUTO_REFRESH_SPEED, AUTO_REFRESH_QUALITY, MAX_RGB
 from xpra.server.window.region import merge_all          #@UnresolvedImport
 from xpra.server.window.motion import ScrollData                    #@UnresolvedImport
 from xpra.server.window.video_subregion import VideoSubregion, VIDEO_SUBREGION
@@ -38,11 +38,13 @@ refreshlog = Logger("refresh")
 regionrefreshlog = Logger("regionrefresh")
 
 
+TEXT_USE_VIDEO = envbool("XPRA_TEXT_USE_VIDEO", False)
 MAX_NONVIDEO_PIXELS = envint("XPRA_MAX_NONVIDEO_PIXELS", 1024*4)
 MIN_VIDEO_FPS = envint("XPRA_MIN_VIDEO_FPS", 10)
 MIN_VIDEO_EVENTS = envint("XPRA_MIN_VIDEO_EVENTS", 20)
 
 VIDEO_TIMEOUT = envint("XPRA_VIDEO_TIMEOUT", 10)
+VIDEO_NODETECT_TIMEOUT = envint("XPRA_VIDEO_NODETECT_TIMEOUT", 10*60)
 
 FORCE_CSC_MODE = os.environ.get("XPRA_FORCE_CSC_MODE", "")   #ie: "YUV444P"
 if FORCE_CSC_MODE and FORCE_CSC_MODE not in RGB_FORMATS and FORCE_CSC_MODE not in PIXEL_SUBSAMPLING:
@@ -421,13 +423,18 @@ class WindowVideoSource(WindowSource):
         cww = ww & self.width_mask
         cwh = wh & self.height_mask
         video_hint = self.content_type=="video"
+        text_hint = self.content_type=="text"
+        if text_hint and not TEXT_USE_VIDEO:
+            return nonvideo(info="text content-type")
 
         rgbmax = self._rgb_auto_threshold
-        videomin = min(640*480, cww*cwh) // (1+video_hint*2)
+        videomin = cww*cwh // (1+video_hint*2)
         sr = self.video_subregion.rectangle
         if sr:
             videomin = min(videomin, sr.width * sr.height)
             rgbmax = min(rgbmax, sr.width*sr.height//2)
+        elif not text_hint:
+            videomin = min(640*480, cww*cwh)
         if pixel_count<=rgbmax or cww<8 or cwh<8:
             return lossless("low pixel count")
 
@@ -457,8 +464,7 @@ class WindowVideoSource(WindowSource):
                 lde = tuple(self.statistics.last_damage_events)
                 lim = now-4
                 pixels_last_4secs = sum(w*h for when,_,_,w,h in lde if when>lim)
-                text_hint = self.content_type=="text"
-                if pixels_last_4secs<((3+text_hint*3)*videomin):
+                if pixels_last_4secs<((3+text_hint*6)*videomin):
                     return nonvideo(quality+30, "not enough frames")
                 lim = now-1
                 pixels_last_sec = sum(w*h for when,_,_,w,h in lde if when>lim)
@@ -560,6 +566,17 @@ class WindowVideoSource(WindowSource):
             #refresh the whole window in one go:
             damage_options["novideo"] = True
         WindowSource.full_quality_refresh(self, damage_options)
+
+
+    def quality_changed(self, window, *args):
+        WindowSource.quality_changed(self, window, args)
+        self.video_context_clean()
+        return True
+
+    def speed_changed(self, window, *args):
+        WindowSource.speed_changed(self, window, args)
+        self.video_context_clean()
+        return True
 
 
     def must_batch(self, delay):
@@ -716,7 +733,7 @@ class WindowVideoSource(WindowSource):
         else:
             #find how many pixels are within the region (roughly):
             #find all unique regions that intersect with it:
-            inter = [x for x in (vr.intersection_rect(r) for r in regions) if x is not None]
+            inter = tuple(x for x in (vr.intersection_rect(r) for r in regions) if x is not None)
             if len(inter)>0:
                 #merge all regions into one:
                 in_region = merge_all(inter)
@@ -730,18 +747,18 @@ class WindowVideoSource(WindowSource):
             #still no luck?
             if actual_vr is None:
                 #try to find one that has the same dimensions:
-                same_d = [r for r in regions if r.width==vr.width and r.height==vr.height]
+                same_d = tuple(r for r in regions if r.width==vr.width and r.height==vr.height)
                 if len(same_d)==1:
                     #probably right..
                     actual_vr = same_d[0]
                 elif len(same_d)>1:
                     #find one that shares at least one coordinate:
-                    same_c = [r for r in same_d if r.x==vr.x or r.y==vr.y]
+                    same_c = tuple(r for r in same_d if r.x==vr.x or r.y==vr.y)
                     if len(same_c)==1:
                         actual_vr = same_c[0]
 
         if actual_vr is None:
-            sublog("send_delayed_regions: video region %s not found in: %s", vr, regions)
+            sublog("do_send_delayed_regions: video region %s not found in: %s", vr, regions)
         else:
             #found the video region:
             #sanity check in case the window got resized since:
@@ -759,17 +776,17 @@ class WindowVideoSource(WindowSource):
             for r in regions:
                 trimmed += r.substract_rect(actual_vr)
             if not trimmed:
-                sublog("send_delayed_regions: nothing left after removing video region %s", actual_vr)
+                sublog("do_send_delayed_regions: nothing left after removing video region %s", actual_vr)
                 return
-            sublog("send_delayed_regions: subtracted %s from %s gives us %s", actual_vr, regions, trimmed)
+            sublog("do_send_delayed_regions: subtracted %s from %s gives us %s", actual_vr, regions, trimmed)
             regions = trimmed
 
         #merge existing damage delayed region if there is one:
         #(this codepath can fire from a video region refresh callback)
         dr = self._damage_delayed
         if dr:
-            regions = dr[1] + regions
-            damage_time = min(damage_time, dr[0])
+            regions = dr.regions + regions
+            damage_time = min(damage_time, dr.damage_time)
             self._damage_delayed = None
             self.cancel_expire_timer()
         #decide if we want to send the rest now or delay some more,
@@ -780,14 +797,15 @@ class WindowVideoSource(WindowSource):
         else:
             #non-video is delayed at least 50ms, 4 times the batch delay, but no more than non_max_wait:
             elapsed = int(1000.0*(monotonic_time()-damage_time))
-            delay = max(self.batch_config.delay*4, 50)
+            delay = max(self.batch_config.delay*4, self.batch_config.expire_delay)
             delay = min(delay, self.video_subregion.non_max_wait-elapsed)
+            delay = int(delay)
         if delay<=25:
             send_nonvideo(regions=regions, encoding=None, exclude_region=actual_vr)
         else:
-            self._damage_delayed = damage_time, regions, coding, options or {}
-            sublog("send_delayed_regions: delaying non video regions %s some more by %ims", regions, delay)
-            self.expire_timer = self.timeout_add(int(delay), self.expire_delayed_region, delay)
+            self._damage_delayed = DelayedRegions(damage_time, regions, coding, options=options)
+            sublog("do_send_delayed_regions: delaying non video regions %s some more by %ims", regions, delay)
+            self.expire_timer = self.timeout_add(delay, self.expire_delayed_region)
 
     def must_encode_full_frame(self, encoding):
         return self.full_frames_only or (encoding in self.video_encodings) or not self.non_video_encodings
@@ -1221,12 +1239,17 @@ class WindowVideoSource(WindowSource):
                     max_w = min(encoder_spec.max_w, vmw)
                     max_h = min(encoder_spec.max_h, vmh)
                     scaling = self.calculate_scaling(width, height, max_w, max_h)
-                    client_score_delta = self.encoding_options.get("%s.score-delta" % encoding, 0)
+                    score_delta = self.encoding_options.get("%s.score-delta" % encoding, 0)
+                    if self.is_shadow and enc_in_format in ("YUV420P", "YUV422P") and scaling==(1, 1):
+                        #avoid subsampling with shadow servers:
+                        score_delta -= 40
                     ffps = self.get_video_fps(width, height)
+                    vs = self.video_subregion
+                    detection = bool(vs) and vs.detection
                     score_data = get_pipeline_score(enc_in_format, csc_spec, encoder_spec, width, height, scaling,
                                                     target_q, min_q, target_s, min_s,
                                                     self._csc_encoder, self._video_encoder,
-                                                    client_score_delta, ffps)
+                                                    score_delta, ffps, detection)
                     if score_data:
                         scores.append(score_data)
             if not FORCE_CSC or src_format==FORCE_CSC_MODE:
@@ -1632,14 +1655,17 @@ class WindowVideoSource(WindowSource):
             #only allow bandwidth to drive video encoders
             #when we don't have strict quality or speed requirements:
             opts["bandwidth-limit"] = self.bandwidth_limit
-        if self.matches_video_subregion(width, height) and self.subregion_is_video() and (monotonic_time()-self.last_scroll_time)>5:
-            opts.update({
-                "content-type"  : "video",
-                #could take av-sync into account here to choose the number of b-frames:
-                "b-frames"      : int(B_FRAMES and (encoding in self.supports_video_b_frames)),
-                })
+        if self.content_type:
+            content_type = self.content_type
+        elif self.matches_video_subregion(width, height) and self.subregion_is_video() and (monotonic_time()-self.last_scroll_time)>5:
+            content_type = "video"
         else:
-            opts["content-type"] = self.content_type
+            content_type = None
+        if content_type:
+            opts["content-type"] = content_type
+            if content_type=="video":
+                if B_FRAMES and (encoding in self.supports_video_b_frames):
+                    opts["b-frames"] = True
         return opts
 
 
@@ -1935,7 +1961,7 @@ class WindowVideoSource(WindowSource):
         #dw and dh are the edges we don't handle here
         width = w & self.width_mask
         height = h & self.height_mask
-        videolog("video_encode%s image size: %sx%s, encoder/csc size: %sx%s", (encoding, image, options), w, h, width, height)
+        videolog("video_encode%s image size: %4ix%-4i, encoder/csc size: %4ix%-4i", (encoding, image, options), w, h, width, height)
 
         csce, csc_image, csc, enc_width, enc_height = self.csc_image(image, width, height)
 
@@ -2015,7 +2041,7 @@ class WindowVideoSource(WindowSource):
             #make sure we timeout the encoder if no new frames come through:
             self.schedule_video_encoder_timer()
         actual_encoding = ve.get_encoding()
-        videolog("video_encode %s encoder: %s %sx%s result is %s bytes (%.1f MPixels/s), client options=%s",
+        videolog("video_encode %s encoder: %4s %4ix%-4i result is %7i bytes, %6.1f MPixels/s, client options=%s",
                             ve.get_type(), actual_encoding, enc_width, enc_height, len(data or ""), (enc_width*enc_height/(end-start+0.000001)/1024.0/1024.0), client_options)
         return actual_encoding, Compressed(actual_encoding, data), client_options, width, height, 0, 24
 
@@ -2103,7 +2129,13 @@ class WindowVideoSource(WindowSource):
 
     def schedule_video_encoder_timer(self):
         if not self.video_encoder_timer:
-            self.video_encoder_timer = self.timeout_add(VIDEO_TIMEOUT*1000, self.video_encoder_timeout)
+            vs = self.video_subregion
+            if vs and vs.detection:
+                timeout = VIDEO_TIMEOUT
+            else:
+                timeout = VIDEO_NODETECT_TIMEOUT
+            if timeout>0:
+                self.video_encoder_timer = self.timeout_add(timeout*1000, self.video_encoder_timeout)
 
     def video_encoder_timeout(self):
         videolog("video_encoder_timeout() will close video encoder=%s", self._video_encoder)
@@ -2129,7 +2161,7 @@ class WindowVideoSource(WindowSource):
         start = monotonic_time()
         csc_image = csce.convert_image(image)
         end = monotonic_time()
-        csclog("csc_image(%s, %s, %s) converted to %s in %.1fms (%.1f MPixels/s)",
+        csclog("csc_image(%s, %s, %s) converted to %s in %.1fms, %6.1f MPixels/s",
                         image, width, height,
                         csc_image, (1000.0*end-1000.0*start), (width*height/(end-start+0.000001)/1024.0/1024.0))
         if not csc_image:

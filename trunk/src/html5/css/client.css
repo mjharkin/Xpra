@@ -7,6 +7,10 @@ html, body {
 	background-color: #021d3a;
 }
 
+div.window canvas {
+	touch-action: none;
+}
+
 body.desktop {
 	background-color: #555;
 }

@@ -65,6 +65,7 @@ def get_xorg_bin():
               "/usr/libexec/Xorg",              #fedora 22+
               "/usr/lib/xorg/Xorg",             #ubuntu 16.10
               "/usr/lib/xorg-server/Xorg",      #arch linux
+              "/usr/lib/Xorg",                  #arch linux (new 2019)
               "/usr/X11/bin/X",                 #OSX
               ):
         if os.path.exists(p):
@@ -559,7 +560,7 @@ OPTION_TYPES = {
                     "tray"              : bool,
                     "pulseaudio"        : bool,
                     "dbus-proxy"        : bool,
-                    "mmap-group"        : bool,
+                    "mmap-group"        : str,
                     "readonly"          : bool,
                     "keyboard-sync"     : bool,
                     "cursors"           : bool,
@@ -951,7 +952,7 @@ def get_defaults():
                     "pulseaudio"        : DEFAULT_PULSEAUDIO,
                     "dbus-proxy"        : not OSX and not WIN32,
                     "mmap"              : "yes",
-                    "mmap-group"        : False,
+                    "mmap-group"        : "auto",
                     "speaker"           : ["disabled", "on"][has_sound_support()],
                     "microphone"        : ["disabled", "off"][has_sound_support()],
                     "video-scaling"     : "auto",

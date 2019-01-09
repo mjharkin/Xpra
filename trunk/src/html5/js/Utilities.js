@@ -205,6 +205,9 @@ var Utilities = {
 		var ua = navigator.userAgent.toLowerCase();
 		return ua.includes("safari") && !ua.includes('chrome');
 	},
+	isEdge : function() {
+		return navigator.userAgent.includes("Edge");
+	},	
 	isChrome : function () {
 		var isChromium = window.chrome,
 			winNav = window.navigator,
@@ -449,7 +452,7 @@ var Utilities = {
 		if(v===null) {
 			return default_value;
 		}
-		return ["true", "on", "1", "yes", "enabled"].includes(String(v).toLowerCase());
+		return ["true", "on", "1", "yes", "enabled"].indexOf(String(v).toLowerCase())!==-1;
 	},
 
 	getConnectionInfo : function() {

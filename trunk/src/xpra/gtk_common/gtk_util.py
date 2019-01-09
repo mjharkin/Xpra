@@ -7,7 +7,7 @@
 import os.path
 import array
 from xpra.util import iround, first_time
-from xpra.os_util import strtobytes, bytestostr, WIN32, PYTHON2
+from xpra.os_util import strtobytes, bytestostr, WIN32, OSX, PYTHON2
 from xpra.gtk_common.gobject_compat import import_gtk, import_gdk, import_glib, import_pixbufloader, import_pango, import_cairo, import_gobject, import_pixbuf, is_gtk3
 gtk     = import_gtk()
 gdk     = import_gdk()
@@ -411,8 +411,7 @@ if is_gtk3():
             return self.get_popup()
 
     gdk_window_process_all_updates = gdk.Window.process_all_updates
-    def gtk_main():
-        gtk.main()
+    gtk_main = gtk.main
 
     def gio_File(path):
         from gi.repository import Gio   #@UnresolvedImport
@@ -429,11 +428,10 @@ if is_gtk3():
         _, data, etag = gfile.load_contents_finish(res)
         return data, len(data), etag
 
-    def set_clipboard_data(clipboard, thevalue, vtype="STRING"):
+    def set_clipboard_data(clipboard, thevalue, _vtype="STRING"):
         #only strings with GTK3?
         thestring = str(thevalue)
         clipboard.set_text(thestring, len(thestring))
-        return
 
     def wait_for_contents(clipboard, target):
         atom = gdk.Atom.intern(target, False)
@@ -718,6 +716,10 @@ else:
         return gfile.load_contents_finish(res)
 
     def set_clipboard_data(clipboard, thevalue, vtype="STRING"):
+        TEXT_TARGETS = ("UTF8_STRING", "TEXT", "STRING", "text/plain")
+        if OSX and vtype in TEXT_TARGETS:
+            clipboard.set_text(thevalue, len(thevalue))
+            return
         value = [thevalue]
         def get_func(clipboard, selection, info, targets):
             log("get_func%s value=%s", (clipboard, selection, info, targets), value[0])
@@ -737,8 +739,7 @@ else:
 #no idea why, but trying to use the threads_init / threads_enter
 #causes deadlocks on win32:
 if WIN32:
-    def gtk_main():
-        gtk.main()
+    gtk_main = gtk.main
 gtk_main_quit = gtk.main_quit
 
 GRAB_STATUS_STRING = {

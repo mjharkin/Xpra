@@ -186,10 +186,12 @@ mdns_ENABLED            = DEFAULT
 
 enc_proxy_ENABLED       = DEFAULT
 enc_x264_ENABLED        = DEFAULT and pkg_config_ok("--exists", "x264")
-enc_x265_ENABLED        = DEFAULT and pkg_config_ok("--exists", "x265")
+#crashes on 32-bit windows:
+enc_x265_ENABLED        = (not WIN32) and pkg_config_ok("--exists", "x265")
 pillow_ENABLED          = DEFAULT
 webp_ENABLED            = DEFAULT and pkg_config_version("0.5", "libwebp")
-jpeg_ENABLED            = DEFAULT and pkg_config_version("1.2", "libturbojpeg")
+jpeg_encoder_ENABLED    = DEFAULT and pkg_config_version("1.2", "libturbojpeg")
+jpeg_decoder_ENABLED    = DEFAULT and pkg_config_version("1.4", "libturbojpeg")
 vpx_ENABLED             = DEFAULT and pkg_config_version("1.4", "vpx")
 enc_ffmpeg_ENABLED      = pkg_config_version("58.18", "libavcodec")
 #opencv currently broken on 32-bit windows (crashes on load):
@@ -221,7 +223,7 @@ rebuild_ENABLED         = True
 #allow some of these flags to be modified on the command line:
 SWITCHES = ["enc_x264", "enc_x265", "enc_ffmpeg",
             "nvenc", "cuda_kernels", "cuda_rebuild", "nvfbc",
-            "vpx", "webp", "pillow", "jpeg",
+            "vpx", "webp", "pillow", "jpeg_encoder", "jpeg_decoder",
             "v4l2",
             "dec_avcodec2", "csc_swscale",
             "csc_libyuv",
@@ -1060,7 +1062,7 @@ def install_html5(install_dir="www"):
 if WIN32:
     MINGW_PREFIX = os.environ.get("MINGW_PREFIX")
     assert MINGW_PREFIX, "you must run this build from a MINGW environment"
-    add_packages("xpra.platform.win32")
+    add_packages("xpra.platform.win32", "xpra.platform.win32.namedpipes")
     remove_packages("xpra.platform.darwin", "xpra.platform.xposix")
 
     #this is where the win32 gi installer will put things:
@@ -1946,7 +1948,7 @@ if client_ENABLED:
     add_modules("xpra.client", "xpra.client.mixins")
     add_modules("xpra.scripts.gtk_info")
     add_modules("xpra.scripts.show_webcam")
-add_modules("xpra.scripts.bug_report")    
+add_modules("xpra.scripts.bug_report")
 toggle_packages((client_ENABLED and (gtk2_ENABLED or gtk3_ENABLED)) or (PYTHON3 and sound_ENABLED) or server_ENABLED, "xpra.gtk_common")
 toggle_packages(client_ENABLED and gtk2_ENABLED, "xpra.client.gtk2")
 toggle_packages(client_ENABLED and gtk3_ENABLED, "xpra.client.gtk3")
@@ -2217,13 +2219,20 @@ if webp_ENABLED:
                 ["xpra/codecs/webp/decode.pyx"],
                 **webp_pkgconfig))
 
-toggle_packages(jpeg_ENABLED, "xpra.codecs.jpeg")
-if jpeg_ENABLED:
-    jpeg_pkgconfig = pkgconfig("libturbojpeg")
-    cython_add(Extension("xpra.codecs.jpeg.encoder",
+jpeg = jpeg_decoder_ENABLED or jpeg_encoder_ENABLED
+toggle_packages(jpeg, "xpra.codecs.jpeg")
+if jpeg:
+    if jpeg_encoder_ENABLED:
+        jpeg_pkgconfig = pkgconfig("libturbojpeg")
+        if not pkg_config_version("1.4", "libturbojpeg"):
+            #older versions don't have const argument:
+            remove_from_keywords(jpeg_pkgconfig, 'extra_compile_args', "-Werror")
+        cython_add(Extension("xpra.codecs.jpeg.encoder",
                 ["xpra/codecs/jpeg/encoder.pyx"],
                 **jpeg_pkgconfig))
-    cython_add(Extension("xpra.codecs.jpeg.decoder",
+    if jpeg_decoder_ENABLED:
+        jpeg_pkgconfig = pkgconfig("libturbojpeg")
+        cython_add(Extension("xpra.codecs.jpeg.decoder",
                 ["xpra/codecs/jpeg/decoder.pyx"],
                 **jpeg_pkgconfig))
 

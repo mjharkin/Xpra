@@ -12,6 +12,9 @@ import os
 from xpra.log import Logger
 log = Logger("encoder", "webp")
 
+from libc.stdlib cimport free
+from libc.string cimport memset
+
 from xpra.buffers.membuf cimport object_as_buffer
 from xpra.os_util import bytestostr
 
@@ -35,14 +38,8 @@ cdef inline int MAX(int a, int b):
 
 from libc.stdint cimport uint8_t, uint32_t, uintptr_t
 
-cdef extern from "string.h":
-    void * memset ( void * ptr, int value, size_t num )
-
 cdef extern from *:
     ctypedef unsigned long size_t
-
-cdef extern from "stdlib.h":
-    void free(void *ptr)
 
 
 DEF WEBP_MAX_DIMENSION = 16383
@@ -422,16 +419,26 @@ def compress(image, int quality=50, int speed=50, supports_alpha=False, content_
     cdef int size = stride * height
     assert pic_buf_len>=size, "pixel buffer is too small: expected at least %s bytes but got %s" % (size, pic_buf_len)
 
+    cdef int threshold_delta = -int(content_type=="text")*20
+
     cdef int i
     cdef int alpha_int = int(supports_alpha and pixel_format.find("A")>=0)
-    cdef int use_argb = int(quality>=SUBSAMPLING_THRESHOLD)
+    cdef int use_argb = int(quality>=(SUBSAMPLING_THRESHOLD+threshold_delta))
     if alpha_int==0 and Bpp==4:
         #ensure webp will not decide to encode the alpha channel
         #(this is stupid: we should be able to pass a flag instead)
         i = 3
-        while i<size:
-            pic_buf[i] = 0xff
-            i += 4
+        if size>524288:
+            #enough pixels that we should release the gil:
+            with nogil:
+                while i<size:
+                    pic_buf[i] = 0xff
+                    i += 4
+        else:
+            while i<size:
+                pic_buf[i] = 0xff
+                i += 4
+            
 
     ret = WebPConfigInit(&config)
     if not ret:
@@ -442,7 +449,7 @@ def compress(image, int quality=50, int speed=50, supports_alpha=False, content_
         raise Exception("failed to set webp preset")
 
     #tune it:
-    config.lossless = quality>=LOSSLESS_THRESHOLD
+    config.lossless = quality>=(LOSSLESS_THRESHOLD+threshold_delta)
     if config.lossless:
         #not much to gain from setting a high quality here,
         #the latency will be higher for a negligible compression gain:

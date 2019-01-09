@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2012-2017 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2012-2018 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -41,21 +41,28 @@ def calculate_batch_delay(wid, window_dimensions, has_focus, other_is_fullscreen
     factors += global_statistics.get_factors(low_limit)
     #damage pixels waiting in the packet queue: (extract data for our window id only)
     time_values = global_statistics.get_damage_pixels(wid)
-    factors.append(queue_inspect("damage-packet-queue-pixels", time_values, div=low_limit, smoothing=sqrt))
+    def mayaddfac(metric, info, factor, weight):
+        if factor>=0.01:
+            factors.append((metric, info, factor, weight))
+    mayaddfac(*queue_inspect("damage-packet-queue-pixels", time_values, div=low_limit, smoothing=sqrt))
     #boost window that has focus and OR windows:
-    factors.append(("focus", {"has_focus" : has_focus}, int(not has_focus), int(has_focus)))
-    factors.append(("override-redirect", {"is_OR" : is_OR}, int(not is_OR), int(is_OR)))
-    #if another window is fullscreen or maximized, slow us down:
-    factors.append(("fullscreen", {"other_is_fullscreen" : other_is_fullscreen}, 4*int(other_is_fullscreen), int(other_is_fullscreen)))
-    factors.append(("maximized", {"other_is_maximized" : other_is_maximized}, 4*int(other_is_maximized), int(other_is_maximized)))
+    mayaddfac("focus", {"has_focus" : has_focus}, int(not has_focus), int(has_focus))
+    mayaddfac("override-redirect", {"is_OR" : is_OR}, int(not is_OR), int(is_OR))
     #soft expired regions is a strong indicator of problems:
     #(0 for none, up to max_soft_expired which is 5)
-    factors.append(("soft-expired", {"count" : soft_expired}, soft_expired, int(bool(soft_expired))))
+    mayaddfac("soft-expired", {"count" : soft_expired}, soft_expired, int(bool(soft_expired)))
     #now use those factors to drive the delay change:
-    update_batch_delay(batch, factors)
+    min_delay = 0
+    if batch.always:
+        min_delay = batch.min_delay
+    #if another window is fullscreen or maximized,
+    #make sure we don't use a very low delay (cap at 25fps)
+    if other_is_fullscreen or other_is_maximized:
+        min_delay = max(40, min_delay)
+    update_batch_delay(batch, factors, min_delay)
 
 
-def update_batch_delay(batch, factors):
+def update_batch_delay(batch, factors, min_delay=0):
     """
         Given a list of factors of the form:
         [(description, factor, weight)]
@@ -69,25 +76,24 @@ def update_batch_delay(batch, factors):
     decay = max(1, logp(current_delay/batch.min_delay)/5.0)
     max_delay = batch.max_delay
     for delays, d_weight in ((batch.last_delays, 0.25), (batch.last_actual_delays, 0.75)):
-        if delays is not None and len(delays)>0:
-            #get the weighted average
-            #older values matter less, we decay them according to how much we batch already
-            #(older values matter more when we batch a lot)
-            for when, delay in tuple(delays):
-                #newer matter more:
-                w = d_weight/(1.0+((now-when)/decay)**2)
-                d = max(0, min(max_delay, delay))
-                tv += d*w
-                tw += w
+        delays = tuple(delays or ())
+        #get the weighted average
+        #older values matter less, we decay them according to how much we batch already
+        #(older values matter more when we batch a lot)
+        for when, delay in delays:
+            #newer matter more:
+            w = d_weight/(1.0+((now-when)/decay)**2)
+            d = max(0, min(max_delay, delay))
+            tv += d*w
+            tw += w
     hist_w = tw
-
     for x in factors:
         if len(x)!=4:
             log.warn("invalid factor line: %s" % str(x))
         else:
             log("update_batch_delay: %-28s : %.2f,%.2f  %s", x[0], x[2], x[3], x[1])
-    valid_factors = [x for x in factors if x is not None and len(x)==4]
-    all_factors_weight = sum([w for _,_,_,w in valid_factors])
+    valid_factors = tuple(x for x in factors if x is not None and len(x)==4)
+    all_factors_weight = sum(w for _,_,_,w in valid_factors)
     if all_factors_weight==0:
         log("update_batch_delay: no weights yet!")
         return
@@ -96,10 +102,7 @@ def update_batch_delay(batch, factors):
         w = max(1, hist_w)*weight/all_factors_weight
         tw += w
         tv += target_delay*w
-    mv = 0
-    if batch.always:
-        mv = batch.min_delay
-    batch.delay = max(mv, min(max_delay, tv // tw))
+    batch.delay = int(max(min_delay, min(max_delay, tv // tw)))
     log("update_batch_delay: delay=%i", batch.delay)
     batch.last_updated = now
     batch.factors = valid_factors

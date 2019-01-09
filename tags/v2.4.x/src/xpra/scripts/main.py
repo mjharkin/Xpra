@@ -20,7 +20,7 @@ import traceback
 from xpra.platform.dotxpra import DotXpra
 from xpra.util import csv, envbool, envint, repr_ellipsized, DEFAULT_PORT
 from xpra.exit_codes import EXIT_SSL_FAILURE, EXIT_STR
-from xpra.os_util import get_util_logger, getuid, getgid, monotonic_time, setsid, bytestostr, WIN32, OSX, POSIX, PYTHON3
+from xpra.os_util import get_util_logger, getuid, getgid, monotonic_time, setsid, bytestostr, WIN32, OSX, POSIX, PYTHON3, is_Ubuntu, getUbuntuVersion
 from xpra.scripts.parsing import info, warn, error, \
     parse_vsock, parse_env, is_local, \
     fixup_defaults, validated_encodings, validate_encryption, do_parse_cmdline, show_sound_codec_help, \
@@ -252,9 +252,13 @@ def run_mode(script_file, error_cb, options, args, mode, defaults):
     if mode in ("start", "start_desktop", "shadow") and not display_is_remote:
         systemd_run = parse_bool("systemd-run", options.systemd_run)
         if systemd_run is None:
-            #detect:
-            from xpra.os_util import is_systemd_pid1
-            systemd_run = is_systemd_pid1()
+            #detect if we should use it:
+            if is_Ubuntu() and getUbuntuVersion()>=(18,) and (os.environ.get("SSH_TTY") or os.environ.get("SSH_CLIENT")):
+                #would fail
+                systemd_run = False
+            else:
+                from xpra.os_util import is_systemd_pid1
+                systemd_run = is_systemd_pid1()
         if systemd_run:
             #check if we have wrapped it already (or if disabled via env var)
             if SYSTEMD_RUN:
@@ -869,29 +873,36 @@ def connect_or_fail(display_desc, opts):
 
 
 
-def socket_connect(dtype, host, port, ipv6=False):
-    from xpra.net.bytestreams import SOCKET_TIMEOUT
-    if ipv6:
+def socket_connect(dtype, host, port, ipv6=None):
+    if ipv6 is True:
         assert socket.has_ipv6, "no IPv6 support"
         family = socket.AF_INET6
-    else:
+    elif ipv6 is False:
         family = socket.AF_INET
+    else:
+        family = 0  #any
+    if dtype=="udp":
+        socktype = socket.SOCK_DGRAM
+    else:
+        socktype = socket.SOCK_STREAM
     info = {
         "host" : host,
         "port" : port,
         }
     try:
-        addrinfo = socket.getaddrinfo(host, port, family)
+        addrinfo = socket.getaddrinfo(host, port, family, socktype)
     except Exception as e:
-        raise InitException("cannot get %s address of %s: %s" % ({
-            socket.AF_INET6 : "IPv6",
-            socket.AF_INET  : "IPv4",
-            }.get(family, family), (host, port), e))
-    sockaddr = addrinfo[0][-1]
-    if dtype=="udp":
-        sock = socket.socket(family, socket.SOCK_DGRAM)
-    else:
-        sock = socket.socket(family, socket.SOCK_STREAM)
+        raise InitException("cannot get %s address of%s: %s" % ({
+            socket.AF_INET6 : " IPv6",
+            socket.AF_INET  : " IPv4",
+            }.get(family, ""), (host, port), e))
+    #default to the first one:
+    addr = addrinfo[0]
+    sockaddr = addr[-1]
+    family = family or addr[0]
+    sock = socket.socket(family, socktype)    
+    if dtype!="udp":
+        from xpra.net.bytestreams import SOCKET_TIMEOUT
         sock.settimeout(SOCKET_TIMEOUT)
     try:
         sock.connect(sockaddr)
@@ -966,7 +977,7 @@ def connect_to(display_desc, opts=None, debug_cb=None, ssh_fail_cb=None):
         return SocketConnection(sock, "local", "host", (CID_TYPES.get(cid, cid), iport), dtype)
 
     elif dtype in ("tcp", "ssl", "ws", "wss", "udp"):
-        ipv6 = display_desc.get("ipv6", False)
+        ipv6 = display_desc.get("ipv6", None)
         host = display_desc["host"]
         port = display_desc["port"]
         sock = socket_connect(dtype, host, port, ipv6)

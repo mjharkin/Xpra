@@ -97,7 +97,7 @@ def get_dbus_pid():
     return _get_int(b"_XPRA_DBUS_PID")
 
 def save_uinput_id(uuid):
-    _save_str(b"_XPRA_UINPUT_ID", uuid)
+    _save_str(b"_XPRA_UINPUT_ID", (uuid or b"").decode())
 
 #def get_uinput_id():
 #    return _get_str("_XPRA_UINPUT_ID")
@@ -1026,7 +1026,7 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
             save_xvfb_pid(xvfb_pid)
 
         if POSIX:
-            save_uinput_id(uinput_uuid or u"")
+            save_uinput_id(uinput_uuid)
             dbus_pid = -1
             dbus_env = {}
             if clobber:
@@ -1176,7 +1176,7 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
         log.error("server error", exc_info=True)
         return -128
     else:
-        if r>=0:
+        if r>0:
             # Upgrading/exiting, so leave X and dbus servers running
             if kill_display:
                 _cleanups.remove(kill_display)

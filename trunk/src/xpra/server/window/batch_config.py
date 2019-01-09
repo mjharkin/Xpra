@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
 # Copyright (C) 2011 Serviware (Arthur Huillet, <ahuillet@serviware.com>)
-# Copyright (C) 2010-2017 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -13,6 +13,7 @@ NRECS = 100
 
 from collections import deque
 from xpra.simple_stats import get_list_stats
+from xpra.os_util import monotonic_time
 
 import os
 
@@ -44,6 +45,7 @@ class DamageBatchConfig(object):
     MIN_DELAY = ival("MIN_DELAY", 5, 0, 1000)                   #lower than 5 milliseconds does not make sense, just don't batch
     START_DELAY = ival("START_DELAY", 50, 1, 1000)
     MAX_DELAY = ival("MAX_DELAY", 500, 1, 15000)
+    EXPIRE_DELAY = ival("EXPIRE_DELAY", 50, 10, 1000)
     TIMEOUT_DELAY = ival("TIMEOUT_DELAY", 15000, 100, 100000)
 
     def __init__(self):
@@ -55,9 +57,11 @@ class DamageBatchConfig(object):
         self.min_delay = self.MIN_DELAY
         self.max_delay = self.MAX_DELAY
         self.timeout_delay = self.TIMEOUT_DELAY
+        self.expire_delay = self.EXPIRE_DELAY
         self.delay = self.START_DELAY
         self.saved = self.START_DELAY
         self.locked = False                             #to force a specific delay
+        self.last_event = 0
         self.last_delays = deque(maxlen=64)             #the delays we have tried to use (milliseconds)
         self.last_actual_delays = deque(maxlen=64)      #the delays we actually used (milliseconds)
         self.last_updated = 0
@@ -72,9 +76,12 @@ class DamageBatchConfig(object):
         info = {
             "min-delay"         : self.min_delay,
             "max-delay"         : self.max_delay,
+            "expire"            : self.expire_delay,
             "timeout-delay"     : self.timeout_delay,
             "locked"            : self.locked,
             }
+        if self.last_event>0:
+            info["last-event"] = int(monotonic_time()-self.last_event)
         if self.locked:
             info["delay"] = self.delay
         else:
@@ -93,8 +100,10 @@ class DamageBatchConfig(object):
 
     def clone(self):
         c = DamageBatchConfig()
-        for x in ["always", "max_events", "max_pixels", "time_unit",
-                  "min_delay", "max_delay", "timeout_delay", "delay"]:
+        for x in [
+            "always", "max_events", "max_pixels", "time_unit",
+            "min_delay", "max_delay", "timeout_delay", "delay", "expire_delay",
+            ]:
             setattr(c, x, getattr(self, x))
         return c
 

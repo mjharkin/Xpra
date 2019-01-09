@@ -16,12 +16,10 @@ from xpra.os_util import bytestostr
 
 
 from libc.stdint cimport uint8_t, uint32_t, uintptr_t
+from libc.stdlib cimport free
 
 cdef extern from *:
     ctypedef unsigned long size_t
-
-cdef extern from "stdlib.h":
-    void free(void *ptr)
 
 
 cdef extern from "webp/decode.h":
@@ -316,11 +314,12 @@ class YUVImageWrapper(ImageWrapper):
         return "webp.YUVImageWrapper"
 
     def free(self):                             #@DuplicatedSignature
-        log("webp.YUVImageWrapper.free() cython_buffer=%#x", <unsigned long> self.cython_buffer)
+        cdef uintptr_t buf = self.cython_buffer
+        self.cython_buffer = 0
+        log("webp.YUVImageWrapper.free() cython_buffer=%#x", buf)
         ImageWrapper.free(self)
-        if self.cython_buffer>0:
-            free(<void *> (<uintptr_t> self.cython_buffer))
-            self.cython_buffer = 0
+        if buf!=0:
+            free(<void *> buf)
 
 
 def selftest(full=False):

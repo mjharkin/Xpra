@@ -21,7 +21,7 @@ from xpra.gtk_common.gobject_util import no_arg_signal, SIGNAL_RUN_LAST
 from xpra.gtk_common.gtk_util import GetClipboard, selection_owner_set, selection_add_target, selectiondata_get_selection, selectiondata_get_target, selectiondata_get_data, selectiondata_get_data_type, selectiondata_get_format, selectiondata_set, clipboard_request_contents, PROPERTY_CHANGE_MASK
 from xpra.gtk_common.nested_main import NestedMainLoop
 from xpra.net.compression import Compressible
-from xpra.os_util import WIN32, POSIX, monotonic_time, strtobytes, bytestostr, hexstr, get_hex_uuid, is_X11, is_Wayland
+from xpra.os_util import WIN32, OSX, POSIX, monotonic_time, strtobytes, bytestostr, hexstr, get_hex_uuid, is_X11, is_Wayland
 from xpra.util import csv, envint, envbool, repr_ellipsized, typedict, first_time
 from xpra.platform.features import CLIPBOARD_GREEDY
 
@@ -100,7 +100,7 @@ def _filter_targets(targets):
 
 
 def set_string(clipboard, thestring):
-    if is_gtk3():
+    if is_gtk3() or OSX:
         #no other way?
         clipboard.set_text(thestring, len(thestring))
         return
@@ -531,7 +531,7 @@ class ClipboardProtocolHelperBase(object):
         return wire_data
 
     def _process_clipboard_contents(self, packet):
-        request_id, selection, dtype, dformat, wire_encoding, wire_data = packet[1:8]
+        request_id, selection, dtype, dformat, wire_encoding, wire_data = packet[1:7]
         log("process clipboard contents, selection=%s, type=%s, format=%s", selection, dtype, dformat)
         raw_data = self._munge_wire_selection_to_raw(wire_encoding, dtype, dformat, wire_data)
         log("clipboard wire -> raw: %r -> %r", (dtype, dformat, wire_encoding, wire_data), raw_data)

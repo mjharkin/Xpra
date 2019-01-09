@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 # This file is part of Xpra.
-# Copyright (C) 2015 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2015-2018 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 from xpra.dbus.helper import dbus_to_native
 from xpra.dbus.common import init_session_bus
-from xpra.util import AtomicInteger
+from xpra.util import AtomicInteger, DETACH_REQUEST
 import dbus.service
 
 from xpra.log import Logger
@@ -99,13 +99,15 @@ class DBUS_Source(dbus.service.Object):
 
     @dbus.service.method(INTERFACE, in_signature='b')
     def ShowDesktop(self, show):
+        show = nb(show)
         self.log(".ShowDesktop(%s)", show)
-        self.source.show_desktop(nb(show))
+        self.source.show_desktop(show)
 
     @dbus.service.method(INTERFACE, in_signature='i')
     def RaiseWindow(self, wid):
+        wid = ni(wid)
         self.log(".RaiseWindow(%s)", wid)
-        self.source.raise_window(ni(wid))
+        self.source.raise_window(wid)
 
     @dbus.service.method(INTERFACE, in_signature='')
     def ResetWindowFilters(self):
@@ -143,8 +145,9 @@ class DBUS_Source(dbus.service.Object):
 
     @dbus.service.method(INTERFACE, in_signature='s')
     def StartSpeaker(self, codec):
+        codec = ns(codec)
         self.log(".StartSpeaker(%s)", codec)
-        self.source.start_sending_sound(ns(codec))
+        self.source.start_sending_sound(codec)
 
     @dbus.service.method(INTERFACE, in_signature='')
     def StopSpeaker(self):
@@ -154,11 +157,22 @@ class DBUS_Source(dbus.service.Object):
 
     @dbus.service.method(INTERFACE, in_signature='i')
     def SetAVSyncDelay(self, delay):
-        self.log(".SetAVSyncDelay(%i)", delay)
-        self.source.set_av_sync_delay(delay)
+        d = ni(delay)
+        self.log(".SetAVSyncDelay(%i)", d)
+        self.source.set_av_sync_delay(d)
 
 
     @dbus.service.method(INTERFACE, in_signature='as')
     def SendClientCommand(self, args):
-        self.log(".SendClientCommand(%s)", args)
-        self.source.send_client_command(*args)
+        cmd = n(args)
+        self.log(".SendClientCommand(%s)", cmd)
+        self.source.send_client_command(*cmd)
+
+
+    @dbus.service.method(INTERFACE, in_signature='s')
+    def Detach(self, reason):
+        proto = self.source.proto
+        rs = ns(reason)
+        self.log(".SendClientCommand(%s) protocol=%s", rs, proto)
+        assert proto, "no connection"
+        proto.send_disconnect(DETACH_REQUEST, rs)

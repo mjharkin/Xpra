@@ -7,7 +7,7 @@
 import math
 
 from xpra.os_util import monotonic_time
-from xpra.util import MutableInteger, envint, envbool
+from xpra.util import envint, envbool
 from xpra.server.window.region import rectangle, add_rectangle, remove_rectangle, merge_all    #@UnresolvedImport
 from xpra.log import Logger
 
@@ -288,6 +288,23 @@ class VideoSubregion(object):
             self.novideoregion("disabled")
             return
         if not self.detection:
+            if not self.rectangle:
+                return
+            #just update the fps:
+            from_time = max(starting_at, monotonic_time()-MAX_TIME, self.min_time)
+            self.time = monotonic_time()
+            lde = tuple(x for x in tuple(last_damage_events) if x[0]>=from_time)
+            incount = 0
+            for _,x,y,w,h in lde:
+                r = rectangle(x,y,w,h)
+                inregion = r.intersection_rect(self.rectangle)
+                if inregion:
+                    incount += inregion.width*inregion.height
+            elapsed = monotonic_time()-from_time
+            if elapsed<=0:
+                self.fps = 0
+            else:
+                self.fps = int(incount/(self.rectangle.width*self.rectangle.height) / elapsed)
             return
         sslog("%s.identify_video_subregion(..)", self)
         sslog("identify_video_subregion(%s, %s, %s, %s)", ww, wh, damage_events_count, last_damage_events)
@@ -324,7 +341,7 @@ class VideoSubregion(object):
 
         from_time = max(starting_at, monotonic_time()-MAX_TIME, self.min_time)
         #create a list (copy) to work on:
-        lde = [x for x in tuple(last_damage_events) if x[0]>=from_time]
+        lde = tuple(x for x in tuple(last_damage_events) if x[0]>=from_time)
         dc = len(lde)
         if dc<=MIN_EVENTS:
             return self.novideoregion("not enough damage events yet (%s)", dc)
@@ -337,7 +354,7 @@ class VideoSubregion(object):
         for _,x,y,w,h in lde:
             rects = self.excluded_rectangles(rectangle(x,y,w,h), ww, wh)
             for r in rects:
-                dec.setdefault(r, MutableInteger()).increase()
+                dec[r] = dec.get(r, 0)+1
                 if w>=MIN_W:
                     wc.setdefault(w, dict()).setdefault(x, set()).add(r)
                 if h>=MIN_H:
@@ -363,7 +380,7 @@ class VideoSubregion(object):
         def damaged_ratio(rect):
             if all_damaged:
                 return 1
-            rects = [rect]
+            rects = (rect, )
             for _,x,y,w,h in lde:
                 r = rectangle(x,y,w,h)
                 new_rects = []

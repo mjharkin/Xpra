@@ -3,7 +3,7 @@
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-%define version 2.4.2
+%define version 2.4.3
 
 %{!?__python2: %global __python2 python2}
 %{!?__python3: %define __python3 python3}
@@ -72,6 +72,7 @@ BuildRoot:			%{_tmppath}/%{name}-%{version}-root
 %if 0%{?el7}
 Patch0:				centos7-oldsystemd.patch
 Patch1:             selinux-nomap.patch
+Patch2:             centos7-oldturbojpeg.patch
 %endif
 %if 0%{?fedora}
 %if 0%{?fedora}<28
@@ -460,6 +461,8 @@ pushd $RPM_BUILD_DIR/xpra-%{version}
 #remove some systemd configuration options:
 %patch0 -p1
 %patch1 -p1
+#missing definitions in turbojpeg headers:
+%patch2 -p1
 %endif
 
 
@@ -822,6 +825,29 @@ fi
 
 
 %changelog
+* Thu Dec 19 2018 Antoine Martin <antoine@devloop.org.uk> 2.4.3-1
+- fix minor glib timer handle leak and unnecessary timer scheduling
+- fix keyboard backwards compatibility with older 1.0 servers
+- fix error in keyboard debug logging
+- fix h264 decoding in HTML5 client
+- fix session info and bug report windows not getting dismissed in HTML5 client
+- fix precise wheel motion events with HTML5 client
+- fix clipboard with MacOS GTK2 clients
+- fix swap-keys menu entry wrongly disabled
+- fix potential memory leaks and errors in codecs due to cast error
+- fix crashy codecs on MS Windows: disable x264, 32-bit vpx with large sizes
+- fix validation errors with some quality and speed control commands
+- fix buggy parsing of clipboard-contents packets
+- fix jpeg encoder and decoder library version requirements (ie: for CentOS 7.x)
+- fix starting sessions via ssh on Ubuntu (workaround buggy systemd-run)
+- fix MS Windows clients handling system tray icons without an alpha channel
+- fix error in video exception message formating
+- fix errors handling pointer events with extra relative pointer data
+- fix potential string substitution errors with python2
+- workaround SSH errors with Windows Services for Linux
+- reduce impact of fullscreen and maxmimized attributes on window refresh rate
+- never lock the batch delay when mmap is enabled
+
 * Fri Nov 23 2018 Antoine Martin <antoine@devloop.org.uk> 2.4.2-1
 - fix server crash with application setting invalid X11 atoms
 - fix missing windows with some mono applications (ignore invalid X11 atoms)
@@ -871,10 +897,10 @@ fi
 - avoid ethtool warning spam
 - use correct headers for building python3 cairo workaround module
 
-* Mon Oct 15 2018 Antoine Martin <antoine@devloop.org.uk> 2.4-2
+* Mon Oct 15 2018 Antoine Martin <antoine@devloop.org.uk> 2.4.3
 - force rebuild on CentOS 7.x
 
-* Sat Oct 13 2018 Antoine Martin <antoine@devloop.org.uk> 2.4.2
+* Sat Oct 13 2018 Antoine Martin <antoine@devloop.org.uk> 2.4.3
 - SSH client integration (paramiko)
 - builtin server support for TCP socket upgrades to SSH (paramiko)
 - automatic TCP port allocation
@@ -1306,7 +1332,7 @@ fi
 - fix exception handling in client when called from the launcher
 - fix libav dependencies for Debian and Ubuntu builds
 
-* Wed Apr 23 2014 Antoine Martin <antoine@devloop.org.uk> 0.12.4.2
+* Wed Apr 23 2014 Antoine Martin <antoine@devloop.org.uk> 0.12.4.3
 - fix xpra shadow subcommand
 - fix xpra shadow keyboard mapping support for non-posix clients
 - avoid Xorg dummy warning in log

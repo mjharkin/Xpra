@@ -20,12 +20,9 @@ from xpra.codecs.libav_common.av_log import suspend_nonfatal_logging, resume_non
 from xpra.buffers.membuf cimport memalign, object_as_buffer, memory_as_pybuffer
 
 from libc.stdint cimport uintptr_t, uint8_t
+from libc.stdlib cimport free
+from libc.string cimport memset, memcpy
 
-
-cdef extern from "string.h":
-    void * memcpy(void * destination, void * source, size_t num) nogil
-    void * memset(void * ptr, int value, size_t num) nogil
-    void free(void * ptr) nogil
 
 cdef extern from "register_compat.h":
     void register_all()
@@ -426,7 +423,6 @@ cdef class Decoder:
             av_frame_free(&self.av_frame)
             #redundant: self.frame = NULL
 
-        cdef unsigned long ctx_key          #@DuplicatedSignature
         log("clean_decoder() freeing AVCodecContext: %#x", <uintptr_t> self.codec_ctx)
         if self.codec_ctx!=NULL:
             r = avcodec_close(self.codec_ctx)
@@ -507,7 +503,6 @@ cdef class Decoder:
         cdef int ret = 0
         cdef int nplanes
         cdef AVPacket avpkt
-        cdef unsigned long frame_key                #@DuplicatedSignature
         cdef AVFrameWrapper framewrapper
         cdef AVFrame *av_frame
         cdef object img

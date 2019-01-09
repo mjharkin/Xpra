@@ -74,7 +74,7 @@ cdef inline uintptr_t roundupl(uintptr_t n, uintptr_t m):
     return (n + m - 1) & ~(m - 1)
 
 cdef inline uintptr_t memalign_ptr(uintptr_t ptr):
-    return <uintptr_t> roundupl(<unsigned long> ptr, MEMALIGN_ALIGNMENT)
+    return <uintptr_t> roundupl(<uintptr_t> ptr, MEMALIGN_ALIGNMENT)
 
 
 def init_module():
@@ -123,7 +123,7 @@ class YUVImageWrapper(ImageWrapper):
         return "libyuv.YUVImageWrapper"
 
     def free(self):                             #@DuplicatedSignature
-        log("libyuv.YUVImageWrapper.free() cython_buffer=%#x", <unsigned long> self.cython_buffer)
+        log("libyuv.YUVImageWrapper.free() cython_buffer=%#x", <uintptr_t> self.cython_buffer)
         ImageWrapper.free(self)
         if self.cython_buffer>0:
             free(<void *> (<uintptr_t> self.cython_buffer))

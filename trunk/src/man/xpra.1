@@ -88,7 +88,7 @@ Almost identical to the TCP mode, but using AF_VSOCK for transport.
 Connect using websocket protocol.
 .SS wss://[USERNAME[:PASSWORD]@]HOST:PORT/[DISPLAY]
 Connect using secure websocket protocol. (websocket with SSL)
-.SS ssh://[USERNAME[:PASSWORD]@]HOST[:SSH_PORT]/DISPLAY
+.SS ssh://[USERNAME[:PASSWORD]@]HOST[:SSH_PORT]/DISPLAY[?proxy=ssh://[USERNAME[:PASSWORD]@]HOST[:SSH_PORT]]
 Further options can be specified using the \fB\-\-ssh\fP command line option.
 .P
 For backwards compatibility, SSH mode also supports the syntax:
@@ -101,6 +101,10 @@ separator.
 The password need only be specified when the server authentication module
 requires it. (ie: often when authenticating against MS Windows servers,
 or with \fBmultifile\fP and \fBsqlite\fP authentication modules)
+.P
+When the "?proxy=" option is set xpra will establish an SSH connection to the 
+specified "proxy" host.  From that host xpra will set up an SSH connection to
+the xpra server.
 .\" --------------------------------------------------------------------
 .SH EXAMPLES
 .TP \w'xpra\ 'u
@@ -323,6 +327,26 @@ and reduces both CPU consumption and local network traffic.
 When attaching, you can also specify an absolute path where
 the mmap file will be created.
 .TP
+\fB\-\-mmap\-group\fP=\fIGROUP\fP
+Sets the mmap file's gid to the group specified, and sets
+the permissions to 660.
+This is necessary to share the mmap file across user accounts.
+You can also use the special \fIGROUP\fP values:
+.RS
+.IP \fBno\fP
+Disable the functionality, the mmap file will use the default file
+permissions and default group ownership.
+.IP \fBSOCKET\fP
+The group used will be the same one as found on the
+unix domain socket file the client connects to.
+Obviously, this can only work when connecting to unix domain
+sockets.
+.IP \fBauto\fP
+Will use the 'xpra' group if the user is a member,
+otherwise it will fallback to the same behaviour as \fISOCKET\fP.
+.RE
+.TP
+
 \fB\-\-windows\fP=\fIyes\fP|\fIno\fP
 Enable or disable the forwarding of windows. This is usually
 the primary use for xpra and should be enabled.
@@ -336,6 +360,7 @@ Sets the maximum size for all windows.
 \fB\-\-readonly\fP=\fIyes\fP|\fIno\fP
 Read only mode ignores all keyboard and mouse activity.
 .TP
+
 \fB\-\-clipboard\fP=\fIyes\fP|\fIno|clipboard\-type\fP
 Enable or disable clipboard synchronization.
 If disabled on the server, no clients will be able to use clipboard
@@ -452,8 +477,8 @@ When using the socket-dir option, it is generally necessary to specify
 for xpra to work with the open sessions.
 
 By specifying a shared directory this can be coupled with the
-\fImmap\-group\fP or \fIsocket\-permissions\fP option to connect
-Xpra sessions across user accounts.
+\fImmap\-group\fP and \fIsocket\-permissions\fP option to connect
+Xpra sessions across user accounts with shared memory acceleration.
 .TP
 
 \fB\-\-socket\-dirs\fP=\fIDIR\fP
@@ -940,12 +965,6 @@ By default, all of them are loaded, but one may want to specify
 a more restrictive list of modules.
 Use the special value 'help' to get a list of options.
 Use the value 'none' to not load any colourspace conversion modules.
-
-.TP
-\fB\-\-mmap\-group\fP
-Sets the mmap file's gid to match the socket file's gid and sets
-the mmap file's permissions to 660.
-This is necessary to share the mmap file across user accounts.
 
 .TP
 \fB\-\-socket\-permissions\fP=\fIACCESS\-MODE\fP

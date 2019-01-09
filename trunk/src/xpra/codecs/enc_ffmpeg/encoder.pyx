@@ -22,6 +22,7 @@ from xpra.os_util import bytestostr, strtobytes
 from xpra.buffers.membuf cimport memalign, object_as_buffer
 
 from libc.stdint cimport uintptr_t
+from libc.stdlib cimport free
 
 SAVE_TO_FILE = os.environ.get("XPRA_SAVE_TO_FILE")
 
@@ -31,9 +32,6 @@ AUDIO = envbool("XPRA_FFMPEG_MPEG4_AUDIO", False)
 
 
 from libc.stdint cimport uint8_t, int64_t, uint32_t
-
-cdef extern from "string.h":
-    void free(void * ptr) nogil
 
 
 cdef extern from "libavutil/mem.h":
@@ -729,10 +727,11 @@ MAX_WIDTH, MAX_HEIGHT = 4096, 4096
 def get_spec(encoding, colorspace):
     assert encoding in get_encodings(), "invalid encoding: %s (must be one of %s" % (encoding, get_encodings())
     assert colorspace in get_input_colorspaces(encoding), "invalid colorspace: %s (must be one of %s)" % (colorspace, get_input_colorspaces(encoding))
-    return video_spec(encoding=encoding, output_colorspaces=get_output_colorspaces(encoding, colorspace), has_lossless_mode=False,
-                            codec_class=Encoder, codec_type=get_type(),
-                            quality=40, speed=40,
-                            setup_cost=90, width_mask=0xFFFE, height_mask=0xFFFE, max_w=MAX_WIDTH, max_h=MAX_HEIGHT)
+    return video_spec(encoding=encoding, input_colorspace=colorspace,
+                      output_colorspaces=get_output_colorspaces(encoding, colorspace), has_lossless_mode=False,
+                      codec_class=Encoder, codec_type=get_type(),
+                      quality=40, speed=40,
+                      setup_cost=90, width_mask=0xFFFE, height_mask=0xFFFE, max_w=MAX_WIDTH, max_h=MAX_HEIGHT)
 
 
 cdef class Encoder(object):
@@ -1018,7 +1017,6 @@ cdef class Encoder(object):
             if self.buffer!=NULL:
                 av_free(self.buffer)
                 self.buffer = NULL
-        cdef unsigned long ctx_key          #@DuplicatedSignature
         log("clean_encoder() freeing AVCodecContext: %#x", <uintptr_t> self.video_ctx)
         if self.video_ctx!=NULL:
             r = avcodec_close(self.video_ctx)

@@ -14,27 +14,19 @@ from xpra.log import Logger
 log = Logger("encoder", "vpx")
 
 from xpra.codecs.codec_constants import video_spec
-from xpra.os_util import bytestostr, WIN32, OSX, POSIX
+from xpra.os_util import get_cpu_count, bytestostr, WIN32, OSX, POSIX, BITS
 from xpra.util import AtomicInteger, envint, envbool
 from xpra.buffers.membuf cimport object_as_buffer
 
 from libc.stdint cimport uint8_t
+from libc.stdlib cimport free, malloc
+from libc.string cimport memset
 from xpra.monotonic_time cimport monotonic_time
 
 
 SAVE_TO_FILE = os.environ.get("XPRA_SAVE_TO_FILE")
 
-#sensible default:
-cpus = 2
-try:
-    cpus = os.cpu_count()
-except:
-    try:
-        import multiprocessing
-        cpus = multiprocessing.cpu_count()
-    except:
-        pass
-cdef int VPX_THREADS = envint("XPRA_VPX_THREADS", max(1, cpus-1))
+cdef int VPX_THREADS = envint("XPRA_VPX_THREADS", max(1, get_cpu_count()-1))
 
 cdef inline int roundup(int n, int m):
     return (n + m - 1) & ~(m - 1)
@@ -54,13 +46,6 @@ cdef inline int MAX(int a, int b):
 
 
 from libc.stdint cimport int64_t
-
-cdef extern from "stdlib.h":
-    void* malloc(size_t __size)
-
-cdef extern from "string.h":
-    void *memset(void *ptr, int value, size_t num)
-    void free(void *ptr)
 
 
 ctypedef long vpx_img_fmt_t
@@ -315,11 +300,12 @@ def get_spec(encoding, colorspace):
         if VPX_ENCODER_ABI_VERSION>=11:
             #libvpx 1.5 made some significant performance improvements with vp9:
             speed = 40
-    return video_spec(encoding=encoding, output_colorspaces=[colorspace], has_lossless_mode=has_lossless_mode,
-                            codec_class=Encoder, codec_type=get_type(),
-                            quality=quality, speed=speed,
-                            size_efficiency=60,
-                            setup_cost=20, max_w=max_w, max_h=max_h)
+    return video_spec(encoding=encoding, input_colorspace=colorspace, output_colorspaces=[colorspace],
+                      has_lossless_mode=has_lossless_mode,
+                      codec_class=Encoder, codec_type=get_type(),
+                      quality=quality, speed=speed,
+                      size_efficiency=60,
+                      setup_cost=20, max_w=max_w, max_h=max_h)
 
 
 cdef vpx_img_fmt_t get_vpx_colorspace(colorspace) except -1:
@@ -362,6 +348,13 @@ cdef class Encoder:
         assert scaling==(1,1), "vpx does not handle scaling"
         assert encoding in get_encodings()
         assert src_format in get_input_colorspaces(encoding)
+        if BITS==32 and WIN32:
+            dmaxw, dmaxh = MAX_SIZE[encoding]
+            if width>dmaxw or height>dmaxh:
+                #this can crash on win32, don't even try it
+                #(the unit tests would otherwise crash)
+                raise Exception("invalid dimensions %ix%i - maximum is %ix%i" % (width, height, dmaxw, dmaxh))
+        
         self.src_format = bytestostr(src_format)
         #log("vpx_encoder.init_context%s", (width, height, src_format, dst_formats, encoding, quality, speed, scaling, options))
 

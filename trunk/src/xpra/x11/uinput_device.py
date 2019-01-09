@@ -5,8 +5,9 @@
 # later version. See the file COPYING for details.
 
 from uinput import (
-    BTN_LEFT, BTN_RIGHT, BTN_MIDDLE, BTN_SIDE, BTN_EXTRA, REL_WHEEL,    #@UnresolvedImport
-    REL_X, REL_Y, BTN_TOUCH, ABS_X, ABS_Y, ABS_PRESSURE,                #@UnresolvedImport
+    BTN_LEFT, BTN_RIGHT, BTN_MIDDLE, BTN_SIDE, BTN_EXTRA,
+    REL_WHEEL, REL_HWHEEL,
+    REL_X, REL_Y, BTN_TOUCH, ABS_X, ABS_Y, ABS_PRESSURE,
     )
 
 from xpra.util import envint
@@ -28,6 +29,7 @@ BUTTON_STR = {
     BTN_SIDE     : "BTN_SIDE",
     BTN_EXTRA    : "BTN_EXTRA",
     REL_WHEEL    : "REL_WHEEL",
+    REL_HWHEEL   : "REL_HWHEEL",
     }
 BUTTON_MAP = {
     1   : BTN_LEFT,
@@ -43,7 +45,7 @@ class UInputDevice(object):
     def __init__(self, device, device_path):
         self.device = device
         self.device_path = device_path
-        self.wheel_delta = 0
+        self.wheel_delta = {}
         #the first event always goes MIA:
         #http://who-t.blogspot.co.at/2012/06/xi-21-protocol-design-issues.html
         #so synthesize a dummy one now:
@@ -73,6 +75,16 @@ class UInputDevice(object):
             val = -1*mult
             if pressed: #only send one event
                 return
+        elif button==6:
+            ubutton = REL_HWHEEL
+            val = 1*mult
+            if pressed: #only send one event
+                return
+        elif button==7:
+            ubutton = REL_HWHEEL
+            val = -1*mult
+            if pressed: #only send one event
+                return
         else:
             ubutton = BUTTON_MAP.get(button)
             val = bool(pressed)
@@ -86,17 +98,22 @@ class UInputDevice(object):
     def wheel_motion(self, button, distance):
         if button in (4, 5):
             val = distance*MOUSE_WHEEL_CLICK_MULTIPLIER
+            ubutton = REL_WHEEL
+        elif button in (6, 7):
+            val = distance*MOUSE_WHEEL_CLICK_MULTIPLIER
+            ubutton = REL_HWHEEL
         else:
             log.warn("Warning: %s", self)
             log.warn(" cannot handle wheel motion %i", button)
             log.warn(" this event has been dropped")
             return
-        delta = self.wheel_delta+val
-        log("UInput.wheel_motion(%i, %.4f) REL_WHEEL: %s+%s=%s", button, distance, self.wheel_delta, val, delta)
+        saved = self.wheel_delta.get(ubutton, 0)
+        delta = saved+val
         ival = int(delta)
+        log("UInput.wheel_motion(%i, %.4f) %s: %s+%s=%s, will emit %i", button, distance, BUTTON_STR.get(ubutton), saved, val, delta, ival)
         if ival!=0:
-            self.device.emit(REL_WHEEL, ival)
-            self.wheel_delta += val-ival
+            self.device.emit(ubutton, ival)
+        self.wheel_delta[ubutton] = delta-ival
 
     def close(self):
         pass

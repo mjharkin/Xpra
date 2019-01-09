@@ -356,6 +356,17 @@ def getUbuntuVersion():
 def is_unity():
     return os.environ.get("XDG_CURRENT_DESKTOP", "").lower().startswith("unity")
 
+def is_WSL():
+    if not POSIX:
+        return False
+    r = None
+    for f in ("/proc/sys/kernel/osrelease", "/proc/version"):
+        r = load_binary_file(f)
+        if r:
+            break
+    return r is not None and r.find(b"Microsoft")>=0
+
+
 def get_generic_os_name():
     for k,v in {
         "linux"     : "linux",
@@ -366,6 +377,21 @@ def get_generic_os_name():
         if sys.platform.startswith(k):
             return v
     return sys.platform
+
+def get_cpu_count():
+    #sensible default:
+    cpus = 2
+    try:
+        try:
+            #python3:
+            cpus = os.cpu_count()
+        except AttributeError:
+            #python2:
+            import multiprocessing
+            cpus = multiprocessing.cpu_count()
+    except:
+        pass
+    return cpus
 
 
 def load_binary_file(filename):
@@ -474,10 +500,8 @@ def osexpand(s, actual_username="", uid=0, gid=0, subs={}):
             from xpra.platform.xposix.paths import get_runtime_dir
             d["XDG_RUNTIME_DIR"] = os.environ.get("XDG_RUNTIME_DIR", get_runtime_dir())
     if actual_username:
-        d.update({
-            "USERNAME"  : actual_username,
-            "USER"      : actual_username,
-            })
+        d["USERNAME"] = actual_username
+        d["USER"] = actual_username
     #first, expand the substitutions themselves,
     #as they may contain references to other variables:
     ssub = OrderedDict()

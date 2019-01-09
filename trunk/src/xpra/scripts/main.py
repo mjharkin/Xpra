@@ -22,7 +22,7 @@ from xpra.util import csv, envbool, envint, repr_ellipsized, DEFAULT_PORT
 from xpra.exit_codes import EXIT_SSL_FAILURE, EXIT_STR
 from xpra.os_util import (
     get_util_logger, getuid, getgid, monotonic_time, setsid, bytestostr,
-    WIN32, OSX, POSIX, PYTHON3, SIGNAMES,
+    WIN32, OSX, POSIX, PYTHON3, SIGNAMES, is_Ubuntu, getUbuntuVersion,
     )
 from xpra.scripts.parsing import info, warn, error, \
     parse_vsock, parse_env, is_local, \
@@ -265,9 +265,13 @@ def run_mode(script_file, error_cb, options, args, mode, defaults):
     if mode in ("start", "start_desktop", "shadow") and not display_is_remote:
         systemd_run = parse_bool("systemd-run", options.systemd_run)
         if systemd_run is None:
-            #detect:
-            from xpra.os_util import is_systemd_pid1
-            systemd_run = is_systemd_pid1()
+            #detect if we should use it:
+            if is_Ubuntu() and getUbuntuVersion()>=(18,) and (os.environ.get("SSH_TTY") or os.environ.get("SSH_CLIENT")):
+                #would fail
+                systemd_run = False
+            else:
+                from xpra.os_util import is_systemd_pid1
+                systemd_run = is_systemd_pid1()
         if systemd_run:
             #check if we have wrapped it already (or if disabled via env var)
             if SYSTEMD_RUN:
@@ -511,8 +515,80 @@ def add_ssh_args(username, password, host, ssh_port, is_putty=False, is_paramiko
         args += ["-T", host]
     return args
 
+def add_ssh_proxy_args(username, password, host, ssh_port, pkey, ssh, is_putty=False, is_paramiko=False):
+    args = []
+    proxyline = ssh
+    if is_putty:
+        proxyline += ["-nc", "%host:%port"]
+        if pkey:
+            # tortoise plink works with either slash, backslash needs too much escaping 
+            # because of the weird way it's passed through as a ProxyCommand
+            proxyline += [ "-i", "\"" + pkey.replace("\\", "/") + "\""]
+    elif not is_paramiko:
+        proxyline += ["-W", "%h:%p"]
+    # the double quotes are in case the password has something like "&"
+    proxyline += add_ssh_args(username, password, host, ssh_port, is_putty, is_paramiko)
+    if is_putty:
+        args += ["-proxycmd", " ".join(proxyline)]
+    elif not is_paramiko:
+        args += ["-o", "ProxyCommand " + " ".join(proxyline)]
+    return args
+
+
+def parse_proxy_attributes(display_name):
+    import re
+    # Notes:
+    # (1) this regex permits a "?" in the password or username (because not just splitting at "?").
+    #     It doesn't look for the next  "?" until after the "@", where a "?" really indicates
+    #     another field.
+    # (2) all characters including "@"s go to "userpass" until the *last* "@" after which it all goes
+    #     to "hostport"
+    reout = re.search("\\?proxy=(?P<p>((?P<userpass>.+)@)?(?P<hostport>[^?]+))", display_name)
+    if not reout:
+        return display_name, {}
+    try:
+        desc_tmp = dict()
+        # This one should *always* return a host, and should end with an optional numeric port
+        hostport = reout.group("hostport")
+        hostport_match = re.match("(?P<host>[^:]+)($|:(?P<port>\d+)$)", hostport)
+        if not hostport_match:
+            raise RuntimeError("bad format for 'hostport': '%s'" % hostport)
+        host = hostport_match.group("host")
+        if not host:
+            raise RuntimeError("bad format: missing host in '%s'" % hostport)
+        desc_tmp["proxy_host"] = host
+        if hostport_match.group("port"):
+            desc_tmp["proxy_port"] = hostport_match.group("port")
+        userpass = reout.group("userpass")
+        if userpass:
+            # The username ends at the first colon. This decision was not unique: I could have
+            # allowed one colon in username if there were two in the string.
+            userpass_match = re.match("(?P<username>[^:]+)(:(?P<password>.+))?", userpass)
+            if not userpass_match:
+                raise RuntimeError("bad format for 'userpass': '%s'" % userpass)
+            # If there is a "userpass" part, then it *must* have a username
+            username = userpass_match.group("username")
+            if not username:
+                raise RuntimeError("bad format: missing username in '%s'" % userpass)
+            desc_tmp["proxy_username"] = username
+            password = userpass_match.group("password")
+            if password:
+                desc_tmp["proxy_password"] = password
+    except RuntimeError:
+        from xpra.log import Logger
+        sshlog = Logger("ssh")
+        sshlog.error("bad proxy argument: " + reout.group(0))
+        return display_name, {}
+    else:
+        # rip out the part we've processed
+        display_name = display_name[:reout.start()] + display_name[reout.end():]
+        return display_name, desc_tmp
+
 def parse_display_name(error_cb, opts, display_name, session_name_lookup=False):
     desc = {"display_name" : display_name}
+    display_name, proxy_attrs = parse_proxy_attributes(display_name)
+    desc.update(proxy_attrs)
+
     #split the display name on ":" or "/"
     scpos = display_name.find(":")
     slpos = display_name.find("/")
@@ -625,7 +701,6 @@ def parse_display_name(error_cb, opts, display_name, session_name_lookup=False):
                         #otherwise, we have to assume they are all part of IPv6
                         #we could count them at split at 8, but that would be just too fugly
                         pass
-            desc["ipv6"] = True
         elif host.find(":")>0:
             host, port_str = host.split(":", 1)
         if port_str:
@@ -676,8 +751,7 @@ def parse_display_name(error_cb, opts, display_name, session_name_lookup=False):
             host = parts[0]
         #ie: ssh=["/usr/bin/ssh", "-v"]
         ssh = parse_ssh_string(opts.ssh)
-        desc["ssh"] = ssh
-        full_ssh = ssh
+        full_ssh = ssh[:]
 
         #maybe restrict to win32 only?
         ssh_cmd = ssh[0].lower()
@@ -699,6 +773,14 @@ def parse_display_name(error_cb, opts, display_name, session_name_lookup=False):
         if ssh_port and ssh_port!=22:
             desc["ssh-port"] = ssh_port
         full_ssh += add_ssh_args(username, password, host, ssh_port, is_putty, is_paramiko)
+        if "proxy_host" in desc:
+            proxy_username = desc.get("proxy_username", "")
+            proxy_password = desc.get("proxy_password", "")
+            proxy_host = desc["proxy_host"]
+            proxy_port = desc.get("proxy_port", 22)
+            proxy_key = desc.get("proxy_key", "")
+            full_ssh += add_ssh_proxy_args(proxy_username, proxy_password, proxy_host, proxy_port,
+                                           proxy_key, ssh, is_putty, is_paramiko)
         desc.update({
                      "host"     : host,
                      "full_ssh" : full_ssh
@@ -894,40 +976,39 @@ def connect_or_fail(display_desc, opts):
         raise InitException("connection failed: %s" % e)
 
 
-
-
-def socket_connect(dtype, host, port, ipv6=False):
-    from xpra.net.bytestreams import SOCKET_TIMEOUT
-    if ipv6:
-        assert socket.has_ipv6, "no IPv6 support"
-        family = socket.AF_INET6
+def socket_connect(dtype, host, port):
+    if dtype=="udp":
+        socktype = socket.SOCK_DGRAM
     else:
-        family = socket.AF_INET
+        socktype = socket.SOCK_STREAM
     info = {
         "host" : host,
         "port" : port,
         }
+    family = 0  #any
     try:
-        addrinfo = socket.getaddrinfo(host, port, family)
+        addrinfo = socket.getaddrinfo(host, port, family, socktype)
     except Exception as e:
-        raise InitException("cannot get %s address of %s: %s" % ({
-            socket.AF_INET6 : "IPv6",
-            socket.AF_INET  : "IPv4",
-            }.get(family, family), (host, port), e))
-    sockaddr = addrinfo[0][-1]
-    if dtype=="udp":
-        sock = socket.socket(family, socket.SOCK_DGRAM)
-    else:
-        sock = socket.socket(family, socket.SOCK_STREAM)
-        sock.settimeout(SOCKET_TIMEOUT)
-    try:
-        sock.connect(sockaddr)
-    except Exception as e:
-        get_util_logger().debug("failed to connect using %s%s", sock.connect, sockaddr, exc_info=True)
-        from xpra.net.bytestreams import pretty_socket
-        raise InitException("failed to connect to '%s':\n %s" % (pretty_socket(sockaddr), e))
-    sock.settimeout(None)
-    return sock
+        raise InitException("cannot get %s address of%s: %s" % ({
+            socket.AF_INET6 : " IPv6",
+            socket.AF_INET  : " IPv4",
+            }.get(family, ""), (host, port), e))
+    #try each one:
+    for addr in addrinfo:
+        sockaddr = addr[-1]
+        family = addr[0]
+        sock = socket.socket(family, socktype)
+        if dtype!="udp":
+            from xpra.net.bytestreams import SOCKET_TIMEOUT
+            sock.settimeout(SOCKET_TIMEOUT)
+        try:
+            sock.connect(sockaddr)
+            sock.settimeout(None)
+            return sock
+        except Exception as e:
+            get_util_logger().debug("failed to connect using %s%s for %s", sock.connect, sockaddr, addr, exc_info=True)
+    raise InitException("failed to connect to %s:%s" % (host, port))
+
 
 def connect_to(display_desc, opts=None, debug_cb=None, ssh_fail_cb=None):
     from xpra.net.bytestreams import SOCKET_TIMEOUT, VSOCK_TIMEOUT, SocketConnection
@@ -993,10 +1074,9 @@ def connect_to(display_desc, opts=None, debug_cb=None, ssh_fail_cb=None):
         return SocketConnection(sock, "local", "host", (CID_TYPES.get(cid, cid), iport), dtype)
 
     elif dtype in ("tcp", "ssl", "ws", "wss", "udp"):
-        ipv6 = display_desc.get("ipv6", False)
         host = display_desc["host"]
         port = display_desc["port"]
-        sock = socket_connect(dtype, host, port, ipv6)
+        sock = socket_connect(dtype, host, port)
         sock.settimeout(None)
         conn = SocketConnection(sock, sock.getsockname(), sock.getpeername(), display_name, dtype)
 
@@ -1301,25 +1381,31 @@ def get_client_app(error_cb, opts, extra_args, mode):
         if opts.opengl=="probe":
             from xpra.os_util import pollwait
             from xpra.platform.paths import get_xpra_command
-            cmd = get_xpra_command()+["opengl-probe"]
-            proc = Popen(cmd, shell=False, close_fds=True)
-            r = pollwait(proc)
             from xpra.log import Logger
             log = Logger("opengl")
-            log("OpenGL probe command returned %s", r)
-            if r==0:
-                opts.opengl = "probe-success"
-            elif r==1:
-                opts.opengl = "probe-warning"
-            elif r==2:
-                opts.opengl = "probe-error"
+            cmd = get_xpra_command()+["opengl-probe"]
+            try:
+                proc = Popen(cmd, shell=False, close_fds=True)
+            except Exception as e:
+                log.warn("Warning: failed to execute OpenGL probe command")
+                log.warn(" %s", e)
+                opts.opengl = "probe-failed:%s" % e
             else:
-                if r is None:
-                    msg = "timeout"
+                r = pollwait(proc)
+                log("OpenGL probe command returned %s", r)
+                if r==0:
+                    opts.opengl = "probe-success"
+                elif r==1:
+                    opts.opengl = "probe-warning"
+                elif r==2:
+                    opts.opengl = "probe-error"
                 else:
-                    msg = SIGNAMES.get(-r) or SIGNAMES.get(r-128) or r
-                log.warn("OpenGL probe failed: %s", msg)
-                opts.opengl = "probe-failed:%s" % msg
+                    if r is None:
+                        msg = "timeout"
+                    else:
+                        msg = SIGNAMES.get(-r) or SIGNAMES.get(r-128) or r
+                    log.warn("OpenGL probe failed: %s", msg)
+                    opts.opengl = "probe-failed:%s" % msg
         try:
             from xpra.platform.gui import init as gui_init
             gui_init()

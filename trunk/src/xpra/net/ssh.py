@@ -15,9 +15,11 @@ log = Logger("network", "ssh")
 
 from xpra.scripts.main import InitException, InitExit, shellquote
 from xpra.platform.paths import get_xpra_command, get_ssh_known_hosts_files
+from xpra.platform import get_username
+from xpra.scripts.config import TRUE_OPTIONS
 from xpra.net.bytestreams import SocketConnection, SOCKET_TIMEOUT, ConnectionClosedException
 from xpra.exit_codes import EXIT_SSH_KEY_FAILURE, EXIT_SSH_FAILURE
-from xpra.os_util import bytestostr, osexpand, monotonic_time, setsid, nomodule_context, umask_context, WIN32, OSX, POSIX
+from xpra.os_util import bytestostr, osexpand, monotonic_time, setsid, nomodule_context, umask_context, is_WSL, WIN32, OSX, POSIX
 from xpra.util import envint, envbool, nonl, engs
 
 INITENV_COMMAND = os.environ.get("XPRA_INITENV_COMMAND", "xpra initenv")
@@ -79,6 +81,9 @@ def exec_dialog_subprocess(cmd):
             env["XPRA_LOG_TO_FILE"] = "0"
             kwargs["env"] = env
         proc = Popen(cmd, stdin=PIPE, stdout=PIPE, stderr=PIPE, **kwargs)
+        if is_WSL():
+            #WSL needs to wait before calling communicate?
+            proc.wait()
         stdout, stderr = proc.communicate()
         log("exec_dialog_subprocess(%s)", cmd)
         if stderr:
@@ -197,12 +202,10 @@ def ssh_paramiko_connect_to(display_desc):
     dtype = display_desc["type"]
     host = display_desc["host"]
     port = display_desc.get("ssh-port", 22)
-    ipv6 = display_desc.get("ipv6", False)
     #ssh and command attributes:
-    username = display_desc.get("username")
-    if not username:
-        import getpass
-        username = getpass.getuser()
+    username = display_desc.get("username") or get_username()
+    if "proxy_host" in display_desc:
+        display_desc.setdefault("proxy_username", get_username())
     password = display_desc.get("password")
     target = ssh_target_string(display_desc)
     remote_xpra = display_desc["remote_xpra"]
@@ -218,6 +221,7 @@ def ssh_paramiko_connect_to(display_desc):
         ssh_config = SSHConfig()
         user_config_file = os.path.expanduser("~/.ssh/config")
         sock = None
+        host_config = None
         if os.path.exists(user_config_file):
             with open(user_config_file) as f:
                 ssh_config.parse(f)
@@ -237,9 +241,9 @@ def ssh_paramiko_connect_to(display_desc):
                     ssh_client = SSHClient()
                     ssh_client.load_system_host_keys()
                     ssh_client.connect(host, port, sock=sock)
-                    chan = do_ssh_paramiko_connect_to(ssh_client.get_transport(),
-                                                      host, username, password,
-                                                      proxy_command, remote_xpra, socket_dir, display_as_args)
+                    transport = ssh_client.get_transport()
+                    do_ssh_paramiko_connect_to(transport, host, username, password, host_config or ssh_config.lookup("*"))
+                    chan = paramiko_run_remote_xpra(transport, proxy_command, remote_xpra, socket_dir, display_as_args)
                     peername = (host, port)
                     conn = SSHProxyCommandConnection(chan, peername, target, socket_info)
                     conn.timeout = SOCKET_TIMEOUT
@@ -249,16 +253,49 @@ def ssh_paramiko_connect_to(display_desc):
                     from paramiko.ssh_exception import ProxyCommandFailure
                     bytestreams.CLOSED_EXCEPTIONS = tuple(list(bytestreams.CLOSED_EXCEPTIONS)+[ProxyCommandFailure])
                     return conn
+        from xpra.scripts.main import socket_connect
+        from paramiko.transport import Transport
+        from paramiko import SSHException
+        if "proxy_host" in display_desc:
+            proxy_host = display_desc["proxy_host"]
+            proxy_port = display_desc.get("proxy_port", 22)
+            proxy_username = display_desc.get("proxy_username", username)
+            proxy_password = display_desc.get("proxy_password", password)
+            sock = socket_connect(dtype, proxy_host, proxy_port)
+            middle_transport = Transport(sock)
+            middle_transport.use_compression(False)
+            try:
+                middle_transport.start_client()
+            except SSHException as e:
+                log("start_client()", exc_info=True)
+                raise InitException("SSH negotiation failed: %s" % e)
+            proxy_host_config = ssh_config.lookup(host)
+            do_ssh_paramiko_connect_to(middle_transport, proxy_host, proxy_username, proxy_password, proxy_host_config or ssh_config.lookup("*"))
+            log("Opening proxy channel")
+            chan_to_middle = middle_transport.open_channel("direct-tcpip", (host, port), ('localhost', 0))
+
+            transport = Transport(chan_to_middle)
+            transport.use_compression(False)
+            try:
+                transport.start_client()
+            except SSHException as e:
+                log("start_client()", exc_info=True)
+                raise InitException("SSH negotiation failed: %s" % e)
+            do_ssh_paramiko_connect_to(transport, host, username, password, host_config or ssh_config.lookup("*"))
+            chan = paramiko_run_remote_xpra(transport, proxy_command, remote_xpra, socket_dir, display_as_args)
+
+            peername = (host, port)
+            conn = SSHProxyCommandConnection(chan, peername, target, socket_info)
+            conn.timeout = SOCKET_TIMEOUT
+            conn.start_stderr_reader()
+            return conn
 
         #plain TCP connection to the server,
         #we open it then give the socket to paramiko:
-        from xpra.scripts.main import socket_connect
-        sock = socket_connect(dtype, host, port, ipv6)
+        sock = socket_connect(dtype, host, port)
         sockname = sock.getsockname()
         peername = sock.getpeername()
         log("paramiko socket_connect: sockname=%s, peername=%s", sockname, peername)
-        from paramiko.transport import Transport
-        from paramiko import SSHException
         transport = Transport(sock)
         transport.use_compression(False)
         try:
@@ -266,9 +303,8 @@ def ssh_paramiko_connect_to(display_desc):
         except SSHException as e:
             log("start_client()", exc_info=True)
             raise InitException("SSH negotiation failed: %s" % e)
-        chan = do_ssh_paramiko_connect_to(transport,
-                                          host, username, password,
-                                          proxy_command, remote_xpra, socket_dir, display_as_args)
+        do_ssh_paramiko_connect_to(transport, host, username, password, host_config or ssh_config.lookup("*"))
+        chan = paramiko_run_remote_xpra(transport, proxy_command, remote_xpra, socket_dir, display_as_args)
         conn = SSHSocketConnection(chan, sock, sockname, peername, target, socket_info)
         conn.timeout = SOCKET_TIMEOUT
         conn.start_stderr_reader()
@@ -282,11 +318,11 @@ class nogssapi_context(nomodule_context):
         nomodule_context.__init__(self, "gssapi")
 
 
-def do_ssh_paramiko_connect_to(transport, host, username, password,
-                               xpra_proxy_command, remote_xpra, socket_dir, display_as_args):
+def do_ssh_paramiko_connect_to(transport, host, username, password, host_config=None):
     from paramiko import SSHException, RSAKey, PasswordRequiredException
     from paramiko.agent import Agent
     from paramiko.hostkeys import HostKeys
+    log("do_ssh_paramiko_connect_to%s", (transport, host, username, password, host_config))
     log("SSH transport %s", transport)
 
     host_key = transport.get_remote_server_key()
@@ -317,7 +353,28 @@ def do_ssh_paramiko_connect_to(transport, host, username, password,
             assert host_key
             log("%s host key '%s' OK for host '%s'", keyname(), keymd5(host_key), host)
         else:
-            if known_host_key:
+            dnscheck = ""
+            if host_config:
+                verifyhostkeydns = host_config.get("verifyhostkeydns")
+                if verifyhostkeydns and verifyhostkeydns.lower() in TRUE_OPTIONS:
+                    try:
+                        from xpra.net.sshfp import check_host_key
+                        dnscheck = check_host_key(host, host_key)
+                    except ImportError as e:
+                        log("verifyhostkeydns failed", exc_info=True)
+                        log.warn("Warning: cannot check SSHFP DNS records")
+                        log.warn(" %s", e)
+            log.info("dnscheck=%s", dnscheck)
+            def adddnscheckinfo(q):
+                if dnscheck is not True:
+                    q += [
+                        "SSHFP validation failed:",
+                        dnscheck
+                        ]
+            if dnscheck is True:
+                #DNSSEC provided a matching record
+                log.info("found a valid SSHFP record for host %s", host)
+            elif known_host_key:
                 log.warn("Warning: SSH server key mismatch")
                 qinfo = [
 "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!",
@@ -327,6 +384,7 @@ def do_ssh_paramiko_connect_to(transport, host, username, password,
 "The fingerprint for the %s key sent by the remote host is" % keyname(),
 keymd5(host_key),
 ]
+                adddnscheckinfo(qinfo)
                 if VERIFY_STRICT:
                     log.warn("Host key verification failed.")
                     #TODO: show alert with no option to accept key
@@ -354,6 +412,7 @@ keymd5(host_key),
                     "%s key fingerprint is" % keyname(),
                     keymd5(host_key),
                     ]
+                adddnscheckinfo(qinfo)
                 if not confirm_key(qinfo):
                     transport.close()
                     raise InitExit(EXIT_SSH_KEY_FAILURE, "Unknown SSH host '%s'" % host)
@@ -452,6 +511,27 @@ keymd5(host_key),
             log("auth_password(..)", exc_info=True)
             log.info("SSH password authentication failed: %s", e)
 
+    def auth_interactive():
+        log("trying interactive authentication")
+        class iauthhandler:
+            def __init__(self):
+                self.authcount = 0
+            def handlestuff(self, title, instructions, prompt_list):
+                p = []
+                for pent in prompt_list:
+                    if self.authcount==0 and password:
+                        p.append(password)
+                    else:
+                        p.append(input_pass(pent[0]))
+                    self.authcount += 1
+                return p
+        try:
+            myiauthhandler = iauthhandler()
+            transport.auth_interactive(username, myiauthhandler.handlestuff, "")
+        except SSHException as e:
+            log("auth_interactive(..)", exc_info=True)
+            log.info("SSH password authentication failed: %s", e)
+
     banner = transport.get_banner()
     if banner:
         log.info("SSH server banner:")
@@ -459,11 +539,17 @@ keymd5(host_key),
             log.info(" %s", x)
 
     log("starting authentication")
+    # per the RFC we probably should do none first always and read off the supported
+    # methods, however, the current code seems to work fine with OpenSSH
     if not transport.is_authenticated() and NONE_AUTH:
         auth_none()
 
+    # Some people do two-factor using KEY_AUTH to kick things off, so this happens first
     if not transport.is_authenticated() and KEY_AUTH:
         auth_publickey()
+
+    if not transport.is_authenticated() and PASSWORD_AUTH:
+        auth_interactive()
 
     if not transport.is_authenticated() and PASSWORD_AUTH and password:
         auth_password()
@@ -482,8 +568,11 @@ keymd5(host_key),
 
     if not transport.is_authenticated():
         transport.close()
-        raise InitException("SSH Authentication failed")
+        raise InitException("SSH Authentication on %s failed" % host)
 
+
+def paramiko_run_remote_xpra(transport, xpra_proxy_command=None, remote_xpra=None, socket_dir=None, display_as_args=None):
+    from paramiko import SSHException
     assert len(remote_xpra)>0
     log("will try to run xpra from: %s", remote_xpra)
     for xpra_cmd in remote_xpra:

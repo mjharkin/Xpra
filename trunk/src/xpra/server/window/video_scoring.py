@@ -5,7 +5,7 @@
 # later version. See the file COPYING for details.
 
 from xpra.util import envint
-from xpra.codecs.codec_constants import get_subsampling_divs, LOSSY_PIXEL_FORMATS
+from xpra.codecs.codec_constants import LOSSY_PIXEL_FORMATS
 
 from xpra.log import Logger
 scorelog = Logger("score")
@@ -13,16 +13,19 @@ scorelog = Logger("score")
 GPU_BIAS = envint("XPRA_GPU_BIAS", 100)
 MIN_FPS_COST = envint("XPRA_MIN_FPS_COST", 4)
 
+SUBSAMPLING_QUALITY_LOSS = {
+    "YUV420P"   : 186,      #1.66 + 0.2
+    "YUV422P"   : 153,      #1.33 + 0.2
+    "YUV444P"   : 120,      #1.00 + 0.2
+    }
+
 
 def get_quality_score(csc_format, csc_spec, encoder_spec, scaling, target_quality=100, min_quality=0):
     quality = encoder_spec.quality
-    if csc_format in ("YUV420P", "YUV422P", "YUV444P"):
-        #account for subsampling: reduces quality
-        y,u,v = get_subsampling_divs(csc_format)
-        div = 0.2   #any colourspace convertion will lose at least some quality (due to rounding)
-        for div_x, div_y in (y, u, v):
-            div += (div_x+div_y)/2.0/3.0
-        quality /= div
+    #any colourspace convertion will lose at least some quality (due to rounding)
+    #(so add 0.2 to the value we get from calculating the degradation using get_subsampling_divs)
+    div = SUBSAMPLING_QUALITY_LOSS.get(csc_format, 100)
+    quality = quality*100//div
 
     if csc_spec:
         #csc_spec.quality is the upper limit (up to 100):
@@ -45,7 +48,7 @@ def get_quality_score(csc_format, csc_spec, encoder_spec, scaling, target_qualit
             qscore *= 2.0
     return int(qscore)
 
-def get_speed_score(csc_format, csc_spec, encoder_spec, scaling, target_speed=100, min_speed=0):
+def get_speed_score(csc_format, csc_spec, encoder_spec, scaling, target_speed=100):
     #when subsampling, add the speed gains to the video encoder
     #which now has less work to do:
     mult = {
@@ -72,7 +75,7 @@ def get_pipeline_score(enc_in_format, csc_spec, encoder_spec, width, height, sca
                        target_quality, min_quality,
                        target_speed, min_speed,
                        current_csce, current_ve,
-                       client_score_delta, ffps):
+                       score_delta, ffps, detection=True):
     """
         Given an optional csc step (csc_format and csc_spec), and
         and a required encoding step (encoder_spec and width/height),
@@ -89,11 +92,11 @@ def get_pipeline_score(enc_in_format, csc_spec, encoder_spec, width, height, sca
     def clamp(v):
         return max(0, min(100, v))
     qscore = clamp(get_quality_score(enc_in_format, csc_spec, encoder_spec, scaling, target_quality, min_quality))
-    sscore = clamp(get_speed_score(enc_in_format, csc_spec, encoder_spec, scaling, target_speed, min_speed))
+    sscore = clamp(get_speed_score(enc_in_format, csc_spec, encoder_spec, scaling, target_speed))
 
     #multiplier for setup_cost:
     #(lose points if we have less than N fps)
-    setup_cost_mult = 1+max(0, MIN_FPS_COST-ffps)
+    setup_cost_mult = int(detection)*(1+max(0, MIN_FPS_COST-ffps))
 
     #how well the codec deals with larger screen sizes:
     sizescore = 100
@@ -181,10 +184,10 @@ def get_pipeline_score(enc_in_format, csc_spec, encoder_spec, width, height, sca
     #gpu vs cpu
     gpu_score = max(0, GPU_BIAS-50)*encoder_spec.gpu_cost//50
     cpu_score = max(0, 50-GPU_BIAS)*encoder_spec.cpu_cost//50
-    score = int((qscore+sscore+er_score+sizescore+client_score_delta+gpu_score+cpu_score)*runtime_score//100//5)
+    score = int((qscore+sscore+er_score+sizescore+score_delta+gpu_score+cpu_score)*runtime_score//100//5)
     scorelog("get_pipeline_score(%-7s, %-24r, %-24r, %5i, %5i) quality: %3i, speed: %3i, setup: %3i - %3i runtime: %3i scaling: %s / %s, encoder dimensions=%sx%s, sizescore=%3i, client score delta=%3i, cpu score=%3i, gpu score=%3i, score=%3i",
              enc_in_format, csc_spec, encoder_spec, width, height,
-             qscore, sscore, ecsc_score, ee_score, runtime_score, scaling, encoder_scaling, enc_width, enc_height, sizescore, client_score_delta,
+             qscore, sscore, ecsc_score, ee_score, runtime_score, scaling, encoder_scaling, enc_width, enc_height, sizescore, score_delta,
              cpu_score, gpu_score, score)
     return score, scaling, csc_scaling, csc_width, csc_height, csc_spec, enc_in_format, encoder_scaling, enc_width, enc_height, encoder_spec
 

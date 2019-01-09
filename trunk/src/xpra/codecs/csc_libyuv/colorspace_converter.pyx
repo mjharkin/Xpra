@@ -21,10 +21,8 @@ from xpra.buffers.membuf cimport memalign, object_as_buffer, memory_as_pybuffer
 
 from xpra.monotonic_time cimport monotonic_time
 from libc.stdint cimport uint8_t, uintptr_t
+from libc.stdlib cimport free
 
-
-cdef extern from "stdlib.h":
-    void free(void *ptr)
 
 cdef extern from "../../buffers/memalign.h":
     unsigned int MEMALIGN_ALIGNMENT
@@ -74,7 +72,7 @@ cdef inline uintptr_t roundupl(uintptr_t n, uintptr_t m):
     return (n + m - 1) & ~(m - 1)
 
 cdef inline uintptr_t memalign_ptr(uintptr_t ptr):
-    return <uintptr_t> roundupl(<unsigned long> ptr, MEMALIGN_ALIGNMENT)
+    return <uintptr_t> roundupl(<uintptr_t> ptr, MEMALIGN_ALIGNMENT)
 
 
 def init_module():
@@ -114,7 +112,8 @@ def get_output_colorspaces(input_colorspace):
 def get_spec(in_colorspace, out_colorspace):
     assert in_colorspace in IN_COLORSPACES, "invalid input colorspace: %s (must be one of %s)" % (in_colorspace, IN_COLORSPACES)
     assert out_colorspace in OUT_COLORSPACES, "invalid output colorspace: %s (must be one of %s)" % (out_colorspace, OUT_COLORSPACES)
-    return csc_spec(ColorspaceConverter, codec_type=get_type(),
+    return csc_spec(in_colorspace, out_colorspace,
+                    ColorspaceConverter, codec_type=get_type(),
                     quality=100, speed=100,
                     setup_cost=0, min_w=8, min_h=2, can_scale=True,
                     max_w=MAX_WIDTH, max_h=MAX_HEIGHT)
@@ -126,11 +125,12 @@ class YUVImageWrapper(ImageWrapper):
         return "libyuv.YUVImageWrapper"
 
     def free(self):                             #@DuplicatedSignature
-        log("libyuv.YUVImageWrapper.free() cython_buffer=%#x", <unsigned long> self.cython_buffer)
+        cdef uintptr_t buf = self.cython_buffer
+        self.cython_buffer = 0
+        log("libyuv.YUVImageWrapper.free() cython_buffer=%#x", buf)
         ImageWrapper.free(self)
-        if self.cython_buffer>0:
-            free(<void *> (<uintptr_t> self.cython_buffer))
-            self.cython_buffer = 0
+        if buf!=0:
+            free(<void *> buf)
 
 
 cdef class ColorspaceConverter:

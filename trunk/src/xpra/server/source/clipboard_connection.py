@@ -48,12 +48,22 @@ class ClipboardConnection(StubSourceMixin):
         self.clipboard_greedy = c.boolget("clipboard.greedy")
         self.clipboard_want_targets = c.boolget("clipboard.want_targets")
         self.clipboard_client_selections = c.strlistget("clipboard.selections", CLIPBOARDS)
-        log("client clipboard: greedy=%s, want_targets=%s, client_selections=%s", self.clipboard_greedy, self.clipboard_want_targets, self.clipboard_client_selections)
+        self.clipboard_contents_slice_fix = c.boolget("clipboard.contents-slice-fix")
+        log("client clipboard: greedy=%s, want_targets=%s, client_selections=%s, contents_slice_fix=%s", self.clipboard_greedy, self.clipboard_want_targets, self.clipboard_client_selections, self.clipboard_contents_slice_fix)
+        if not self.clipboard_contents_slice_fix:
+            log.info("client clipboard does not include contents slice fix")
 
     def get_info(self):
         return {
-            "clipboard"                 : self.clipboard_enabled,
-            "clipboard_notifications"   : True,
+            "clipboard" : {
+                "enabled"               : self.clipboard_enabled,
+                "notifications"         : self.clipboard_notifications,
+                "set-enabled"           : self.clipboard_set_enabled,
+                "greedy"                : self.clipboard_greedy,
+                "want-targets"          : self.clipboard_want_targets,
+                "selections"            : self.clipboard_client_selections,
+                "contents-slice-fix"    : self.clipboard_contents_slice_fix,
+                },
             }
 
 

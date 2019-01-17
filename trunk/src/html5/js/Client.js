@@ -1134,7 +1134,7 @@ XpraClient.prototype._make_hello = function() {
 		"screen_sizes"				: this._get_screen_sizes(),
 		"dpi"						: this._get_DPI(),
 		//not handled yet, but we will:
-		"clipboard_enabled"			: this.clipboard_enabled,
+		"clipboard"					: this.clipboard_enabled,
 		"clipboard.want_targets"	: true,
 		"clipboard.greedy"			: true,
 		"clipboard.selections"		: ["CLIPBOARD", "PRIMARY"],
@@ -2754,7 +2754,7 @@ XpraClient.prototype.send_clipboard_token = function(data) {
 		return;
 	}
 	this.debug("keyboard", "sending clipboard token with data:", data);
-	var packet = ["clipboard-token", "CLIPBOARD", [], "STRING", "STRING", data.length, "bytes", data, false, true, true];
+	var packet = ["clipboard-token", "CLIPBOARD", [], "UTF8_STRING", "UTF8_STRING", data.length, "bytes", data, false, true, true];
 	this.send(packet);
 }
 

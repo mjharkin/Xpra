@@ -36,6 +36,9 @@ from libc.string cimport memset, memcpy
 from xpra.monotonic_time cimport monotonic_time
 
 CLIENT_KEYS_STR = get_license_keys(NVENCAPI_MAJOR_VERSION) + get_license_keys()
+TEST_ENCODINGS = os.environ.get("XPRA_NVENC_ENCODINGS", "h264,h265").split(",")
+assert (x for x in TEST_ENCODINGS in ("h264", "h265")), "invalid list of encodings: %s" % (TEST_ENCODINGS,)
+assert len(TEST_ENCODINGS)>0, "no encodings enabled!"
 DESIRED_PRESET = os.environ.get("XPRA_NVENC_PRESET", "")
 #NVENC requires compute capability value 0x30 or above:
 cdef int MIN_COMPUTE = 0x30
@@ -2232,7 +2235,7 @@ cdef class Encoder:
 
     cdef unsigned int copy_image(self, image, int strict_stride) except -1:
         if DEBUG_API:
-            log("copy_image(%s, %s, %i, %i)", image, strict_stride)
+            log("copy_image(%s, %i)", image, strict_stride)
         cdef unsigned int image_stride = image.get_rowstride()
         #input_height may be smaller if we have rounded down:
         cdef unsigned int h = min(image.get_height(), self.input_height)
@@ -2298,7 +2301,7 @@ cdef class Encoder:
         if elapsed==0:
             #mswindows monotonic time minimum precision is 1ms...
             elapsed = 0.0001
-        log("copy_image: %9i bytes uploaded in %3.1f ms: %5i MB/s", copy_len, int(1000*elapsed), copy_len/elapsed//1024//1024)
+        log("copy_image: %9i bytes uploaded in %3.1f ms: %5i MB/s", copy_len, 1000*elapsed, int(copy_len/elapsed)//1024//1024)
         return stride
 
     cdef exec_kernel(self, unsigned int w, unsigned int h, unsigned int stride):
@@ -2769,7 +2772,6 @@ def init_module():
     valid_keys = []
     failed_keys = []
     try_keys = CLIENT_KEYS_STR or [None]
-    TEST_ENCODINGS = ["h264", "h265"]
     FAILED_ENCODINGS = set()
     global YUV444_ENABLED, YUV444_CODEC_SUPPORT, LOSSLESS_ENABLED, ENCODINGS, MAX_SIZE
     if not validate_driver_yuv444lossless():

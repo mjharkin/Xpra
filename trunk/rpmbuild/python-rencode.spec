@@ -17,12 +17,13 @@ Release:        1.xpra1%{?dist}
 Summary:        Web safe object pickling/unpickling
 License:        GPLv3+ and BSD
 URL:            https://github.com/aresch/rencode
-Source0:        https://github.com/aresch/rencode/archive/v%{version}.tar.gz
+Source0:        https://files.pythonhosted.org/packages/3a/fb/3c03dbe4438dd596e1378b5299990b81041739658a76e0f4a301eded67f4/rencode-%{version}.tar.gz
 Provides:		python-rencode = %{version}-%{release}
 Obsoletes:		python-rencode < %{version}-%{release}
 Conflicts:		python-rencode < %{version}-%{release}
-Patch0:         python-rencode-py36-importwarning.patch
-Patch1:         python-rencode-py26-testcompat.patch
+Patch0:         python-rencode-readdmissingpyx.patch
+Patch1:         python-rencode-nowheelreq.patch
+Patch2:         python-rencode-rename.patch
 
 
 %if 0%{?suse_version}
@@ -57,19 +58,19 @@ b-encodings.
 
 %prep
 %setup -qn rencode-%{version}
-%if 0%{el6}
+%patch0 -p1
 %patch1 -p1
-%endif
+%patch2 -p1
 
 %if 0%{?with_python3}
 rm -rf %{py3dir}
 cp -a . %{py3dir}
-pushd %{py3dir}
-%patch0 -p1
-popd
 %endif
 
 %build
+%if 0%{?el6}
+cythonize ./rencode/_rencode.pyx
+%endif
 CFLAGS="%{optflags}" %{__python2} setup.py build
 
 %if 0%{?with_python3}

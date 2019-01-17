@@ -16,13 +16,14 @@
 
 Name:           python2-pycuda
 Version:        2018.1.1
-Release:        1
+Release:        3
 URL:            http://mathema.tician.de/software/pycuda
 Summary:        Python wrapper CUDA
 License:        MIT
 Group:          Development/Libraries/Python
 Source:        	https://files.pythonhosted.org/packages/09/69/333ff751d1012f7add7488c91352e08a364b1534a5a33b278c9590415d27/pycuda-%{version}.tar.gz
 BuildRoot:      %{_tmppath}/%{name}-%{version}-build
+Patch0:         python-pycuda-threading.patch
 Provides:       python-pycuda
 Obsoletes:      python-pycuda
 Conflicts:      python-pycuda
@@ -30,6 +31,7 @@ Conflicts:      python-pycuda
 Requires:       python-decorator
 Requires:       numpy
 Requires:       python-pytools
+Requires:       python-six
 
 BuildRequires:  gcc-c++
 BuildRequires:  python-devel
@@ -55,6 +57,7 @@ Group:          Development/Libraries/Python
 Requires:       python3-decorator
 Requires:       python3-numpy
 Requires:       python3-pytools
+Requires:       python3-six
 
 BuildRequires:  gcc-c++
 BuildRequires:  python3-devel
@@ -69,6 +72,7 @@ Python3 version.
 
 %prep
 %setup -q -n pycuda-%{version}
+%patch0 -p1
 %if 0%{?fedora}
 rm -fr %{py3dir}
 cp -a . %{py3dir}
@@ -79,7 +83,6 @@ cp -a . %{py3dir}
 %{__python2} ./configure.py \
 	--cuda-enable-gl \
 	--cuda-root=/usr/local/cuda \
-	--cudadrv-lib-dir=/usr/local/lib64 \
 	--cudadrv-lib-dir=%{_libdir} \
 	--boost-inc-dir=%{_includedir} \
 	--boost-lib-dir=%{_libdir} \
@@ -94,7 +97,6 @@ rm -f siteconf.py
 %{__python3} ./configure.py \
 	--cuda-enable-gl \
 	--cuda-root=/usr/local/cuda \
-	--cudadrv-lib-dir=/usr/local/lib64 \
 	--cudadrv-lib-dir=%{_libdir} \
 	--boost-inc-dir=%{_includedir} \
 	--boost-lib-dir=%{_libdir} \
@@ -130,6 +132,12 @@ rm -rf %{buildroot}
 %endif
 
 %changelog
+* Sun Jan 13 2019 Antoine Martin <antoine@xpra.org> - 2018.1.1-3
+- add patch for releasing the GIL during init and make_context
+
+* Sun Jan 13 2019 Antoine Martin <antoine@xpra.org> - 2018.1.1-2
+- add missing python six dependency
+
 * Tue Sep 18 2018 Antoine Martin <antoine@xpra.org> - 2018.1.1-1
 - new upstream release fixing Fedora 29 builds
 

@@ -230,6 +230,8 @@ def get_machine_id():
             v = load_binary_file(filename)
             if v is not None:
                 break
+    elif WIN32:
+        v = uuid.getnode()
     return  str(v).strip("\n\r")
 
 def get_user_uuid():
@@ -250,7 +252,7 @@ def get_user_uuid():
         uupdate(str(os.getuid()))
         uupdate(u"/")
         uupdate(str(os.getgid()))
-    uupdate(os.environ.get("HOME", ""))
+    uupdate(os.path.expanduser("~/"))
     return u.hexdigest()
 
 
@@ -611,10 +613,9 @@ class nomodule_context(object):
 
     def __init__(self, module_name):
         self.module_name = module_name
-        self.saved_module = sys.modules.get(module_name)
-        sys.modules[module_name] = None
     def __enter__(self):
-        pass
+        self.saved_module = sys.modules.get(self.module_name)
+        sys.modules[self.module_name] = None
     def __exit__(self, *_args):
         if sys.modules.get(self.module_name) == None:
             if self.saved_module is None:

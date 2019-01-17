@@ -973,7 +973,7 @@ class WindowSource(WindowIconSource):
         now = monotonic_time()
         lr = self.statistics.last_recalculate
         elapsed = now-lr
-        statslog("calculate_batch_delay for wid=%i current batch delay=%i, last update %i seconds ago", self.wid, self.batch_config.delay, elapsed)
+        statslog("calculate_batch_delay for wid=%i current batch delay=%i, last update %.1f seconds ago", self.wid, self.batch_config.delay, elapsed)
         if self.batch_config.delay<=2*DamageBatchConfig.START_DELAY and lr>0 and elapsed<60 and self.get_packets_backlog()==0:
             #delay is low-ish, figure out if we should bother updating it
             lde = tuple(self.statistics.last_damage_events)
@@ -999,6 +999,9 @@ class WindowSource(WindowIconSource):
                     return
                 statslog("calculate_batch_delay for wid=%i, %i bytes sent since the last update", self.wid, nbytes)
         calculate_batch_delay(self.wid, self.window_dimensions, has_focus, other_is_fullscreen, other_is_maximized, self.is_OR, self.soft_expired, self.batch_config, self.global_statistics, self.statistics, self.bandwidth_limit)
+        #update the normalized value:
+        ww, wh = self.window_dimensions
+        self.batch_config.delay_per_megapixel = self.batch_config.delay*1000000//(ww*wh)
         self.statistics.last_recalculate = now
         self.update_av_sync_frame_delay()
 
@@ -1873,8 +1876,10 @@ class WindowSource(WindowIconSource):
         return None
 
     def full_quality_refresh(self, damage_options={}):
-        #called on use request via xpra control,
-        #or when we need to resend the window after a send timeout
+        #can be called from:
+        # * xpra control channel
+        # * send timeout
+        # * client decoding error
         if not self.window or not self.window.is_managed():
             #this window is no longer managed
             return
@@ -1882,16 +1887,20 @@ class WindowSource(WindowIconSource):
             #can happen during cleanup
             return
         refresh_regions = self.refresh_regions
+        #since we're going to refresh the whole window,
+        #we don't need to track what needs refreshing:
         self.refresh_regions = []
         w, h = self.window_dimensions
-        refreshlog("full_quality_refresh() for %sx%s window with regions: %s", w, h, self.refresh_regions)
+        refreshlog("full_quality_refresh() for %sx%s window with pending refresh regions: %s", w, h, refresh_regions)
         new_options = damage_options.copy()
         encoding = self.auto_refresh_encodings[0]
         new_options.update(self.get_refresh_options())
         refreshlog("full_quality_refresh() using %s with options=%s", encoding, new_options)
-        damage_time = monotonic_time()
-        self.send_delayed_regions(damage_time, refresh_regions, encoding, new_options)
-        self.damage(0, 0, w, h, options=new_options)
+        #just refresh the whole window:
+        regions = [rectangle(0, 0, w, h)]
+        now = monotonic_time()
+        damage = DelayedRegions(now, regions, encoding, new_options)
+        self.send_delayed_regions(damage)
 
     def get_refresh_options(self):
         return {

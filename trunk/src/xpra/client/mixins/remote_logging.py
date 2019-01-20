@@ -1,5 +1,5 @@
 # This file is part of Xpra.
-# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -7,13 +7,12 @@ import sys
 import traceback
 import logging
 
-from xpra.log import Logger, set_global_logging_handler
-log = Logger("client")
-
-
 from xpra.scripts.config import parse_bool
 from xpra.os_util import monotonic_time, strtobytes
 from xpra.client.mixins.stub_client_mixin import StubClientMixin
+from xpra.log import Logger, set_global_logging_handler
+
+log = Logger("client")
 
 
 """
@@ -29,7 +28,7 @@ class RemoteLogging(StubClientMixin):
         self.log_both = False
         self.monotonic_start_time = monotonic_time()
 
-    def init(self, opts, _extra_args=[]):
+    def init(self, opts, _extra_args=None):
         self.log_both = (opts.remote_logging or "").lower()=="both"
         self.client_supports_remote_logging = self.log_both or parse_bool("remote-logging", opts.remote_logging)
 

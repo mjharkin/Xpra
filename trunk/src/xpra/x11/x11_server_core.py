@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
 # Copyright (C) 2011 Serviware (Arthur Huillet, <ahuillet@serviware.com>)
-# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -9,8 +9,6 @@
 import os
 
 from xpra.gtk_common.gobject_compat import import_gdk
-gdk = import_gdk()
-
 from xpra.x11.bindings.core_bindings import set_context_check, X11CoreBindings     #@UnresolvedImport
 from xpra.x11.bindings.randr_bindings import RandRBindings  #@UnresolvedImport
 from xpra.x11.bindings.keyboard_bindings import X11KeyboardBindings #@UnresolvedImport
@@ -21,9 +19,14 @@ from xpra.server.server_uuid import save_uuid, get_uuid
 from xpra.x11.fakeXinerama import find_libfakeXinerama, save_fakeXinerama_config, cleanup_fakeXinerama
 from xpra.x11.gtk_x11.prop import prop_get, prop_set
 from xpra.x11.common import MAX_WINDOW_SIZE
-from xpra.os_util import StringIOClass, monotonic_time, strtobytes, PYTHON3
-from xpra.util import engs, csv, typedict, XPRA_DPI_NOTIFICATION_ID
+from xpra.os_util import StringIOClass, monotonic_time, strtobytes, bytestostr, PYTHON3
+from xpra.util import engs, csv, typedict, iround, envbool, XPRA_DPI_NOTIFICATION_ID
 from xpra.net.compression import Compressed
+from xpra.server.gtk_server_base import GTKServerBase
+from xpra.x11.xkbhelper import clean_keyboard_state
+from xpra.log import Logger
+
+gdk = import_gdk()
 
 set_context_check(verify_sync)
 RandR = RandRBindings()
@@ -35,7 +38,6 @@ if PYTHON3:
     unicode = str           #@ReservedAssignment
 
 
-from xpra.log import Logger
 log = Logger("x11", "server")
 keylog = Logger("x11", "server", "keyboard")
 mouselog = Logger("x11", "server", "mouse")
@@ -45,10 +47,6 @@ screenlog = Logger("server", "screen")
 xinputlog = Logger("xinput")
 gllog = Logger("screen", "opengl")
 
-from xpra.util import iround, envbool
-from xpra.os_util import bytestostr
-from xpra.server.gtk_server_base import GTKServerBase
-from xpra.x11.xkbhelper import clean_keyboard_state
 
 ALWAYS_NOTIFY_MOTION = envbool("XPRA_ALWAYS_NOTIFY_MOTION", False)
 
@@ -145,7 +143,7 @@ class X11ServerCore(GTKServerBase):
             if len(sizes)==1:
                 self.randr_exact_size = True
                 prop_set(self.root_window, "_XPRA_RANDR_EXACT_SIZE", "u32", 1)
-            elif len(sizes)==0:
+            elif not sizes:
                 #xwayland?
                 self.randr = False
                 self.randr_exact_size = False
@@ -189,16 +187,17 @@ class X11ServerCore(GTKServerBase):
                 blacklisted_kernel_modules.append(mod)
         if blacklisted_kernel_modules:
             gllog.warn("Warning: skipped OpenGL probing,")
-            gllog.warn(" found %i blacklisted kernel module%s:", len(blacklisted_kernel_modules), engs(blacklisted_kernel_modules))
+            gllog.warn(" found %i blacklisted kernel module%s:",
+                       len(blacklisted_kernel_modules), engs(blacklisted_kernel_modules))
             gllog.warn(" %s", csv(blacklisted_kernel_modules))
             self.opengl_props["error"] = "VirtualBox guest detected: %s" % csv(blacklisted_kernel_modules)
         else:
             try:
-                import subprocess
+                from subprocess import Popen, PIPE
                 from xpra.platform.paths import get_xpra_command
                 cmd = self.get_full_child_command(get_xpra_command()+["opengl"])
                 env = self.get_child_env()
-                proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, shell=False, close_fds=True)
+                proc = Popen(cmd, stdin=PIPE, stdout=PIPE, stderr=PIPE, env=env, shell=False, close_fds=True)
                 out,err = proc.communicate()
                 gllog("out(%s)=%s", cmd, out)
                 gllog("err(%s)=%s", cmd, err)
@@ -257,7 +256,8 @@ class X11ServerCore(GTKServerBase):
 
 
     def set_keyboard_layout_group(self, grp):
-        keylog("set_keyboard_layout_group(%i) config=%s, current keyboard group=%s", grp, self.keyboard_config, self.current_keyboard_group)
+        keylog("set_keyboard_layout_group(%i) config=%s, current keyboard group=%s",
+               grp, self.keyboard_config, self.current_keyboard_group)
         if not self.keyboard_config:
             return
         if not self.keyboard_config.xkbmap_layout_groups:
@@ -270,7 +270,7 @@ class X11ServerCore(GTKServerBase):
             try:
                 with xsync:
                     self.current_keyboard_group = X11Keyboard.set_layout_group(grp)
-            except Exception as e:
+            except XError as e:
                 keylog("set_keyboard_layout_group group=%s", grp, exc_info=True)
                 keylog.error("Error: failed to set keyboard layout group '%s'", grp)
                 keylog.error(" %s", e)
@@ -311,7 +311,8 @@ class X11ServerCore(GTKServerBase):
             self.key_repeat_delay, self.key_repeat_interval = key_repeat
             if self.key_repeat_delay>0 and self.key_repeat_interval>0:
                 X11Keyboard.set_key_repeat_rate(self.key_repeat_delay, self.key_repeat_interval)
-                keylog.info("setting key repeat rate from client: %sms delay / %sms interval", self.key_repeat_delay, self.key_repeat_interval)
+                keylog.info("setting key repeat rate from client: %sms delay / %sms interval",
+                            self.key_repeat_delay, self.key_repeat_interval)
         else:
             #dont do any jitter compensation:
             self.key_repeat_delay = -1
@@ -392,8 +393,8 @@ class X11ServerCore(GTKServerBase):
                         "options"   : tuple(reversed(sorted(sizes))),
                         "exact"     : self.randr_exact_size,
                         }
-        except:
-            pass
+        except XError:
+            log("failed to query randr screen sizes", exc_info=True)
         return info
 
 
@@ -403,7 +404,9 @@ class X11ServerCore(GTKServerBase):
         cd = self.last_cursor_image
         if cd is None:
             return {"" : "None"}
-        cinfo = {"is_default"   : bool(self.default_cursor_image and len(self.default_cursor_image)>=8 and len(cd)>=8 and cd[7]==cd[7])}
+        cinfo = {
+            "is_default"   : bool(self.default_cursor_image and len(self.default_cursor_image)>=8 and len(cd)>=8 and cd[7]==cd[7]),
+            }
         #all but pixels:
         for i, x in enumerate(("x", "y", "width", "height", "xhot", "yhot", "serial", None, "name")):
             if x:
@@ -461,7 +464,7 @@ class X11ServerCore(GTKServerBase):
         #make sure the timer doesn't fire and interfere:
         self.cancel_key_repeat_timer()
         #clear all the keys we know about:
-        if len(self.keys_pressed)>0:
+        if self.keys_pressed:
             keylog("clearing keys pressed: %s", self.keys_pressed)
             with xsync:
                 for keycode in self.keys_pressed.keys():
@@ -482,7 +485,7 @@ class X11ServerCore(GTKServerBase):
         try:
             with xsync:
                 return X11Keyboard.get_cursor_image()
-        except Exception as e:
+        except XError as e:
             cursorlog.error("Error getting cursor data:")
             cursorlog.error(" %s", e)
             return None
@@ -537,7 +540,8 @@ class X11ServerCore(GTKServerBase):
                 max_h = max(max_h, h)
             if len(sss)>1:
                 screenlog.info("* %s: %s", ss.uuid, size)
-        screenlog("maximum client resolution is %sx%s (current server resolution is %sx%s)", max_w, max_h, root_w, root_h)
+        screenlog("maximum client resolution is %sx%s (current server resolution is %sx%s)",
+                  max_w, max_h, root_w, root_h)
         if max_w<=0 or max_h<=0:
             #invalid - use fallback
             return root_w, root_h
@@ -561,7 +565,7 @@ class X11ServerCore(GTKServerBase):
                         import time
                         time.sleep(0.5)
                         return v
-            except Exception as e:
+            except XError as e:
                 screenlog.warn("Warning: failed to add resolution %ix%i:", desired_w, desired_h)
                 screenlog.warn(" %s", e)
             #re-query:
@@ -581,14 +585,15 @@ class X11ServerCore(GTKServerBase):
             new_size = w,h
         if not new_size:
             screenlog.warn("Warning: no matching resolution found for %sx%s", desired_w, desired_h)
-            if len(closest)>0:
+            if closest:
                 min_dist = sorted(closest.keys())[0]
                 new_size = closest[min_dist]
                 screenlog.warn(" using %sx%s instead", *new_size)
             else:
                 root_w, root_h = self.root_window.get_size()
                 return root_w, root_h
-        screenlog("best %s resolution for client(%sx%s) is: %s", ["smaller", "bigger"][bigger], desired_w, desired_h, new_size)
+        screenlog("best %s resolution for client(%sx%s) is: %s",
+                  ["smaller", "bigger"][bigger], desired_w, desired_h, new_size)
         w, h = new_size
         return w, h
 
@@ -617,7 +622,8 @@ class X11ServerCore(GTKServerBase):
             for ss in sss:
                 for s in ss.screen_sizes:
                     if len(s)>=10:
-                        #display_name, width, height, width_mm, height_mm, monitors, work_x, work_y, work_width, work_height
+                        #(display_name, width, height, width_mm, height_mm, monitors,
+                        # work_x, work_y, work_width, work_height)
                         client_w = max(client_w, s[1])
                         client_h = max(client_h, s[2])
                         wmm = max(wmm, s[3])
@@ -626,7 +632,8 @@ class X11ServerCore(GTKServerBase):
                 #calculate "real" dpi:
                 xdpi = iround(client_w * 25.4 / wmm)
                 ydpi = iround(client_h * 25.4 / hmm)
-                screenlog("calculated DPI: %s x %s (from w: %s / %s, h: %s / %s)", xdpi, ydpi, client_w, wmm, client_h, hmm)
+                screenlog("calculated DPI: %s x %s (from w: %s / %s, h: %s / %s)",
+                          xdpi, ydpi, client_w, wmm, client_h, hmm)
         self.set_dpi(xdpi, ydpi)
 
         #try to find the best screen size to resize to:
@@ -660,7 +667,7 @@ class X11ServerCore(GTKServerBase):
                             #use the number of extra pixels as key:
                             #(so we can choose the closest resolution)
                             temp[abs((tw*th) - (w*h))] = (tw, th)
-                if len(temp)==0:
+                if not temp:
                     screenlog.warn("cannot find a temporary resolution for Xinerama workaround!")
                 else:
                     k = sorted(temp.keys())[0]
@@ -680,7 +687,7 @@ class X11ServerCore(GTKServerBase):
                 try:
                     with xsync:
                         RandR.xrr_set_screen_size(w, h, self.xdpi or self.dpi, self.ydpi or self.dpi)
-                except Exception:
+                except XError:
                     screenlog("XRRSetScreenSize failed", exc_info=True)
             screenlog("calling RandR.get_screen_size()")
             with xsync:
@@ -794,7 +801,8 @@ class X11ServerCore(GTKServerBase):
         #so we use wid=0 for that:
         wid = 0
         for ss in self._server_sources.values():
-            ss.bell(wid, event.device, event.percent, event.pitch, event.duration, event.bell_class, event.bell_id, event.bell_name or "")
+            name = strtobytes(event.bell_name or "")
+            ss.bell(wid, event.device, event.percent, event.pitch, event.duration, event.bell_class, event.bell_id, name)
 
 
     def _bell_signaled(self, wm, event):
@@ -805,11 +813,12 @@ class X11ServerCore(GTKServerBase):
         if event.window!=get_default_root_window() and event.window_model is not None:
             try:
                 wid = self._window_to_id[event.window_model]
-            except:
+            except KeyError:
                 pass
         log("_bell_signaled(%s,%r) wid=%s", wm, event, wid)
         for ss in self._server_sources.values():
-            ss.bell(wid, event.device, event.percent, event.pitch, event.duration, event.bell_class, event.bell_id, strtobytes(event.bell_name or ""))
+            name = strtobytes(event.bell_name or "")
+            ss.bell(wid, event.device, event.percent, event.pitch, event.duration, event.bell_class, event.bell_id, name)
 
 
     def get_screen_number(self, _wid):
@@ -905,7 +914,8 @@ class X11ServerCore(GTKServerBase):
         screen_no = self.get_screen_number(wid)
         device = self.get_pointer_device(deviceid)
         x, y = self._get_pointer_abs_coordinates(wid, pos)
-        mouselog("move_pointer(%s, %s, %s) screen_no=%i, device=%s, position=%s", wid, pos, deviceid, screen_no, device, (x, y))
+        mouselog("move_pointer(%s, %s, %s) screen_no=%i, device=%s, position=%s",
+                 wid, pos, deviceid, screen_no, device, (x, y))
         try:
             device.move_pointer(screen_no, x, y, *args)
         except Exception as e:
@@ -959,7 +969,7 @@ class X11ServerCore(GTKServerBase):
 
     def make_screenshot_packet_from_regions(self, regions):
         #regions = array of (wid, x, y, PIL.Image)
-        if len(regions)==0:
+        if not regions:
             log("screenshot: no regions found, returning empty 0x0 image!")
             return ["screenshot", 0, 0, "png", -1, ""]
         #in theory, we could run the rest in a non-UI thread since we're done with GTK..
@@ -986,7 +996,7 @@ class X11ServerCore(GTKServerBase):
                 pixels = pixels.tobytes()
             try:
                 window_image = Image.frombuffer(target_format, (w, h), pixels, "raw", pixel_format, img.get_rowstride())
-            except:
+            except Exception:
                 log.error("Error parsing window pixels in %s format for window %i", pixel_format, wid, exc_info=True)
                 continue
             tx = x-minx

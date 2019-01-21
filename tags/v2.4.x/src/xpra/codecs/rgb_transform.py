@@ -75,7 +75,7 @@ def rgb_reformat(image, rgb_formats, supports_transparency):
     img = Image.frombuffer(target_format, (w, h), pixels, "raw", input_format, image.get_rowstride())
     rowstride = w*len(target_format)    #number of characters is number of bytes per pixel!
     data = img.tobytes("raw", target_format)
-    assert len(data)==rowstride*h, "expected %s bytes in %s format but got %s" % (rowstride*h, len(data))
+    assert len(data)==rowstride*h, "expected %s bytes in %s format but got %s" % (rowstride*h, target_format, len(data))
     image.set_pixels(data)
     image.set_rowstride(rowstride)
     image.set_pixel_format(target_format)

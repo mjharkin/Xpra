@@ -35,6 +35,8 @@ $PACMAN --noconfirm -S ${XPKG}ffmpeg ${XPKG}gst-plugins-good ${XPKG}gst-plugins-
 $PACMAN --noconfirm -S ${XPKG}lz4 ${XPKG}lzo2 ${XPKG}xxhash ${XPKG}libsodium openssh sshpass
 #python3 GStreamer bindings:
 $PACMAN --noconfirm -S ${XPKG}gst-python
+#Git:
+$PACMAN --noconfirm -S git
 #development tools and libs for building extra packages:
 $PACMAN --noconfirm -S base-devel ${XPKG}yasm ${XPKG}nasm subversion rsync zip gtk-doc ${XPKG}cmake ${XPKG}gcc ${XPKG}pkg-config ${XPKG}libffi ${XPKG}gss ${XPKG}openldap
 #python libraries and packaging tools:

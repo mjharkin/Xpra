@@ -284,6 +284,27 @@ def load_ignored_changed_files():
             ignored.append(s)
     return ignored
 
+def get_git_props():
+    props = {
+                "REVISION" : "unknown",
+                "LOCAL_MODIFICATIONS" : "unknown"
+            }
+    #find revision:
+    proc = subprocess.Popen("git log -1 --format='%h'", stdin=None, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+    (out, _) = proc.communicate()
+    if proc.returncode!=0:
+        print("git log -1 --format='%h' failed with return code %s" % proc.returncode)
+        return  props
+    if not out:
+        print("could not get version information")
+        return  props
+    out = re.sub(r"[\n\t\s]*", "", out.decode('utf-8'))
+    props["REVISION"] = out
+    #TODO implement local mods
+    props["LOCAL_MODIFICATIONS"] = "0"
+    return props
+            
+
 def get_svn_props():
     props = {
                 "REVISION" : "unknown",
@@ -354,7 +375,10 @@ def get_svn_props():
 
 SRC_INFO_FILE = "./xpra/src_info.py"
 def record_src_info():
-    update_properties(get_svn_props(), SRC_INFO_FILE)
+    props = get_svn_props()
+    if props["REVISION"] is "unknown":
+        props = get_git_props()
+    update_properties(get_git_props(), SRC_INFO_FILE)
 
 def has_src_info():
     return os.path.exists(SRC_INFO_FILE) and os.path.isfile(SRC_INFO_FILE)

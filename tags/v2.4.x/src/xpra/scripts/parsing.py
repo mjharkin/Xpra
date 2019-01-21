@@ -160,12 +160,12 @@ def parse_env(env):
                 continue
             v = ev.split("=", 1)
             if len(v)!=2:
-                warn("Warning: invalid environment option '%s'", ev)
+                warn("Warning: invalid environment option '%s'" % ev)
                 continue
             d[v[0]] = os.path.expandvars(v[1])
         except Exception as e:
-            warn("Warning: cannot parse environment option '%s':", ev)
-            warn(" %s", e)
+            warn("Warning: cannot parse environment option '%s':" % ev)
+            warn(" %s" % e)
     return d
 
 

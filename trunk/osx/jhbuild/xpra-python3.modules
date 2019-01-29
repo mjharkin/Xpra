@@ -146,9 +146,9 @@
 
 	<distutils id="python3-packaging" python3="1">
 		<branch repo="pypi.python.org"
-			module="/packages/cf/50/1f10d2626df0aa97ce6b62cf6ebe14f605f4e101234f7748b8da4138a8ed/packaging-18.0.tar.gz"
-			hash="sha256:0886227f54515e592aaa2e5a553332c73962917f2831f1b0f9b9f4380a4b9807"
-			version="18.0"/>
+			module="/packages/16/51/d72654dbbaa4a4ffbf7cb0ecd7d12222979e0a660bf3f42acc47550bf098/packaging-19.0.tar.gz"
+			hash="sha256:03432ca3d87a962ab267f17fd59a16bbd43bb0eff9291c10b6801a002422b17a"
+			version="19.0"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -173,9 +173,9 @@
 
 	<distutils id="python3-cryptography" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/f3/39/d3904df7c56f8654691c4ae1bdb270c1c9220d6da79bd3b1fbad91afd0e1/cryptography-2.4.2.tar.gz"
-			hash="sha256:05a6052c6a9f17ff78ba78f8e6eb1d777d25db3b763343a1ae89a7a8670386dd"
-			version="2.4.2"/>
+			module="/packages/69/ed/5e97b7f54237a9e4e6291b6e52173372b7fa45ca730d36ea90b790c0059a/cryptography-2.5.tar.gz"
+			hash="sha256:4946b67235b9d2ea7d31307be9d5ad5959d6c4a8f98f900157b47abddf698401"
+			version="2.5"/>
 		<dependencies>
 			<dep package="python3"/>
 			<dep package="openssl"/>
@@ -240,9 +240,10 @@
 
 	<distutils id="python3-cython" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/c1/f2/d1207fd0dfe5cb4dbb06a035eb127653821510d896ce952b5c66ca3dafa4/Cython-0.29.2.tar.gz"
-			hash="sha256:2ac187ff998a95abb7fae452b5178f91e1a713698c9ced89836c94e6b1d3f41e"
-			version="0.29.2"/>
+			module="https://github.com/cython/cython/archive/0.29.3.tar.gz"
+			hash="sha256:4a33fd40c28e67413817f814adadfe2047a66ac3dcc81ff81651a54a03d6cbd0"
+			checkoutdir="cython-0.29.3"
+			version="0.29.3"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -525,9 +526,9 @@
 
 	<distutils id="python3-decorator" python3="1">
 		<branch repo="pypi.python.org"
-			module="/packages/6f/24/15a229626c775aae5806312f6bf1e2a73785be3402c0acdec5dbddd8c11e/decorator-4.3.0.tar.gz"
-			hash="sha256:c39efa13fbdeb4506c476c9b3babf6a718da943dab7811c206005a4a956c080c"
-			version="4.3.0">
+			module="/packages/c4/26/b48aaa231644bc875bb348e162d156edb18b994da900a10f4493ea995a2f/decorator-4.3.2.tar.gz"
+			hash="sha256:33cd704aea07b4c28b3eb2c97d288a06918275dac0ecebdaf1bc8a48d98adb9e"
+			version="4.3.2">
 		</branch>
 		<dependencies>
 			<dep package="python3"/>

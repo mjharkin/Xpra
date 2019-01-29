@@ -30,17 +30,13 @@ SUPPORT_24BPP = envbool("XPRA_X264_SUPPORT_24BPP")
 TUNE = os.environ.get("XPRA_X264_TUNE")
 LOG_NALS = envbool("XPRA_X264_LOG_NALS")
 SAVE_TO_FILE = os.environ.get("XPRA_SAVE_TO_FILE")
+BLANK_VIDEO = envbool("XPRA_X264_BLANK_VIDEO")
 
 FAST_DECODE_MIN_SPEED = envint("XPRA_FAST_DECODE_MIN_SPEED", 70)
 
 
 cdef extern from "string.h":
     int vsnprintf(char * s, size_t n, const char * format, va_list arg)
-
-cdef extern from "stdint.h":
-    pass
-cdef extern from "inttypes.h":
-    pass
 
 cdef extern from "stdarg.h":
     ctypedef struct va_list:
@@ -485,6 +481,7 @@ cdef class Encoder:
     cdef object last_frame_times
     cdef object file
     cdef object frame_types
+    cdef object blank_buffer
     cdef uint64_t first_frame_timestamp
 
     cdef object __weakref__
@@ -529,6 +526,8 @@ cdef class Encoder:
             filename = SAVE_TO_FILE+"x264-"+str(gen)+".%s" % encoding
             self.file = open(filename, 'wb')
             log.info("saving %s stream to %s", encoding, filename)
+        if BLANK_VIDEO:
+            self.blank_buffer = b"\0" * (self.width * self.height * 4)
 
     def get_tune(self):
         log("x264: get_tune() TUNE=%s, fast_decode=%s, content_type=%s", TUNE, self.fast_decode, self.content_type)
@@ -802,9 +801,16 @@ cdef class Encoder:
             self.b_frames = b_frames
             self.reconfig_tune()
 
-        pixels = image.get_pixels()
-        istrides = image.get_rowstride()
+        
+        if BLANK_VIDEO:
+            if image.get_planes()==3:
+                pixels = (self.blank_buffer, self.blank_buffer, self.blank_buffer)
+            else:
+                pixels = self.blank_buffer
+        else:
+            pixels = image.get_pixels()
         assert pixels, "failed to get pixels from %s" % image
+        istrides = image.get_rowstride()
 
         x264_picture_init(&pic_in)
 

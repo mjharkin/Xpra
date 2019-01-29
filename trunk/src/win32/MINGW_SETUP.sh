@@ -32,15 +32,16 @@ $PACMAN --noconfirm -S ${XPKG}python2 ${XPKG}python2-pygtk ${XPKG}gtkglext ${XPK
 #media libraries (more than we actually need):
 $PACMAN --noconfirm -S ${XPKG}ffmpeg ${XPKG}gst-plugins-good ${XPKG}gst-plugins-bad ${XPKG}gst-plugins-ugly
 #network layer libraries:
-$PACMAN --noconfirm -S ${XPKG}lz4 ${XPKG}lzo2 ${XPKG}xxhash ${XPKG}libsodium openssh sshpass
+$PACMAN --noconfirm -S ${XPKG}lz4 ${XPKG}lzo2 ${XPKG}xxhash openssh sshpass
 #python3 GStreamer bindings:
 $PACMAN --noconfirm -S ${XPKG}gst-python
 #Git:
 $PACMAN --noconfirm -S git
 #development tools and libs for building extra packages:
-$PACMAN --noconfirm -S base-devel ${XPKG}yasm ${XPKG}nasm subversion rsync zip gtk-doc ${XPKG}cmake ${XPKG}gcc ${XPKG}pkg-config ${XPKG}libffi ${XPKG}gss ${XPKG}openldap
+$PACMAN --noconfirm -S base-devel ${XPKG}yasm ${XPKG}nasm subversion rsync zip gtk-doc ${XPKG}cmake ${XPKG}gcc ${XPKG}pkg-config ${XPKG}libffi
 #python libraries and packaging tools:
-for x in cryptography cffi pycparser numpy pillow cx_Freeze appdirs paramiko comtypes netifaces rencode; do
+$PACMAN --noconfirm -S ${XPKG}python2-enum34
+for x in cryptography cffi pycparser numpy pillow cx_Freeze appdirs paramiko comtypes netifaces rencode websocket-client setproctitle pyu2f ldap ldap3 bcrypt pynacl; do
 	$PACMAN --noconfirm -S ${XPKG}python2-${x}
 	$PACMAN --noconfirm -S ${XPKG}python3-${x}
 done
@@ -48,17 +49,15 @@ done
 $PACMAN --noconfirm -S ${XPKG}python2-ipaddress
 $PACMAN --noconfirm -S ${XPKG}cython2 ${XPKG}python2-setuptools
 $PACMAN --noconfirm -S ${XPKG}cython
-#using easy-install for python libraries which are not packaged by mingw:
-#build pynacl against the system library:
-export SODIUM_INSTALL=system
-easy_install-2.7 -U -Z enum34 enum-compat
-for x in lz4 websocket-client websockify nvidia-ml-py setproctitle pyu2f python-ldap ldap3 bcrypt pynacl; do
+#using easy-install for python libraries which are not yet packaged by mingw:
+easy_install-2.7 -U -Z enum-compat
+for x in lz4 websockify nvidia-ml-py; do
     easy_install-2.7 -U -Z $x
     easy_install-3.7 -U -Z $x
 done
-#last version to support python2:
+#use the last version to support python2 (not the broken one in mingw):
 easy_install-2.7 -U -Z zeroconf==0.19.1
-easy_install-3.7 -U -Z zeroconf
+$PACMAN --noconfirm -S ${XPKG}python3-zeroconf
 
 #pyopengl problems:
 #use 3.1.1a1 as there are bugs in later versions on win32:

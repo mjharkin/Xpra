@@ -1,5 +1,5 @@
 # This file is part of Xpra.
-# Copyright (C) 2011-2017 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2011-2019 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008, 2009, 2010 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -12,23 +12,27 @@ import os
 from socket import error as socket_error
 from threading import Lock, Event
 
-
-from xpra.log import Logger
-log = Logger("network", "protocol")
-cryptolog = Logger("network", "crypto")
-
 from xpra.os_util import PYTHON3, Queue, memoryview_to_bytes, strtobytes, bytestostr, hexstr
 from xpra.util import repr_ellipsized, csv, envint, envbool
 from xpra.make_thread import make_thread, start_thread
 from xpra.net.common import ConnectionClosedException          #@UndefinedVariable (pydev false positive)
 from xpra.net.bytestreams import ABORT
 from xpra.net import compression
+from xpra.net.compression import (
+    decompress, sanity_checks as compression_sanity_checks,
+    InvalidCompressionException, Compressed, LevelCompressed, Compressible, LargeStructure,
+    )
 from xpra.net import packet_encoding
-from xpra.net.compression import decompress, sanity_checks as compression_sanity_checks,\
-        InvalidCompressionException, Compressed, LevelCompressed, Compressible, LargeStructure
-from xpra.net.packet_encoding import decode, sanity_checks as packet_encoding_sanity_checks, InvalidPacketEncodingException
-from xpra.net.header import unpack_header, pack_header, FLAGS_CIPHER, FLAGS_NOHEADER
+from xpra.net.packet_encoding import (
+    decode, sanity_checks as packet_encoding_sanity_checks,
+    InvalidPacketEncodingException,
+    )
+from xpra.net.header import unpack_header, pack_header, FLAGS_CIPHER, FLAGS_NOHEADER, HEADER_SIZE
 from xpra.net.crypto import get_encryptor, get_decryptor, pad, INITIAL_PADDING
+from xpra.log import Logger
+
+log = Logger("network", "protocol")
+cryptolog = Logger("network", "crypto")
 
 
 #stupid python version breakage:
@@ -621,7 +625,8 @@ class Protocol(object):
         conn = self._conn
         if not conn:
             return False
-        conn.set_nodelay(not more)
+        if more or len(buf_data)>1:
+            conn.set_nodelay(False)
         if start_cb:
             try:
                 start_cb(conn.output_bytecount)
@@ -629,6 +634,8 @@ class Protocol(object):
                 if not self._closed:
                     log.error("Error on write start callback %s", start_cb, exc_info=True)
         self.write_buffers(buf_data, fail_cb, synchronous)
+        if not more:
+            conn.set_nodelay(True)
         if end_cb:
             try:
                 end_cb(self._conn.output_bytecount)
@@ -707,7 +714,7 @@ class Protocol(object):
         self.invalid_header(self, data, msg)
 
     def invalid_header(self, _proto, data, msg="invalid packet header"):
-        err = "%s: '%s'" % (msg, hexstr(data[:8]))
+        err = "%s: '%s'" % (msg, hexstr(data[:HEADER_SIZE]))
         if len(data)>1:
             err += " read buffer=%s (%i bytes)" % (repr_ellipsized(data), len(data))
         self.gibberish(err, data)
@@ -771,7 +778,6 @@ class Protocol(object):
                 read_buffer = read_buffer + buf
             else:
                 read_buffer = buf
-            bl = len(read_buffer)
             while not self._closed:
                 packet = None
                 bl = len(read_buffer)
@@ -781,17 +787,17 @@ class Protocol(object):
                     if read_buffer[0] not in ("P", ord("P")):
                         self._invalid_header(read_buffer, "invalid packet header byte %s" % read_buffer[0])
                         return
-                    if bl<8:
+                    if bl<HEADER_SIZE:
                         break   #packet still too small
-                    #packet format: struct.pack(b'cBBBL', ...) - 8 bytes
-                    _, protocol_flags, compression_level, packet_index, data_size = unpack_header(read_buffer[:8])
+                    #packet format: struct.pack(b'cBBBL', ...) - HEADER_SIZE bytes
+                    _, protocol_flags, compression_level, packet_index, data_size = unpack_header(read_buffer[:HEADER_SIZE])
 
                     #sanity check size (will often fail if not an xpra client):
                     if data_size>self.abs_max_packet_size:
                         self._invalid_header(read_buffer, "invalid size in packet header: %s" % data_size)
                         return
 
-                    bl = len(read_buffer)-8
+                    bl = len(read_buffer)-HEADER_SIZE
                     if protocol_flags & FLAGS_CIPHER:
                         if self.cipher_in_block_size==0 or not self.cipher_in_name:
                             cryptolog.warn("received cipher block but we don't have a cipher to decrypt it with, not an xpra client?")
@@ -804,7 +810,7 @@ class Protocol(object):
                         padding_size = 0
                         payload_size = data_size
                     assert payload_size>0, "invalid payload size: %i" % payload_size
-                    read_buffer = read_buffer[8:]
+                    read_buffer = read_buffer[HEADER_SIZE:]
 
                     if payload_size>self.max_packet_size:
                         #this packet is seemingly too big, but check again from the main UI thread
@@ -831,7 +837,7 @@ class Protocol(object):
                 else:
                     raw_string = read_buffer[:payload_size]
                     read_buffer = read_buffer[payload_size:]
-                packet_size += 8+payload_size
+                packet_size += HEADER_SIZE + payload_size
                 #decrypt if needed:
                 data = raw_string
                 if self.cipher_in and protocol_flags & FLAGS_CIPHER:

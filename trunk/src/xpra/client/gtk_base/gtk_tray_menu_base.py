@@ -47,7 +47,6 @@ SHOW_SERVER_COMMANDS = envbool("XPRA_SHOW_SERVER_COMMANDS", True)
 SHOW_TRANSFERS = envbool("XPRA_SHOW_TRANSFERS", True)
 SHOW_CLIPBOARD_MENU = envbool("XPRA_SHOW_CLIPBOARD_MENU", True)
 SHOW_SHUTDOWN = envbool("XPRA_SHOW_SHUTDOWN", True)
-SHOW_CLOSE = envbool("XPRA_SHOW_CLOSE", True)
 WINDOWS_MENU = envbool("XPRA_SHOW_WINDOWS_MENU", True)
 START_MENU = envbool("XPRA_SHOW_START_MENU", True)
 
@@ -258,8 +257,9 @@ class GTKTrayMenuBase(object):
 
     def build(self):
         if self.menu is None:
+            show_close = True #or WIN32
             try:
-                self.menu = self.setup_menu(SHOW_CLOSE)
+                self.menu = self.setup_menu(show_close)
             except Exception as e:
                 log("build()", exc_info=True)
                 log.error("Error: failed to setup menu")
@@ -1595,12 +1595,12 @@ class GTKTrayMenuBase(object):
                 width, height = img.size
                 rowstride = width * (3+int(has_alpha))
                 pixbuf = get_pixbuf_from_data(img.tobytes(), has_alpha, width, height, rowstride)
-                return scaled_image(pixbuf, icon_size=16)
+                return scaled_image(pixbuf, icon_size=32)
             except Exception:
                 log.error("Error: failed to load icon data for %s", bytestostr(app_name), exc_info=True)
                 log.error(" data=%s", repr_ellipsized(icondata))
         if pixbuf:
-            return scaled_image(pixbuf, icon_size=16)
+            return scaled_image(pixbuf, icon_size=32)
         return None
 
     def make_applaunch_menu_item(self, app_name, command_props):
@@ -1611,7 +1611,6 @@ class GTKTrayMenuBase(object):
             command = command_props.get(b"command")
             command = re.sub('\%[fFuU]', '', command)
             log("command=%s", command)
-            
             if command:
                 self.client.send_start_command(app_name, command, False, self.client.server_sharing)
         app_menu_item.connect("activate", app_launch)

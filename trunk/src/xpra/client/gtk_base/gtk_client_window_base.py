@@ -618,7 +618,7 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
         geometries = []
         for i, monitor in enumerate(monitors):
             plug_name, x, y, w, h = monitor[:5]
-            if wx>=x and wx+ww<=x+w+1 and wy+wh<=y+h+1:
+            if wx>=x and wx+ww<=x+w and wy+wh<=y+h:
                 geomlog("window fits in monitor %i: %s", i, plug_name)
                 return None
             xdists = (wx-x, wx+ww-x, wx-(x+w), wx+ww-(x+w))

@@ -11,12 +11,14 @@ from xpra.x11.gtk_x11.prop import prop_set
 from xpra.x11.gtk_x11.gdk_bindings import x11_get_server_time
 from xpra.gtk_common.gtk_util import get_default_root_window, screen_get_default, get_xwindow, is_realized
 from xpra.gtk_common.gobject_compat import import_gtk, import_gobject
-gtk = import_gtk()
-gobject = import_gobject()
-
 from xpra.log import Logger
+
 log = Logger("x11", "window")
 focuslog = Logger("x11", "window", "focus")
+
+
+gtk = import_gtk()
+gobject = import_gobject()
 
 
 XNone = constants["XNone"]
@@ -100,6 +102,11 @@ class WorldWindow(gtk.Window):
         super(WorldWindow, self).__init__()
         self.set_screen(screen)
         self.set_title("Xpra-WorldWindow")
+        self.set_skip_taskbar_hint(True)
+        self.set_skip_pager_hint(True)
+        self.set_decorated(False)
+        self.set_resizable(False)
+        self.set_opacity(0)
 
         # FIXME: This would better be a default handler, but there is a bug in
         # the superclass's default handler that means we can't call it

@@ -106,8 +106,6 @@ if PKG_CONFIG:
     else:
         print("WARNING: pkg-config not found!")
 
-from Cython.Compiler.Version import version as cython_version
-
 for arg in list(sys.argv):
     if arg.startswith("--pkg-config-path="):
         pcp = arg[len("--pkg-config-path="):]
@@ -154,6 +152,9 @@ sd_listen_ENABLED = POSIX and pkg_config_ok("--exists", "libsystemd") and (not i
 proxy_ENABLED  = DEFAULT
 client_ENABLED = DEFAULT
 scripts_ENABLED = not WIN32
+cython_ENABLED = DEFAULT
+modules_ENABLED = DEFAULT
+data_ENABLED = DEFAULT
 
 x11_ENABLED = DEFAULT and not WIN32 and not OSX
 xinput_ENABLED = x11_ENABLED
@@ -221,26 +222,29 @@ tests_ENABLED           = False
 rebuild_ENABLED         = True
 
 #allow some of these flags to be modified on the command line:
-SWITCHES = ["enc_x264", "enc_x265", "enc_ffmpeg",
-            "nvenc", "cuda_kernels", "cuda_rebuild", "nvfbc",
-            "vpx", "webp", "pillow", "jpeg_encoder", "jpeg_decoder",
-            "v4l2",
-            "dec_avcodec2", "csc_swscale",
-            "csc_libyuv",
-            "bencode", "cython_bencode", "vsock", "netdev", "mdns",
-            "clipboard",
-            "scripts",
-            "server", "client", "dbus", "x11", "xinput", "uinput", "sd_listen",
-            "gtk_x11", "service",
-            "gtk2", "gtk3", "example",
-            "html5", "minify", "html5_gzip", "html5_brotli",
-            "pam", "xdg_open",
-            "sound", "opengl", "printing", "webcam", "notifications", "keyboard",
-            "rebuild",
-            "annotate", "warn", "strict",
-            "shadow", "proxy", "rfb",
-            "debug", "PIC",
-            "Xdummy", "Xdummy_wrapper", "verbose", "tests", "bundle_tests"]
+SWITCHES = [
+    "cython", "modules", "data",
+    "enc_x264", "enc_x265", "enc_ffmpeg",
+    "nvenc", "cuda_kernels", "cuda_rebuild", "nvfbc",
+    "vpx", "webp", "pillow", "jpeg_encoder", "jpeg_decoder",
+    "v4l2",
+    "dec_avcodec2", "csc_swscale",
+    "csc_libyuv",
+    "bencode", "cython_bencode", "vsock", "netdev", "mdns",
+    "clipboard",
+    "scripts",
+    "server", "client", "dbus", "x11", "xinput", "uinput", "sd_listen",
+    "gtk_x11", "service",
+    "gtk2", "gtk3", "example",
+    "html5", "minify", "html5_gzip", "html5_brotli",
+    "pam", "xdg_open",
+    "sound", "opengl", "printing", "webcam", "notifications", "keyboard",
+    "rebuild",
+    "annotate", "warn", "strict",
+    "shadow", "proxy", "rfb",
+    "debug", "PIC",
+    "Xdummy", "Xdummy_wrapper", "verbose", "tests", "bundle_tests",
+    ]
 if WIN32:
     SWITCHES.append("zip")
     zip_ENABLED = True
@@ -311,6 +315,9 @@ if "clean" not in sys.argv:
         v = switches_info[k]
         print("* %s : %s" % (str(k).ljust(20), {None : "Auto", True : "Y", False : "N"}.get(v, v)))
 
+    if (enc_ffmpeg_ENABLED or enc_x264_ENABLED or enc_x265_ENABLED or
+        nvenc_ENABLED or OSX or x11_ENABLED):
+        assert cython_ENABLED
     #sanity check the flags:
     if clipboard_ENABLED and not server_ENABLED and not gtk2_ENABLED and not gtk3_ENABLED:
         print("Warning: clipboard can only be used with the server or one of the gtk clients!")
@@ -339,7 +346,7 @@ if "clean" not in sys.argv:
             except ImportError as e:
                 print("Warning: yuicompressor module not found, cannot minify")
                 minify_ENABLED = False
-    if not enc_x264_ENABLED and not vpx_ENABLED:
+    if DEFAULT and (not enc_x264_ENABLED and not vpx_ENABLED):
         print("Warning: no x264 and no vpx support!")
         print(" you should enable at least one of these two video encodings")
 
@@ -464,8 +471,9 @@ def toggle_modules(enabled, *module_names):
 
 
 #always included:
-add_modules("xpra", "xpra.platform", "xpra.net")
-add_modules("xpra.scripts.main")
+if modules_ENABLED:
+    add_modules("xpra", "xpra.platform", "xpra.net")
+    add_modules("xpra.scripts.main")
 
 
 def add_data_files(target_dir, files):
@@ -488,6 +496,8 @@ def print_option(prefix, k, v):
 # Utility methods for building with Cython
 def cython_version_check(min_version):
     from distutils.version import LooseVersion
+    assert cython_ENABLED
+    from Cython.Compiler.Version import version as cython_version
     if LooseVersion(cython_version) < LooseVersion(".".join([str(x) for x in min_version])):
         sys.exit("ERROR: Your version of Cython is too old to build this package\n"
                  "You have version %s\n"
@@ -500,6 +510,7 @@ def cython_add(extension, min_version=(0, 19)):
     #python2.7 setup.py build -b build-2.7 install --no-compile --root=/var/tmp/portage/x11-wm/xpra-0.7.0/temp/images/2.7
     if "--no-compile" in sys.argv and not ("build" in sys.argv and "install" in sys.argv):
         return
+    assert cython_ENABLED, "cython compilation is disabled"
     cython_version_check(min_version)
     from Cython.Distutils import build_ext
     ext_modules.append(extension)
@@ -1022,8 +1033,9 @@ from add_build_info import record_build_info, BUILD_INFO_FILE, record_src_info, 
 if "clean" not in sys.argv:
     # Add build info to build_info.py file:
     record_build_info()
-    # ensure it is included in the module list if it didn't exist before
-    add_modules(BUILD_INFO_FILE)
+    if modules_ENABLED:
+        # ensure it is included in the module list if it didn't exist before
+        add_modules(BUILD_INFO_FILE)
 
 if "sdist" in sys.argv:
     record_src_info()
@@ -1032,7 +1044,7 @@ if "install" in sys.argv or "build" in sys.argv:
     #if installing from source tree rather than
     #from a source snapshot, we may not have a "src_info" file
     #so create one:
-    if not has_src_info():
+    if not has_src_info() and modules_ENABLED:
         record_src_info()
         # ensure it is now included in the module list
         add_modules(SRC_INFO_FILE)
@@ -1064,7 +1076,8 @@ def install_html5(install_dir="www"):
 if WIN32:
     MINGW_PREFIX = os.environ.get("MINGW_PREFIX")
     assert MINGW_PREFIX, "you must run this build from a MINGW environment"
-    add_packages("xpra.platform.win32", "xpra.platform.win32.namedpipes")
+    if modules_ENABLED:
+        add_packages("xpra.platform.win32", "xpra.platform.win32.namedpipes")
     remove_packages("xpra.platform.darwin", "xpra.platform.xposix")
 
     #this is where the win32 gi installer will put things:
@@ -1416,14 +1429,16 @@ if WIN32:
             add_gui_exe("xpra/client/gtk_base/example/transparent_window.py",   "transparent.ico",  "Transparent-Window")
             add_gui_exe("xpra/client/gtk_base/example/fontrendering.py",        "font.ico",         "Font-Rendering")
 
+    if ("install_exe" in sys.argv) or ("install" in sys.argv):
         #FIXME: how do we figure out what target directory to use?
         print("calling build_xpra_conf in-place")
         #building etc files in-place:
-        build_xpra_conf(".")
-        add_data_files('etc/xpra', glob.glob("etc/xpra/*conf"))
-        add_data_files('etc/xpra', glob.glob("etc/xpra/nvenc*.keys"))
-        add_data_files('etc/xpra', glob.glob("etc/xpra/nvfbc*.keys"))
-        add_data_files('etc/xpra/conf.d', glob.glob("etc/xpra/conf.d/*conf"))
+        if data_ENABLED:
+            build_xpra_conf(".")
+            add_data_files('etc/xpra', glob.glob("etc/xpra/*conf"))
+            add_data_files('etc/xpra', glob.glob("etc/xpra/nvenc*.keys"))
+            add_data_files('etc/xpra', glob.glob("etc/xpra/nvfbc*.keys"))
+            add_data_files('etc/xpra/conf.d', glob.glob("etc/xpra/conf.d/*conf"))
         #build minified html5 client in temporary build dir:
         if "clean" not in sys.argv and html5_ENABLED:
             install_html5(os.path.join(install, "www"), )
@@ -1432,7 +1447,7 @@ if WIN32:
                     k = os.sep+k
                 add_data_files('www'+k, v)
 
-    if client_ENABLED or server_ENABLED:
+    if data_ENABLED:
         add_data_files(share_xpra,              ["win32/website.url"])
         add_data_files('%sicons' % share_xpra,  glob.glob('icons\\*.ico'))
 
@@ -1517,14 +1532,15 @@ else:
             libexec_scripts.append("scripts/auth_dialog")
         if libexec_scripts:
             add_data_files("%s/xpra/" % libexec, libexec_scripts)
-    man_path = "share/man"
-    if OPENBSD:
-        man_path = "man"
-    add_data_files("%s/man1" % man_path,  ["man/xpra.1", "man/xpra_launcher.1"])
-    add_data_files("share/applications",  ["xdg/xpra-shadow.desktop", "xdg/xpra-launcher.desktop", "xdg/xpra-browser.desktop", "xdg/xpra.desktop"])
-    add_data_files("share/mime/packages", ["xdg/application-x-xpraconfig.xml"])
-    add_data_files("share/icons",         ["xdg/xpra.png", "xdg/xpra-mdns.png", "xdg/xpra-shadow.png"])
-    add_data_files("share/appdata",       ["xdg/xpra.appdata.xml"])
+    if data_ENABLED:
+        man_path = "share/man"
+        if OPENBSD:
+            man_path = "man"
+        add_data_files("%s/man1" % man_path,  ["man/xpra.1", "man/xpra_launcher.1"])
+        add_data_files("share/applications",  ["xdg/xpra-shadow.desktop", "xdg/xpra-launcher.desktop", "xdg/xpra-browser.desktop", "xdg/xpra.desktop"])
+        add_data_files("share/mime/packages", ["xdg/application-x-xpraconfig.xml"])
+        add_data_files("share/icons",         ["xdg/xpra.png", "xdg/xpra-mdns.png", "xdg/xpra-shadow.png"])
+        add_data_files("share/appdata",       ["xdg/xpra.appdata.xml"])
 
     #here, we override build and install so we can
     #generate our /etc/xpra/xpra.conf
@@ -1643,11 +1659,12 @@ else:
         PYGTK_PACKAGES += ["gdk-x11-2.0", "gtk+-x11-2.0"]
         add_packages("xpra.platform.xposix")
         remove_packages("xpra.platform.win32", "xpra.platform.darwin")
-        #not supported by all distros, but doesn't hurt to install them anyway:
-        for x in ("tmpfiles.d", "sysusers.d"):
-            add_data_files("lib/%s" % x, ["%s/xpra.conf" % x])
-        if uinput_ENABLED:
-            add_data_files("lib/udev/rules.d/", ["udev/rules.d/71-xpra-virtual-pointer.rules"])
+        if data_ENABLED:
+            #not supported by all distros, but doesn't hurt to install them anyway:
+            for x in ("tmpfiles.d", "sysusers.d"):
+                add_data_files("lib/%s" % x, ["%s/xpra.conf" % x])
+            if uinput_ENABLED:
+                add_data_files("lib/udev/rules.d/", ["udev/rules.d/71-xpra-virtual-pointer.rules"])
 
     #gentoo does weird things, calls --no-compile with build *and* install
     #then expects to find the cython modules!? ie:
@@ -1721,12 +1738,13 @@ else:
 if scripts_ENABLED:
     scripts += ["scripts/xpra", "scripts/xpra_launcher"]
 
-add_data_files(share_xpra,                      ["README", "COPYING"])
-add_data_files(share_xpra,                      ["bell.wav"])
-add_data_files("%shttp-headers" % share_xpra,   glob.glob("http-headers/*"))
-add_data_files("%sicons" % share_xpra,          glob.glob("icons/*png"))
-add_data_files("%scontent-type" % share_xpra,   glob.glob("content-type/*"))
-add_data_files("%scontent-categories" % share_xpra, glob.glob("content-categories/*"))
+if data_ENABLED:
+    add_data_files(share_xpra,                      ["README", "COPYING"])
+    add_data_files(share_xpra,                      ["bell.wav"])
+    add_data_files("%shttp-headers" % share_xpra,   glob.glob("http-headers/*"))
+    add_data_files("%sicons" % share_xpra,          glob.glob("icons/*png"))
+    add_data_files("%scontent-type" % share_xpra,   glob.glob("content-type/*"))
+    add_data_files("%scontent-categories" % share_xpra, glob.glob("content-categories/*"))
 
 
 if html5_ENABLED:
@@ -1751,10 +1769,12 @@ memalign_c = "xpra/buffers/memalign.c"
 xxhash_c = "xpra/buffers/xxhash.c"
 membuffers_c = [memalign_c, buffers_c, xxhash_c]
 
-add_packages("xpra.buffers")
-buffers_pkgconfig = pkgconfig(optimize=3)
-cython_add(Extension("xpra.buffers.membuf",
-            ["xpra/buffers/membuf.pyx"]+membuffers_c, **buffers_pkgconfig))
+if modules_ENABLED:
+    add_packages("xpra.buffers")
+    buffers_pkgconfig = pkgconfig(optimize=3)
+    if cython_ENABLED:
+        cython_add(Extension("xpra.buffers.membuf",
+                    ["xpra/buffers/membuf.pyx"]+membuffers_c, **buffers_pkgconfig))
 
 
 toggle_packages(dbus_ENABLED, "xpra.dbus")
@@ -1799,13 +1819,14 @@ if OSX:
                 **quartz_pkgconfig
                 ))
 
-monotonic_time_pkgconfig = pkgconfig()
-if not OSX and not WIN32 and not OPENBSD:
-    add_to_keywords(monotonic_time_pkgconfig, 'extra_link_args', "-lrt")
-cython_add(Extension("xpra.monotonic_time",
-            ["xpra/monotonic_time.pyx", "xpra/monotonic_ctime.c"],
-            **monotonic_time_pkgconfig
-            ))
+if cython_ENABLED:
+    monotonic_time_pkgconfig = pkgconfig()
+    if not OSX and not WIN32 and not OPENBSD:
+        add_to_keywords(monotonic_time_pkgconfig, 'extra_link_args', "-lrt")
+    cython_add(Extension("xpra.monotonic_time",
+                ["xpra/monotonic_time.pyx", "xpra/monotonic_ctime.c"],
+                **monotonic_time_pkgconfig
+                ))
 
 
 toggle_packages(x11_ENABLED, "xpra.x11", "xpra.x11.bindings")
@@ -1949,7 +1970,8 @@ if client_ENABLED:
     add_modules("xpra.client", "xpra.client.mixins")
     add_modules("xpra.scripts.gtk_info")
     add_modules("xpra.scripts.show_webcam")
-add_modules("xpra.scripts.bug_report")
+if gtk2_ENABLED or gtk3_ENABLED:
+    add_modules("xpra.scripts.bug_report")
 toggle_packages((client_ENABLED and (gtk2_ENABLED or gtk3_ENABLED)) or (PYTHON3 and sound_ENABLED) or server_ENABLED, "xpra.gtk_common")
 toggle_packages(client_ENABLED and gtk2_ENABLED, "xpra.client.gtk2")
 toggle_packages(client_ENABLED and gtk3_ENABLED, "xpra.client.gtk3")

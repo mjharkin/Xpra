@@ -10,23 +10,27 @@ import signal
 from threading import Timer, RLock
 from time import sleep
 
-from xpra.log import Logger
-log = Logger("proxy")
-enclog = Logger("encoding")
-
-
 from xpra.server.server_core import get_server_info, get_thread_info
 from xpra.scripts.server import deadly_signal
 from xpra.net import compression
 from xpra.net.net_util import get_network_caps
 from xpra.net.compression import Compressed, compressed_wrapper
+from xpra.net.protocol_classes import get_client_protocol_class, get_server_protocol_class
 from xpra.net.protocol import Protocol
 from xpra.codecs.loader import load_codecs, get_codec
 from xpra.codecs.image_wrapper import ImageWrapper
 from xpra.codecs.video_helper import getVideoHelper, PREFERRED_ENCODER_ORDER
-from xpra.os_util import Queue, SIGNAMES, POSIX, osexpand, bytestostr, getuid, getgid, monotonic_time, get_username_for_uid, setuidgid, strtobytes
-from xpra.util import flatten_dict, typedict, updict, repr_ellipsized, xor, envint, envbool, csv, first_time, AtomicInteger, \
-    LOGIN_TIMEOUT, CONTROL_COMMAND_ERROR, AUTHENTICATION_ERROR, CLIENT_EXIT_TIMEOUT, SERVER_SHUTDOWN
+from xpra.os_util import (
+    SIGNAMES, POSIX,
+    Queue, osexpand, monotonic_time, bytestostr, strtobytes,
+    getuid, getgid, get_username_for_uid, setuidgid,
+    ) 
+from xpra.util import (
+    flatten_dict, typedict, updict,
+    repr_ellipsized, envint, envbool,
+    csv, first_time, AtomicInteger, \
+    LOGIN_TIMEOUT, CONTROL_COMMAND_ERROR, AUTHENTICATION_ERROR, CLIENT_EXIT_TIMEOUT, SERVER_SHUTDOWN,
+    )
 from xpra.version_util import XPRA_VERSION
 from xpra.make_thread import start_thread
 from xpra.scripts.config import parse_number, parse_bool
@@ -35,12 +39,10 @@ from xpra.server.socket_util import create_unix_domain_socket
 from xpra.platform.dotxpra import DotXpra
 from xpra.net.bytestreams import SocketConnection, SOCKET_TIMEOUT
 from multiprocessing import Process
+from xpra.log import Logger
 
-try:
-    from xpra.codecs.xor.cyxor import xor_str           #@UnresolvedImport
-    xor = xor_str
-except:
-    pass
+log = Logger("proxy")
+enclog = Logger("encoding")
 
 
 PROXY_QUEUE_SIZE = envint("XPRA_PROXY_QUEUE_SIZE", 10)
@@ -248,9 +250,11 @@ class ProxyInstanceProcess(Process):
         #setup protocol wrappers:
         self.server_packets = Queue(PROXY_QUEUE_SIZE)
         self.client_packets = Queue(PROXY_QUEUE_SIZE)
-        self.client_protocol = Protocol(self, self.client_conn, self.process_client_packet, self.get_client_packet)
+        client_protocol_class = get_client_protocol_class(self.client_conn.socktype)
+        server_protocol_class = get_server_protocol_class(self.server_conn.socktype)
+        self.client_protocol = client_protocol_class(self, self.client_conn, self.process_client_packet, self.get_client_packet)
         self.client_protocol.restore_state(self.client_state)
-        self.server_protocol = Protocol(self, self.server_conn, self.process_server_packet, self.get_server_packet)
+        self.server_protocol = server_protocol_class(self, self.server_conn, self.process_server_packet, self.get_server_packet)
         #server connection tweaks:
         for x in (b"input-devices", b"draw", b"window-icon", b"keymap-changed", b"server-settings"):
             self.server_protocol.large_packets.append(x)

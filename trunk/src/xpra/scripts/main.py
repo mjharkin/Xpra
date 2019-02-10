@@ -24,14 +24,19 @@ from xpra.os_util import (
     get_util_logger, getuid, getgid, monotonic_time, setsid, bytestostr, use_tty,
     WIN32, OSX, POSIX, PYTHON3, SIGNAMES, is_Ubuntu, getUbuntuVersion,
     )
-from xpra.scripts.parsing import info, warn, error, \
-    parse_vsock, parse_env, is_local, \
-    fixup_defaults, validated_encodings, validate_encryption, do_parse_cmdline, show_sound_codec_help, \
-    supports_shadow, supports_server, supports_proxy, supports_mdns
-from xpra.scripts.config import OPTION_TYPES, TRUE_OPTIONS, CLIENT_OPTIONS, NON_COMMAND_LINE_OPTIONS, CLIENT_ONLY_OPTIONS, START_COMMAND_OPTIONS, BIND_OPTIONS, PROXY_START_OVERRIDABLE_OPTIONS, OPTIONS_ADDED_SINCE_V1, OPTIONS_COMPAT_NAMES, \
-    InitException, InitInfo, InitExit, \
-    fixup_options, dict_to_validated_config, \
-    make_defaults_struct, parse_bool, has_sound_support, name_to_field
+from xpra.scripts.parsing import (
+    info, warn, error,
+    parse_vsock, parse_env, is_local,
+    fixup_defaults, validated_encodings, validate_encryption, do_parse_cmdline, show_sound_codec_help,
+    supports_shadow, supports_server, supports_proxy, supports_mdns,
+    )
+from xpra.scripts.config import (
+    OPTION_TYPES, TRUE_OPTIONS, CLIENT_OPTIONS, NON_COMMAND_LINE_OPTIONS, CLIENT_ONLY_OPTIONS,
+    START_COMMAND_OPTIONS, BIND_OPTIONS, PROXY_START_OVERRIDABLE_OPTIONS, OPTIONS_ADDED_SINCE_V1, OPTIONS_COMPAT_NAMES,
+    InitException, InitInfo, InitExit,
+    fixup_options, dict_to_validated_config,
+    make_defaults_struct, parse_bool, has_sound_support, name_to_field,
+    )
 from xpra.log import is_debug_enabled, Logger
 assert info and warn and error, "used by modules importing those from here"
 
@@ -576,7 +581,6 @@ def parse_proxy_attributes(display_name):
             if password:
                 desc_tmp["proxy_password"] = password
     except RuntimeError:
-        from xpra.log import Logger
         sshlog = Logger("ssh")
         sshlog.error("bad proxy argument: " + reout.group(0))
         return display_name, {}
@@ -1088,7 +1092,6 @@ def connect_to(display_desc, opts=None, debug_cb=None, ssh_fail_cb=None):
 def ssl_wrap_socket_fn(opts, server_side=True):
     if server_side and not opts.ssl_cert:
         raise InitException("you must specify an 'ssl-cert' file to use 'bind-ssl' sockets")
-    from xpra.log import Logger
     ssllog = Logger("ssl")
     ssllog("ssl_wrap_socket_fn(.., %s)", server_side)
     import ssl
@@ -1362,7 +1365,6 @@ def get_client_app(error_cb, opts, extra_args, mode):
         if opts.opengl=="probe":
             from xpra.os_util import pollwait
             from xpra.platform.paths import get_xpra_command
-            from xpra.log import Logger
             log = Logger("opengl")
             cmd = get_xpra_command()+["opengl-probe"]
             env = os.environ.copy()

@@ -70,7 +70,7 @@ from xpra.server.window.batch_config import DamageBatchConfig
 from xpra.simple_stats import get_list_stats
 from xpra.server.window.batch_delay_calculator import calculate_batch_delay, get_target_speed, get_target_quality
 from xpra.server.cystats import time_weighted_average, logp #@UnresolvedImport
-from xpra.server.window.region import rectangle, add_rectangle, remove_rectangle, merge_all   #@UnresolvedImport
+from xpra.rectangle import rectangle, add_rectangle, remove_rectangle, merge_all   #@UnresolvedImport
 from xpra.codecs.xor.cyxor import xor_str           #@UnresolvedImport
 from xpra.codecs.argb.argb import argb_swap         #@UnresolvedImport
 from xpra.codecs.rgb_transform import rgb_reformat

@@ -4,16 +4,16 @@
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-from xpra.log import Logger
-log = Logger("shadow", "osx")
+import Quartz.CoreGraphics as CG    #@UnresolvedImport
 
 from xpra.util import envbool
 from xpra.server.gtk_server_base import GTKServerBase
 from xpra.server.shadow.gtk_shadow_server_base import GTKShadowServerBase
 from xpra.platform.darwin.keyboard_config import KeyboardConfig
 from xpra.platform.darwin.gui import get_CG_imagewrapper, take_screenshot
+from xpra.log import Logger
 
-import Quartz.CoreGraphics as CG    #@UnresolvedImport
+log = Logger("shadow", "osx")
 
 
 USE_TIMER = envbool("XPRA_OSX_SHADOW_USE_TIMER", False)
@@ -115,7 +115,7 @@ class ShadowServer(GTKShadowServerBase):
 
     def do_screen_refresh(self, rlist):
         #TODO: improve damage method to handle lists directly:
-        from xpra.server.window.region import rectangle     #@UnresolvedImport
+        from xpra.rectangle import rectangle     #@UnresolvedImport
         model_rects = {}
         for model in self._id_to_window.values():
             model_rects[model] = rectangle(*model.geometry)

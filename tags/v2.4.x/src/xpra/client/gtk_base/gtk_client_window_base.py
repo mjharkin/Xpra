@@ -97,6 +97,8 @@ HONOUR_SCREEN_MAPPING = envbool("XPRA_HONOUR_SCREEN_MAPPING", POSIX and not DISP
 DRAGNDROP = envbool("XPRA_DRAGNDROP", True)
 CLAMP_WINDOW_TO_SCREEN = envbool("XPRA_CLAMP_WINDOW_TO_SCREEN", True)
 
+WINDOW_OVERFLOW_TOP = envbool("XPRA_WINDOW_OVERFLOW_TOP", not (WIN32 and OSX))
+AWT_RECENTER = envbool("XPRA_AWT_RECENTER", True)
 OSX_FOCUS_WORKAROUND = envbool("XPRA_OSX_FOCUS_WORKAROUND", True)
 SAVE_WINDOW_ICONS = envbool("XPRA_SAVE_WINDOW_ICONS", False)
 UNDECORATED_TRANSIENT_IS_OR = envint("XPRA_UNDECORATED_TRANSIENT_IS_OR", 1)
@@ -425,6 +427,10 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
                 saved_mws, self.max_window_size, self.MAX_VIEWPORT_DIMS, self.MAX_BACKING_DIMS)
 
 
+    def is_awt(self, metadata):
+        wm_class = metadata.get("class-instance")
+        return wm_class and len(wm_class)==2 and wm_class[0].startswith("sun-awt-X11")
+
     def _is_popup(self, metadata):
         #decide if the window type is POPUP or NORMAL
         if self._override_redirect:
@@ -436,12 +442,9 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
                 if UNDECORATED_TRANSIENT_IS_OR>1:
                     metalog("forcing POPUP type for window transient-for=%s", transient_for)
                     return True
-                if metadata.get("skip-taskbar"):
-                    #look for java AWT
-                    wm_class = metadata.get("class-instance")
-                    if wm_class and len(wm_class)==2 and wm_class[0].startswith("sun-awt-X11"):
-                        metalog("forcing POPUP type for Java AWT skip-taskbar window, transient-for=%s", transient_for)
-                        return True
+                if metadata.get("skip-taskbar") and self.is_awt(metadata):
+                    metalog("forcing POPUP type for Java AWT skip-taskbar window, transient-for=%s", transient_for)
+                    return True
         window_types = metadata.strlistget("window-type", [])
         popup_types = tuple(POPUP_TYPE_HINTS.intersection(window_types))
         metalog("popup_types(%s)=%s", window_types, popup_types)
@@ -526,7 +529,7 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
         #try to honour the initial position
         geomlog("setup_window() position=%s, set_initial_position=%s, OR=%s, decorated=%s", self._pos, self._set_initial_position, self.is_OR(), self.get_decorated())
         if self._pos!=(0, 0) or self._set_initial_position or self.is_OR():
-            x,y = self._pos
+            x, y = self.adjusted_position(*self._pos)
             if self.is_OR():
                 #make sure OR windows are mapped on screen
                 if self._client._current_screen_sizes:
@@ -567,6 +570,39 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
         if b:
             self.when_realized("cursor", b.set_cursor_data, cursor_data)
 
+    def adjusted_position(self, ox, oy):
+        if AWT_RECENTER and self.is_awt(self._metadata):
+            ss = self._client._current_screen_sizes
+            if ss and len(ss)==1:
+                screen0 = ss[0]
+                monitors = screen0[5]
+                if monitors and len(monitors)>1:
+                    monitor = monitors[0]
+                    mw = monitor[3]
+                    mh = monitor[4]
+                    w, h = self._size
+                    #adjust for window centering on monitor instead of screen java
+                    screen = self.get_screen()
+                    sw = screen.get_width()
+                    sh = screen.get_height()
+                    #re-center on first monitor if the window is within
+                    #$tolerance of the center of the screen:
+                    tolerance = 10
+                    #center of the window:
+                    cx = ox + w//2
+                    cy = oy + h//2
+                    if abs(sw//2 - cx) <= tolerance:
+                        x = mw//2 - w//2
+                    else:
+                        x = ox
+                    if abs(sh//2 - cy) <= tolerance:
+                        y = mh//2 - h//2
+                    else:
+                        y = oy
+                    log.info("adjusted_position(%i, %i)=%i, %i", ox, oy, x, y)
+                    return x, y
+        return ox, oy
+
 
     def calculate_window_offset(self, wx, wy, ww, wh):
         ss = self._client._current_screen_sizes
@@ -580,26 +616,36 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
         if not monitors:
             geomlog("screen %s lacks monitors information: %s", screen0)
             return None
-        distances = {}
-        geometries = []
+        def remove_visible(rects):
+            """ removes any area found on a monitor """
+            return rects
+        from xpra.rectangle import rectangle #@UnresolvedImport
+        wrect = rectangle(wx, wy, ww, wh)
+        rects = [wrect]
+        pixels_in_monitor = {}
         for i, monitor in enumerate(monitors):
             plug_name, x, y, w, h = monitor[:5]
-            if wx>=x and wx+ww<=x+w and wy+wh<=y+h:
-                geomlog("window fits in monitor %i: %s", i, plug_name)
+            new_rects = []
+            for rect in rects:
+                new_rects += rect.substract(x, y, w, h)
+            geomlog("after removing areas visible on %s from %s: %s", plug_name, rects, new_rects)
+            rects = new_rects
+            if not rects:
+                #the whole window is visible
                 return None
-            xdists = (wx-x, wx+ww-x, wx-(x+w), wx+ww-(x+w))
-            ydists = (wy-y, wy+wh-y, wy-(y+h), wy+wh-(y+h))
-            if wx>=x and wx+ww<x+w:
-                xdists = [0]
-            if wy>=y and wy+wh<y+h:
-                ydists = [0]
-            distance = min((abs(v) for v in xdists))+min((abs(v) for v in ydists))
-            geometries.append((x,y,w,h))
-            distances[distance] = i
-        #so it doesn't fit... choose the closest monitor and make it fit
-        geomlog("OR window distances (%s) to (%s): %s", (wx, wy, ww, wh), geometries, distances)
-        closest = min(distances.keys())
-        i = distances[closest]
+            #keep track of how many pixels would be on this monitor:
+            inter = wrect.intersection(x, y, w, h)
+            if inter:
+                pixels_in_monitor[inter.width*inter.height] = i
+        #if we're here, then some of the window would land on an area
+        #not show on any monitors
+        #choose the monitor that had most of the pixels and make it fit:
+        geomlog("pixels in monitor=%s", pixels_in_monitor)
+        if not pixels_in_monitor:
+            i = 0
+        else:
+            best = max(pixels_in_monitor.keys())
+            i = pixels_in_monitor[best]
         monitor = monitors[i]
         plug_name, x, y, w, h = monitor[:5]
         geomlog("calculating OR offset for monitor %i: %s", i, plug_name)
@@ -1746,6 +1792,7 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
 
     def move_resize(self, x, y, w, h, resize_counter=0):
         geomlog("window %i move_resize%s", self._id, (x, y, w, h, resize_counter))
+        x, y = self.adjusted_position(x, y)
         w = max(1, w)
         h = max(1, h)
         if self.window_offset:
@@ -1775,11 +1822,13 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
         geomlog("window origin=%ix%i, root origin=%ix%i, actual position=%ix%i", ox, oy, rx, ry, ax, ay)
         #validate against edge of screen (ensure window is shown):
         if CLAMP_WINDOW_TO_SCREEN:
-            if (ax + w)<0:
+            if (ax + w)<=0:
                 ax = -w + 1
             elif ax >= mw:
                 ax = mw - 1
-            if (ay + h)<0:
+            if not WINDOW_OVERFLOW_TOP and ay<=0:
+                ay = 0
+            elif (ay + h)<=0:
                 ay = -y + 1
             elif ay >= mh:
                 ay = mh -1

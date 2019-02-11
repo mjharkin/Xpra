@@ -1,6 +1,6 @@
 # This file is part of Xpra.
 # Copyright (C) 2011 Serviware (Arthur Huillet, <ahuillet@serviware.com>)
-# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008, 2010 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -8,13 +8,41 @@
 import time
 import math
 import os.path
-
 try:
     from urllib import unquote          #python2 @UnusedImport
 except:
     from urllib.parse import unquote    #python3 @Reimport @UnresolvedImport
 
+from xpra.os_util import bytestostr, is_X11, WIN32, OSX, POSIX, PYTHON3
+from xpra.util import (
+    AdHocStruct, typedict, envint, envbool, nonl, csv, first_time,
+    WORKSPACE_UNSET, WORKSPACE_ALL, WORKSPACE_NAMES, MOVERESIZE_DIRECTION_STRING, SOURCE_INDICATION_STRING,
+    MOVERESIZE_CANCEL,
+    MOVERESIZE_SIZE_TOPLEFT, MOVERESIZE_SIZE_TOP, MOVERESIZE_SIZE_TOPRIGHT,
+    MOVERESIZE_SIZE_RIGHT,
+    MOVERESIZE_SIZE_BOTTOMRIGHT,  MOVERESIZE_SIZE_BOTTOM, MOVERESIZE_SIZE_BOTTOMLEFT,
+    MOVERESIZE_SIZE_LEFT, MOVERESIZE_MOVE,
+    )
+from xpra.gtk_common.gobject_compat import import_gtk, import_gdk, import_cairo, is_gtk3
+from xpra.gtk_common.gobject_util import no_arg_signal
+from xpra.gtk_common.gtk_util import (
+    get_xwindow, get_pixbuf_from_data, get_default_root_window,
+    is_realized, display_get_default, drag_status,
+    newTargetEntry, drag_context_targets, drag_context_actions,
+    drag_dest_window, drag_widget_get_data,
+    gio_File, query_info_async, load_contents_async, load_contents_finish,
+    WINDOW_POPUP, WINDOW_TOPLEVEL, GRAB_STATUS_STRING, GRAB_SUCCESS,
+    SCROLL_UP, SCROLL_DOWN, SCROLL_LEFT, SCROLL_RIGHT,
+    DEST_DEFAULT_MOTION, DEST_DEFAULT_HIGHLIGHT, ACTION_COPY,
+    BUTTON_PRESS_MASK, BUTTON_RELEASE_MASK, POINTER_MOTION_MASK,
+    POINTER_MOTION_HINT_MASK, ENTER_NOTIFY_MASK, LEAVE_NOTIFY_MASK,
+    )
+from xpra.gtk_common.keymap import KEY_TRANSLATIONS
+from xpra.client.client_window_base import ClientWindowBase
+from xpra.platform.gui import set_fullscreen_monitors, set_shaded
+from xpra.platform.gui import add_window_hooks, remove_window_hooks
 from xpra.log import Logger
+
 focuslog = Logger("focus", "grab")
 workspacelog = Logger("workspace")
 log = Logger("window")
@@ -29,28 +57,6 @@ geomlog = Logger("geometry")
 menulog = Logger("menu")
 grablog = Logger("grab")
 draglog = Logger("dragndrop")
-
-
-from xpra.os_util import bytestostr, is_X11, WIN32, OSX, POSIX, PYTHON3
-from xpra.util import (AdHocStruct, typedict, envint, envbool, nonl, csv, first_time,
-                       WORKSPACE_UNSET, WORKSPACE_ALL, WORKSPACE_NAMES, MOVERESIZE_DIRECTION_STRING, SOURCE_INDICATION_STRING,
-                       MOVERESIZE_CANCEL,
-                       MOVERESIZE_SIZE_TOPLEFT, MOVERESIZE_SIZE_TOP, MOVERESIZE_SIZE_TOPRIGHT,
-                       MOVERESIZE_SIZE_RIGHT,
-                       MOVERESIZE_SIZE_BOTTOMRIGHT,  MOVERESIZE_SIZE_BOTTOM, MOVERESIZE_SIZE_BOTTOMLEFT,
-                       MOVERESIZE_SIZE_LEFT, MOVERESIZE_MOVE)
-from xpra.gtk_common.gobject_compat import import_gtk, import_gdk, import_cairo, is_gtk3
-from xpra.gtk_common.gobject_util import no_arg_signal
-from xpra.gtk_common.gtk_util import (get_xwindow, get_pixbuf_from_data, get_default_root_window, is_realized, display_get_default, drag_status,
-    newTargetEntry, drag_context_targets, drag_context_actions, drag_dest_window, drag_widget_get_data,
-    gio_File, query_info_async, load_contents_async, load_contents_finish,
-    WINDOW_POPUP, WINDOW_TOPLEVEL, GRAB_STATUS_STRING, GRAB_SUCCESS, SCROLL_UP, SCROLL_DOWN, SCROLL_LEFT, SCROLL_RIGHT,
-    DEST_DEFAULT_MOTION, DEST_DEFAULT_HIGHLIGHT, ACTION_COPY,
-    BUTTON_PRESS_MASK, BUTTON_RELEASE_MASK, POINTER_MOTION_MASK , POINTER_MOTION_HINT_MASK, ENTER_NOTIFY_MASK, LEAVE_NOTIFY_MASK)
-from xpra.gtk_common.keymap import KEY_TRANSLATIONS
-from xpra.client.client_window_base import ClientWindowBase
-from xpra.platform.gui import set_fullscreen_monitors, set_shaded
-from xpra.platform.gui import add_window_hooks, remove_window_hooks
 
 gtk     = import_gtk()
 gdk     = import_gdk()
@@ -607,33 +613,43 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
         if not ss:
             return None
         if len(ss)!=1:
-            geomlog("cannot handle one more than one screen for OR offset: %s", )
+            geomlog("cannot handle more than one screen for OR offset")
             return None
         screen0 = ss[0]
         monitors = screen0[5]
         if not monitors:
             geomlog("screen %s lacks monitors information: %s", screen0)
             return None
-        distances = {}
-        geometries = []
+        def remove_visible(rects):
+            """ removes any area found on a monitor """
+            return rects
+        from xpra.rectangle import rectangle #@UnresolvedImport
+        wrect = rectangle(wx, wy, ww, wh)
+        rects = [wrect]
+        pixels_in_monitor = {}
         for i, monitor in enumerate(monitors):
             plug_name, x, y, w, h = monitor[:5]
-            if wx>=x and wx+ww<=x+w and wy+wh<=y+h:
-                geomlog("window fits in monitor %i: %s", i, plug_name)
+            new_rects = []
+            for rect in rects:
+                new_rects += rect.substract(x, y, w, h)
+            geomlog("after removing areas visible on %s from %s: %s", plug_name, rects, new_rects)
+            rects = new_rects
+            if not rects:
+                #the whole window is visible
                 return None
-            xdists = (wx-x, wx+ww-x, wx-(x+w), wx+ww-(x+w))
-            ydists = (wy-y, wy+wh-y, wy-(y+h), wy+wh-(y+h))
-            if wx>=x and wx+ww<x+w:
-                xdists = [0]
-            if wy>=y and wy+wh<y+h:
-                ydists = [0]
-            distance = min((abs(v) for v in xdists))+min((abs(v) for v in ydists))
-            geometries.append((x,y,w,h))
-            distances[distance] = i
-        #so it doesn't fit... choose the closest monitor and make it fit
-        geomlog("OR window distances (%s) to (%s): %s", (wx, wy, ww, wh), geometries, distances)
-        closest = min(distances.keys())
-        i = distances[closest]
+            #keep track of how many pixels would be on this monitor:
+            inter = wrect.intersection(x, y, w, h)
+            if inter:
+                pixels_in_monitor[inter.width*inter.height] = i
+        #if we're here, then some of the window would land on an area
+        #not show on any monitors
+        #choose the monitor that had most of the pixels and make it fit:
+        geomlog("pixels in monitor=%s", pixels_in_monitor)
+        if not pixels_in_monitor:
+            i = 0
+        else:
+            best = max(pixels_in_monitor.keys())
+            i = pixels_in_monitor[best]
         monitor = monitors[i]
         plug_name, x, y, w, h = monitor[:5]
         geomlog("calculating OR offset for monitor %i: %s", i, plug_name)

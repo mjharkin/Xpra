@@ -7,19 +7,19 @@
 
 import os
 
+from xpra.server.source.stub_source_mixin import StubSourceMixin
+from xpra.server.window.metadata import make_window_metadata
+from xpra.net.compression import Compressed
+from xpra.os_util import monotonic_time, BytesIOClass, strtobytes
+from xpra.util import typedict, envint, envbool, DEFAULT_METADATA_SUPPORTED, XPRA_BANDWIDTH_NOTIFICATION_ID
 from xpra.log import Logger
+
 log = Logger("server")
 cursorlog = Logger("cursor")
 metalog = Logger("metadata")
 bandwidthlog = Logger("bandwidth")
 eventslog = Logger("events")
 filterslog = Logger("filters")
-
-from xpra.server.source.stub_source_mixin import StubSourceMixin
-from xpra.server.window.metadata import make_window_metadata
-from xpra.net.compression import Compressed
-from xpra.os_util import monotonic_time, BytesIOClass, strtobytes
-from xpra.util import typedict, envint, envbool, DEFAULT_METADATA_SUPPORTED, XPRA_BANDWIDTH_NOTIFICATION_ID
 
 CONGESTION_WARNING_EVENT_COUNT = envint("XPRA_CONGESTION_WARNING_EVENT_COUNT", 10)
 CONGESTION_REPEAT_DELAY = envint("XPRA_CONGESTION_REPEAT_DELAY", 60)
@@ -254,11 +254,9 @@ class WindowsMixin(StubSourceMixin):
             #convert bytearray to string:
             cpixels = strtobytes(pixels)
             if "png" in self.cursor_encodings:
-                from xpra.codecs.loader import get_codec
-                PIL = get_codec("PIL")
-                assert PIL
+                from PIL import Image
                 cursorlog("do_send_cursor() loading %i bytes of cursor pixel data for %ix%i cursor named '%s'", len(cpixels), w, h, name)
-                img = PIL.Image.frombytes("RGBA", (w, h), cpixels, "raw", "BGRA", w*4, 1)
+                img = Image.frombytes("RGBA", (w, h), cpixels, "raw", "BGRA", w*4, 1)
                 buf = BytesIOClass()
                 img.save(buf, "PNG")
                 pngdata = buf.getvalue()

@@ -8,9 +8,6 @@ import os
 import re
 
 from xpra.gtk_common.gobject_compat import import_gtk, import_glib, import_pixbufloader
-gtk = import_gtk()
-glib = import_glib()
-
 from xpra.util import CLIENT_EXIT, iround, envbool, repr_ellipsized
 from xpra.os_util import bytestostr, OSX
 from xpra.gtk_common.gtk_util import (
@@ -26,14 +23,16 @@ from xpra.simple_stats import std_unit_dec
 from xpra.platform.gui import get_icon_size
 from xpra.platform.paths import get_icon_dir
 from xpra.client import mixin_features
-
-
 from xpra.log import Logger
+
 log = Logger("menu")
 clipboardlog = Logger("menu", "clipboard")
 webcamlog = Logger("menu", "webcam")
 avsynclog = Logger("menu", "av-sync")
 bandwidthlog = Logger("bandwidth", "network")
+
+gtk = import_gtk()
+glib = import_glib()
 
 HIDE_DISABLED_MENU_ENTRIES = OSX
 
@@ -46,6 +45,7 @@ RUNCOMMAND_MENU = envbool("XPRA_SHOW_RUNCOMMAND_MENU", True)
 SHOW_SERVER_COMMANDS = envbool("XPRA_SHOW_SERVER_COMMANDS", True)
 SHOW_TRANSFERS = envbool("XPRA_SHOW_TRANSFERS", True)
 SHOW_CLIPBOARD_MENU = envbool("XPRA_SHOW_CLIPBOARD_MENU", True)
+SHOW_CLOSE = envbool("XPRA_SHOW_CLOSE", True)
 SHOW_SHUTDOWN = envbool("XPRA_SHOW_SHUTDOWN", True)
 WINDOWS_MENU = envbool("XPRA_SHOW_WINDOWS_MENU", True)
 START_MENU = envbool("XPRA_SHOW_START_MENU", True)
@@ -257,9 +257,8 @@ class GTKTrayMenuBase(object):
 
     def build(self):
         if self.menu is None:
-            show_close = True #or WIN32
             try:
-                self.menu = self.setup_menu(show_close)
+                self.menu = self.setup_menu(SHOW_CLOSE)
             except Exception as e:
                 log("build()", exc_info=True)
                 log.error("Error: failed to setup menu")
@@ -319,7 +318,6 @@ class GTKTrayMenuBase(object):
         self.popup_menu_workaround(menu)
         menu.connect("deactivate", self.menu_deactivated)
         menu.show_all()
-        self.menu_icon_size = 0
         return menu
 
     def cleanup(self):
@@ -1595,12 +1593,12 @@ class GTKTrayMenuBase(object):
                 width, height = img.size
                 rowstride = width * (3+int(has_alpha))
                 pixbuf = get_pixbuf_from_data(img.tobytes(), has_alpha, width, height, rowstride)
-                return scaled_image(pixbuf, icon_size=32)
+                return scaled_image(pixbuf, icon_size=self.menu_icon_size)
             except Exception:
                 log.error("Error: failed to load icon data for %s", bytestostr(app_name), exc_info=True)
                 log.error(" data=%s", repr_ellipsized(icondata))
         if pixbuf:
-            return scaled_image(pixbuf, icon_size=32)
+            return scaled_image(pixbuf, icon_size=self.menu_icon_size)
         return None
 
     def make_applaunch_menu_item(self, app_name, command_props):

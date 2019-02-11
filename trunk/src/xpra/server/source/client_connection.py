@@ -10,27 +10,14 @@ from time import sleep
 from threading import Event
 from collections import deque
 
-from xpra.log import Logger
-log = Logger("server")
-elog = Logger("encoding")
-keylog = Logger("keyboard")
-mouselog = Logger("mouse")
-timeoutlog = Logger("timeout")
-proxylog = Logger("proxy")
-statslog = Logger("stats")
-notifylog = Logger("notify")
-netlog = Logger("network")
-bandwidthlog = Logger("bandwidth")
-
-
 from xpra.make_thread import start_thread
 from xpra.os_util import Queue, monotonic_time
 from xpra.util import merge_dicts, flatten_dict, notypedict, envbool, envint, typedict, AtomicInteger
 from xpra.server.source.source_stats import GlobalPerformanceStatistics
-
 from xpra.server.source.clientinfo_mixin import ClientInfoMixin
-CC_BASES = [ClientInfoMixin]
 from xpra.server import server_features
+
+CC_BASES = [ClientInfoMixin]
 #TODO: notifications mixin
 if server_features.clipboard:
     from xpra.server.source.clipboard_connection import ClipboardConnection
@@ -73,6 +60,19 @@ from xpra.server.source.idle_mixin import IdleMixin
 CC_BASES.append(IdleMixin)
 CC_BASES = tuple(CC_BASES)
 ClientConnectionClass = type('ClientConnectionClass', CC_BASES, {})
+
+from xpra.log import Logger
+log = Logger("server")
+elog = Logger("encoding")
+keylog = Logger("keyboard")
+mouselog = Logger("mouse")
+timeoutlog = Logger("timeout")
+proxylog = Logger("proxy")
+statslog = Logger("stats")
+notifylog = Logger("notify")
+netlog = Logger("network")
+bandwidthlog = Logger("bandwidth")
+
 log("ClientConnectionClass%s", CC_BASES)
 
 

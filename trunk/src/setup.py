@@ -352,7 +352,9 @@ if install is None and WIN32:
     install = os.environ.get("MINGW_PREFIX", sys.prefix or "dist")
 if share_xpra is None:
     if "install_exe" in sys.argv:
-        share_xpra = os.path.join(install, "share", "xpra")
+        #install_exe already honours the install prefix,
+        #and the win32 bundle places share/xpra/* in the root directory:
+        share_xpra = "."
     else:
         share_xpra = os.path.join("share", "xpra")
 
@@ -1226,7 +1228,8 @@ if WIN32:
                               {"themes" : ["Default"]}
                              ])
         if gtk3_ENABLED or sound_ENABLED:
-            add_dir('lib', ["gio"])
+            #causes warnings:
+            #add_dir('lib', ["gio"])
             packages.append("gi")
             add_gi("Gio-2.0", "GIRepository-2.0", "Glib-2.0", "GModule-2.0",
                    "GObject-2.0")

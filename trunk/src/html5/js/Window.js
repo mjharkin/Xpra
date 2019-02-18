@@ -91,13 +91,13 @@ function XpraWindow(client, canvas_state, wid, x, y, w, h, metadata, override_re
 	this.mouse_up_cb = mouse_up_cb || null;
 	this.mouse_scroll_cb = mouse_scroll_cb || null;
 	jQuery(this.canvas).mousedown(function (e) {
-		me.on_mousedown(e);
+		return me.on_mousedown(e);
 	});
 	jQuery(this.canvas).mouseup(function (e) {
-		me.on_mouseup(e);
+		return me.on_mouseup(e);
 	});
 	jQuery(this.canvas).mousemove(function (e) {
-		me.on_mousemove(e);
+		return me.on_mousemove(e);
 	});
 
 	this.geometry_cb = geometry_cb || null;
@@ -112,7 +112,7 @@ function XpraWindow(client, canvas_state, wid, x, y, w, h, metadata, override_re
 		jQuery(this.div).addClass("window-" + this.windowtype);
 	}
 
-	if (this.client.server_is_desktop) {
+	if (this.client.server_is_desktop || this.client.server_is_shadow) {
 		jQuery(this.div).addClass("desktop");
 		this.resizable = false;
 	}
@@ -315,7 +315,7 @@ XpraWindow.prototype.updateCanvasGeometry = function() {
 XpraWindow.prototype.updateCSSGeometry = function() {
 	// set size of canvas
 	this.updateCanvasGeometry();
-	if (this.client.server_is_desktop) {
+	if (this.client.server_is_desktop || this.client.server_is_shadow) {
 		jQuery(this.div).position({of : jQuery("#screen")});
 		return;
 	}
@@ -383,7 +383,7 @@ XpraWindow.prototype.update_zindex = function() {
 	if (this.tray) {
 		z = 0;
 	}
-	else if (this.override_redirect || this.client.server_is_desktop) {
+	else if (this.override_redirect || this.client.server_is_desktop || this.client.server_is_shadow) {
 		z = 15000;
 	}
 	else if (this.windowtype=="DROPDOWN" || this.windowtype=="TOOLTIP" ||
@@ -768,10 +768,22 @@ XpraWindow.prototype.handle_moved = function(e) {
  * if it is fullscreen or maximized.
  */
 XpraWindow.prototype.screen_resized = function() {
-	console.log("screen resized");
+	this.log("window: screen resized");
 	if (this.client.server_is_desktop) {
 		this.match_screen_size();
 		this.handle_resized();
+	}
+	if (this.client.server_is_shadow) {
+		if (Object.keys(this.client.id_to_window).length==1) {
+			//recenter it:
+			if (this.x<=this.client.desktop_width) {
+				this.x = Math.round((this.client.desktop_width-this.w)/2);
+			}
+			if (this.w<=this.client.desktop_height) {
+				this.y = Math.round((this.client.desktop_height-this.h)/2);
+			}
+			this.handle_resized();
+		}
 	}
 	if (this.fullscreen || this.maximized) {
 		this.fill_screen();
@@ -787,7 +799,7 @@ XpraWindow.prototype.match_screen_size = function() {
 	if (this.client.server_resize_exact) {
 		neww = maxw;
 		newh = maxh;
-		console.log("resizing to exact size:", neww, newh);
+		this.log("resizing to exact size:", neww, newh);
 	}
 	else {
 		if (this.client.server_screen_sizes.length==0) {
@@ -823,7 +835,7 @@ XpraWindow.prototype.match_screen_size = function() {
 				}
 			}
 		}
-		console.log("best screen size:", neww, newh);
+		this.log("best screen size:", neww, newh);
 	}
 	this.resize(neww, newh);
 };

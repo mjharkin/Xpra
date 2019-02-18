@@ -79,7 +79,7 @@ FORCE_AV_DELAY = envint("XPRA_FORCE_AV_DELAY", 0)
 B_FRAMES = envbool("XPRA_B_FRAMES", True)
 VIDEO_SKIP_EDGE = envbool("XPRA_VIDEO_SKIP_EDGE", False)
 SCROLL_ENCODING = envbool("XPRA_SCROLL_ENCODING", True)
-SCROLL_MIN_PERCENT = max(1, min(100, envint("XPRA_SCROLL_MIN_PERCENT", 30)))
+SCROLL_MIN_PERCENT = max(1, min(100, envint("XPRA_SCROLL_MIN_PERCENT", 50)))
 
 SAVE_VIDEO_STREAMS = envbool("XPRA_SAVE_VIDEO_STREAMS", False)
 SAVE_VIDEO_FRAMES = os.environ.get("XPRA_SAVE_VIDEO_FRAMES")
@@ -1025,7 +1025,9 @@ class WindowVideoSource(WindowSource):
             else:
                 old = vs.rectangle
                 ww, wh = self.window_dimensions
-                vs.identify_video_subregion(ww, wh, self.statistics.damage_events_count, self.statistics.last_damage_events, self.statistics.last_resized)
+                vs.identify_video_subregion(ww, wh,
+                                            self.statistics.damage_events_count, self.statistics.last_damage_events, self.statistics.last_resized,
+                                            self.children)
                 newrect = vs.rectangle
                 if ((newrect is None) ^ (old is None)) or newrect!=old:
                     if old is None and newrect and newrect.get_geometry()==(0, 0, ww, wh):

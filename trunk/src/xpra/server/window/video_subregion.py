@@ -15,6 +15,7 @@ sslog = Logger("regiondetect")
 refreshlog = Logger("regionrefresh")
 
 VIDEO_SUBREGION = envbool("XPRA_VIDEO_SUBREGION", True)
+SUBWINDOW_REGION_BOOST = envint("XPRA_SUBWINDOW_REGION_BOOST", 20)
 
 MAX_TIME = envint("XPRA_VIDEO_DETECT_MAX_TIME", 5)
 MIN_EVENTS = envint("XPRA_VIDEO_DETECT_MIN_EVENTS", 20)
@@ -110,7 +111,7 @@ class VideoSubregion(object):
         if self.detection:
             sslog("video region detection is on - the given region may or may not stick")
         if x==0 and y==0 and w==0 and h==0:
-            self.novideoregion()
+            self.novideoregion("empty")
         else:
             self.rectangle = rectangle(x, y, w, h)
 
@@ -255,7 +256,7 @@ class VideoSubregion(object):
             self.refresh_timer = self.timeout_add(1000, self.refresh)
 
 
-    def novideoregion(self, msg="", *args):
+    def novideoregion(self, msg, *args):
         sslog("novideoregion: "+msg, *args)
         self.rectangle = None
         self.time = 0
@@ -283,7 +284,7 @@ class VideoSubregion(object):
                 rects = new_rects
         return rects
 
-    def identify_video_subregion(self, ww, wh, damage_events_count, last_damage_events, starting_at=0):
+    def identify_video_subregion(self, ww, wh, damage_events_count, last_damage_events, starting_at=0, children=None):
         if not self.enabled or not self.supported:
             self.novideoregion("disabled")
             return
@@ -307,7 +308,11 @@ class VideoSubregion(object):
                 self.fps = int(incount/(self.rectangle.width*self.rectangle.height) / elapsed)
             return
         sslog("%s.identify_video_subregion(..)", self)
-        sslog("identify_video_subregion(%s, %s, %s, %s)", ww, wh, damage_events_count, last_damage_events)
+        sslog("identify_video_subregion(%s, %s, %s, %s)", ww, wh, damage_events_count, last_damage_events, starting_at, children)
+
+        children_rects = ()
+        if children:
+            children_rects = tuple(rectangle(x, y, w, h) for _xid, x, y, w, h, _border, _depth in children if w>=MIN_W and h>=MIN_H)
 
         if damage_events_count < self.set_at:
             #stats got reset
@@ -344,7 +349,8 @@ class VideoSubregion(object):
         lde = tuple(x for x in tuple(last_damage_events) if x[0]>=from_time)
         dc = len(lde)
         if dc<=MIN_EVENTS:
-            return self.novideoregion("not enough damage events yet (%s)", dc)
+            self.novideoregion("not enough damage events yet (%s)", dc)
+            return
         #structures for counting areas and sizes:
         wc = {}
         hc = {}
@@ -416,8 +422,9 @@ class VideoSubregion(object):
             if d_ratio==0:
                 d_ratio = damaged_ratio(region)
             score = int(score * math.sqrt(d_ratio))
-            sslog("testing %12s video region %34s: %3i%% in, %3i%% out, %3i%% of window, damaged ratio=%.2f, score=%2i",
-                  info, region, 100*incount//total, 100*outcount//total, 100*region.width*region.height/ww/wh, d_ratio, score)
+            children_boost = int(region in children_rects)*SUBWINDOW_REGION_BOOST
+            sslog("testing %12s video region %34s: %3i%% in, %3i%% out, %3i%% of window, damaged ratio=%.2f, children_boost=%i, score=%2i",
+                  info, region, 100*incount//total, 100*outcount//total, 100*region.width*region.height/ww/wh, d_ratio, children_boost, score)
             scores[region] = score
             return score
 
@@ -435,9 +442,9 @@ class VideoSubregion(object):
             self.last_scores = scores
             sslog("score(%s)=%s, damaged=%i%%", self.inout, self.score, self.damaged)
 
-        def setnewregion(rect, msg="", *args):
+        def setnewregion(rect, msg, *args):
             rects = self.excluded_rectangles(rect, ww, wh)
-            if len(rects)==0:
+            if not rects:
                 self.novideoregion("no match after removing excluded regions")
                 return
             if len(rects)==1:
@@ -453,6 +460,7 @@ class VideoSubregion(object):
                     return
             if not self.rectangle or self.rectangle!=rect:
                 sslog("setting new region %s: "+msg, rect, *args)
+                sslog(" is child window: %s", rect in children_rects)
                 self.set_at = damage_events_count
                 self.counter = damage_events_count
             if not self.enabled:
@@ -467,7 +475,8 @@ class VideoSubregion(object):
 
         if len(dec)==1:
             rect, count = tuple(dec.items())[0]
-            return setnewregion(rect, "only region damaged")
+            setnewregion(rect, "only region damaged")
+            return
 
         #see if we can keep the region we already have (if any):
         cur_score = 0
@@ -484,7 +493,7 @@ class VideoSubregion(object):
             #ignore small regions:
             if count>min_count and r.width>=MIN_W and r.height>=MIN_H:
                 damage_count[r] = count
-        c = sum([int(x) for x in damage_count.values()])
+        c = sum(int(x) for x in damage_count.values())
         most_damaged = -1
         most_pct = 0
         if c>0:
@@ -493,7 +502,7 @@ class VideoSubregion(object):
             sslog("identify video: most=%s%% damage count=%s", most_pct, damage_count)
             #is there a region that stands out?
             #try to use the region which is responsible for most of the large damage requests:
-            most_damaged_regions = [r for r,v in damage_count.items() if v==most_damaged]
+            most_damaged_regions = tuple(r for r,v in damage_count.items() if v==most_damaged)
             if len(most_damaged_regions)==1:
                 r = most_damaged_regions[0]
                 score = score_region("most-damaged", r, d_ratio=1.0)
@@ -501,8 +510,12 @@ class VideoSubregion(object):
                 if score>120:
                     setnewregion(r, "%s%% of large damage requests, score=%s", most_pct, score)
                     return
-                elif score>=100:
+                if score>=100:
                     scores[r] = score
+
+        #try children windows:
+        for region in children_rects:
+            scores[region] = score_region("child-window", region, 48*48)
 
         #try harder: try combining regions with the same width or height:
         #(some video players update the video region in bands)
@@ -511,7 +524,7 @@ class VideoSubregion(object):
                 if len(regions)>=2:
                     #merge regions of width w at x
                     min_count = max(2, len(regions)//25)
-                    keep = [r for r in regions if int(dec.get(r, 0))>=min_count]
+                    keep = tuple(r for r in regions if int(dec.get(r, 0))>=min_count)
                     sslog("vertical regions of width %i at %i with at least %i hits: %s", w, x, min_count, keep)
                     if keep:
                         merged = merge_all(keep)
@@ -521,7 +534,7 @@ class VideoSubregion(object):
                 if len(regions)>=2:
                     #merge regions of height h at y
                     min_count = max(2, len(regions)//25)
-                    keep = [r for r in regions if int(dec.get(r, 0))>=min_count]
+                    keep = tuple(r for r in regions if int(dec.get(r, 0))>=min_count)
                     sslog("horizontal regions of height %i at %i with at least %i hits: %s", h, y, min_count, keep)
                     if keep:
                         merged = merge_all(keep)
@@ -531,17 +544,20 @@ class VideoSubregion(object):
         highscore = max(scores.values())
         #a score of 100 is neutral
         if highscore>=120:
-            region = [r for r,s in scores.items() if s==highscore][0]
-            return setnewregion(region, "very high score: %s", highscore)
+            region = next(iter(r for r,s in scores.items() if s==highscore))
+            setnewregion(region, "very high score: %s", highscore)
+            return
 
         #retry existing region, tolerate lower score:
         if cur_score>=90 and (highscore<100 or cur_score>=highscore):
             sslog("keeping existing video region %s with score %s", rect, cur_score)
-            return setnewregion(self.rectangle, "existing region with score: %i" % cur_score)
+            setnewregion(self.rectangle, "existing region with score: %i" % cur_score)
+            return
 
         if highscore>=100:
-            region = [r for r,s in scores.items() if s==highscore][0]
-            return setnewregion(region, "high score: %s", highscore)
+            region = next(iter(r for r,s in scores.items() if s==highscore))
+            setnewregion(region, "high score: %s", highscore)
+            return
 
         #TODO:
         # * re-add some scrolling detection: the region may have moved
@@ -553,7 +569,8 @@ class VideoSubregion(object):
             merged = merge_all(tuple(damage_count.keys()))
             score = score_region("merged", merged)
             if score>=110:
-                return setnewregion(merged, "merged all regions, score=%s", score)
+                setnewregion(merged, "merged all regions, score=%s", score)
+                return
 
         self.novideoregion("failed to identify a video region")
         self.last_scores = scores

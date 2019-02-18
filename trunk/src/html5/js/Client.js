@@ -152,6 +152,7 @@ XpraClient.prototype.init_state = function(container) {
     this.server_resize_exact = false;
     this.server_screen_sizes = [];
     this.server_is_desktop = false;
+    this.server_is_shadow = false;
 
     this.server_connection_data = false;
 
@@ -1199,14 +1200,6 @@ XpraClient.prototype.getMouse = function(e, window) {
 		mbutton = Math.max(0, e.which);
 	else if ("button" in e)  // IE, Opera (zero based)
 		mbutton = Math.max(0, e.button)+1;
-	//show("getmouse: button="+mbutton+", which="+e.which+", button="+e.button);
-
-	if (window && this.server_is_desktop) {
-		//substract window offset since the desktop's top-left corner should be at 0,0:
-		var pos = jQuery(window.div).position()
-		mx -= pos.left;
-		my -= pos.top;
-	}
 
 	// We return a simple javascript object (a hash) with x and y defined
 	return {x: mx, y: my, button: mbutton};
@@ -1655,8 +1648,9 @@ XpraClient.prototype._process_hello = function(packet, ctx) {
 			}
 		}
 	}
-    ctx.server_is_desktop = Boolean(hello["desktop"]) || Boolean(hello["shadow"]);
-    if (ctx.server_is_desktop) {
+    ctx.server_is_desktop = Boolean(hello["desktop"]);
+    ctx.server_is_shadow = Boolean(hello["shadow"]);
+    if (ctx.server_is_desktop || ctx.server_is_shadow) {
     	jQuery("body").addClass("desktop");
     }
     ctx.server_resize_exact = hello["resize_exact"] || false;
@@ -1984,8 +1978,10 @@ XpraClient.prototype._new_window_common = function(packet, override_redirect) {
 		var l = Object.keys(this.id_to_window).length;
 		if (l==0) {
 			//first window: center it
-			x = Math.round((this.desktop_width-w)/2);
-			if (w<this.desktop_height) {
+			if (w<=this.desktop_width) {
+				x = Math.round((this.desktop_width-w)/2);
+			}
+			if (h<=this.desktop_height) {
 				y = Math.round((this.desktop_height-h)/2);
 			}
 		}
@@ -2234,7 +2230,7 @@ XpraClient.prototype._process_window_icon = function(packet, ctx) {
 	if (win) {
 		var src = win.update_icon(w, h, encoding, img_data);
 		//update favicon too:
-		if (wid==ctx.focus || ctx.server_is_desktop) {
+		if (wid==ctx.focus || ctx.server_is_desktop || ctx.server_is_shadow) {
 			jQuery("#favicon").attr("href", src);
 		}
 	}

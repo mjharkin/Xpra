@@ -11,7 +11,7 @@ Once we have imported something, stick to that version from then on for all othe
 
 import sys
 
-__all__ = ["is_gtk3", "get_xid", "import_gobject", "import_gtk", "import_gdk", "import_pango", "import_glib", "import_pixbufloader"]
+__all__ = ["is_gtk3", "import_gobject", "import_gtk", "import_gdk", "import_pango", "import_glib", "import_pixbufloader"]
 
 _is_gtk3 = None
 if sys.version>='3':

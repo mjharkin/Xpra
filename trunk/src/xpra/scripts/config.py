@@ -20,10 +20,10 @@ from xpra.os_util import (
 def warn(msg):
     sys.stderr.write(msg+"\n")
 
-def debug(*args):
+def nodebug(*_args):
     #can be overriden
     pass
-
+debug = nodebug
 
 class InitException(Exception):
     pass
@@ -190,10 +190,10 @@ def OpenGL_safety_check():
         try:
             f = None
             f = open("\\\\.\\VBoxMiniRdrDN", "r")
+            return True, "VirtualBox is present (VBoxMiniRdrDN)"
         finally:
             if f:
                 f.close()
-                return True, "VirtualBox is present (VBoxMiniRdrDN)"
     except Exception as e:
         import errno
         if e.args[0]==errno.EACCES:
@@ -1039,7 +1039,7 @@ def get_defaults():
 CLONES = {}
 
 #these options should not be specified in config files:
-NO_FILE_OPTIONS = ["daemon"]
+NO_FILE_OPTIONS = ("daemon", )
 
 
 TRUE_OPTIONS = ("yes", "true", "1", "on", True)
@@ -1052,7 +1052,7 @@ def parse_bool(k, v, auto=None):
         return True
     if v in FALSE_OPTIONS:
         return False
-    if v in ["auto", None]:
+    if v in ("auto", None):
         #keep default - which may be None!
         return auto
     try:

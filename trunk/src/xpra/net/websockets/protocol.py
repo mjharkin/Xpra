@@ -71,7 +71,8 @@ class WebSocketProtocol(Protocol):
         if LEGACY_FRAME_PER_CHUNK is None:
             may_have_bug = caps.strget("client_type", "")=="HTML5"
             self.legacy_frame_per_chunk = not caps.boolget("websocket.multi-packet", not may_have_bug)
-            log("parse_remote_caps() may_have_bug=%s, legacy_frame_per_chunk=%s", may_have_bug, self.legacy_frame_per_chunk)
+            log("parse_remote_caps() may_have_bug=%s, legacy_frame_per_chunk=%s",
+                may_have_bug, self.legacy_frame_per_chunk)
         if self.legacy_frame_per_chunk:
             log.warn("Warning: using slower legacy websocket frames")
             log.warn(" the other end is probably out of date")
@@ -106,7 +107,7 @@ class WebSocketProtocol(Protocol):
     def parse_ws_frame(self, buf):
         if not buf:
             self._read_queue_put(buf)
-            return            
+            return
         if self.ws_data:
             ws_data = self.ws_data+buf
             self.ws_data = b""

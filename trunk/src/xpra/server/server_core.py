@@ -173,6 +173,9 @@ def get_thread_info(proto=None, protocols=()):
         log.error("failed to get frame info: %s", e)
     return info
 
+def notimplemented(*_args):
+    raise NotImplementedError()
+
 
 class ServerCore(object):
     """
@@ -200,7 +203,7 @@ class ServerCore(object):
         self._tcp_proxy_clients = []
         self._tcp_proxy = ""
         self._rfb_upgrade = 0
-        self._ssl_wrap_socket = None
+        self._ssl_wrap_socket = notimplemented
         self._accept_timeout = SOCKET_TIMEOUT + 1
         self.ssl_mode = None
         self._html = False
@@ -220,6 +223,7 @@ class ServerCore(object):
         self.dbus_server = None
         self.unix_socket_paths = []
         self.touch_timer = None
+        self.exec_cwd = os.getcwd()
 
         self.session_name = u""
 
@@ -784,7 +788,8 @@ class ServerCore(object):
             return True
         sockname = sock.getsockname()
         sock.settimeout(self._socket_timeout)
-        netlog("new_connection(%s) sock=%s, socket_info=%s, timeout=%s, address=%s, peername=%s. timeout=%s", args, sock, socket_info, self._socket_timeout, address, peername, self._socket_timeout)
+        netlog("new_connection(%s) sock=%s, socket_info=%s, timeout=%s, address=%s, peername=%s. timeout=%s",
+               args, sock, socket_info, self._socket_timeout, address, peername, self._socket_timeout)
         conn = SocketConnection(sock, sockname, address, peername, socktype)
 
         #from here on, we run in a thread, so we can poll (peek does)
@@ -906,7 +911,7 @@ class ServerCore(object):
                 if (self.ssl_mode not in FALSE_OPTIONS) and peek_data[0] in ("\x16", 0x16):
                     if not self._ssl_wrap_socket:
                         netlog.warn("Warning: cannot upgrade to SSL socket")
-                        return None
+                        return
                     ssllog("ws socket receiving ssl, upgrading")
                     conn = ssl_wrap()
                 elif len(peek_data)>=2 and peek_data[0] in ("P", ord("P") and peek_data[1] in ("\x00", 0)):
@@ -1070,7 +1075,7 @@ class ServerCore(object):
         netlog("may_wrap_socket(..) peek_data=%s from %s", binascii.hexlify(peek_data), frominfo)
         if self.ssh_upgrade and peek_data[:4]==b"SSH-":
             conn = self.handle_ssh_connection(conn)
-            return conn!=None, conn, None
+            return conn is not None, conn, None
         elif self._ssl_wrap_socket and peek_data[0] in (chr(0x16), 0x16):
             sock, sockname, address, endpoint = conn._socket, conn.local, conn.remote, conn.endpoint
             sock = self._ssl_wrap_socket(sock)
@@ -1120,7 +1125,7 @@ class ServerCore(object):
     def guess_header_protocol(self, v):
         try:
             c = ord(v[0])
-        except:
+        except TypeError:
             c = int(v[0])
         netlog("guess_header_protocol(%s)", binascii.hexlify(strtobytes(v)))
         if c==0x16:
@@ -1162,7 +1167,8 @@ class ServerCore(object):
         start_thread(self.start_http, "%s-for-%s" % (tname, frominfo), daemon=True, args=(socktype, conn, is_ssl, req_info, conn.remote))
 
     def start_http(self, socktype, conn, is_ssl, req_info, frominfo):
-        httplog("start_http(%s, %s, %s, %s, %s) www dir=%s, headers dir=%s", socktype, conn, is_ssl, req_info, frominfo, self._www_dir, self._http_headers_dir)
+        httplog("start_http(%s, %s, %s, %s, %s) www dir=%s, headers dir=%s",
+                socktype, conn, is_ssl, req_info, frominfo, self._www_dir, self._http_headers_dir)
         try:
             from xpra.net.websockets.handler import WebSocketRequestHandler
             sock = conn._socket

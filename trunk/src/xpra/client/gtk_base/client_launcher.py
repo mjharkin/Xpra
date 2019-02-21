@@ -30,15 +30,19 @@ gui_init()
 from xpra.scripts.config import read_config, make_defaults_struct, validate_config, save_config
 from xpra.codecs.codec_constants import PREFERED_ENCODING_ORDER
 from xpra.gtk_common.quit import gtk_main_quit_really
-from xpra.gtk_common.gtk_util import gtk_main, add_close_accel, scaled_image, pixbuf_new_from_file, color_parse, \
-                                    OptionMenu, choose_file, set_use_tray_workaround, window_defaults, imagebutton, \
-                                    WIN_POS_CENTER, STATE_NORMAL, \
-                                    DESTROY_WITH_PARENT, MESSAGE_INFO,  BUTTONS_CLOSE, \
-                                    FILE_CHOOSER_ACTION_SAVE, FILE_CHOOSER_ACTION_OPEN
+from xpra.gtk_common.gtk_util import (
+    gtk_main, add_close_accel, scaled_image, pixbuf_new_from_file, color_parse,
+    OptionMenu, choose_file, set_use_tray_workaround, window_defaults, imagebutton,
+    WIN_POS_CENTER, STATE_NORMAL,
+    DESTROY_WITH_PARENT, MESSAGE_INFO,  BUTTONS_CLOSE,
+    FILE_CHOOSER_ACTION_SAVE, FILE_CHOOSER_ACTION_OPEN,
+    )
 from xpra.util import DEFAULT_PORT, csv, repr_ellipsized
 from xpra.os_util import thread, WIN32, OSX, PYTHON3
-from xpra.client.gtk_base.gtk_tray_menu_base import make_min_auto_menu, make_encodingsmenu, \
-                                    MIN_QUALITY_OPTIONS, QUALITY_OPTIONS, MIN_SPEED_OPTIONS, SPEED_OPTIONS
+from xpra.client.gtk_base.gtk_tray_menu_base import (
+    make_min_auto_menu, make_encodingsmenu,
+    MIN_QUALITY_OPTIONS, QUALITY_OPTIONS, MIN_SPEED_OPTIONS, SPEED_OPTIONS,
+    )
 from xpra.gtk_common.about import about
 from xpra.scripts.main import (
     connect_to, make_client, configure_network, is_local,
@@ -47,6 +51,7 @@ from xpra.scripts.main import (
 from xpra.platform.paths import get_icon_dir
 from xpra.platform import get_username
 from xpra.log import Logger, enable_debug_for
+
 log = Logger("launcher")
 
 #what we save in the config file:
@@ -122,7 +127,6 @@ def has_mdns():
 
 def noop(*args):
     log("noop%s", args)
-    pass
 
 
 class ApplicationWindow:
@@ -138,8 +142,6 @@ class ApplicationWindow:
         fixup_options(self.config)
         #what we save by default:
         self.config_keys = set(SAVED_FIELDS)
-        def raise_exception(*args):
-            raise Exception(*args)
         self.client = None
         self.exit_launcher = False
         self.exit_code = None
@@ -211,7 +213,7 @@ class ApplicationWindow:
         self.bug_tool = None
         if icon_pixbuf:
             def bug(*_args):
-                if self.bug_tool==None:
+                if self.bug_tool is None:
                     from xpra.client.gtk_base.bug_report import BugReport
                     self.bug_tool = BugReport()
                     self.bug_tool.init(show_about=False)
@@ -223,7 +225,7 @@ class ApplicationWindow:
         self.mdns_gui = None
         if icon_pixbuf and has_mdns():
             def mdns(*_args):
-                if self.mdns_gui==None:
+                if self.mdns_gui is None:
                     from xpra.client.gtk_base.mdns_gui import mdns_sessions
                     self.mdns_gui = mdns_sessions(self.config)
                     def close_mdns():
@@ -519,7 +521,7 @@ class ApplicationWindow:
             ssh_port = self.ssh_port_entry.get_text()
             try:
                 ssh_port = int(ssh_port)
-            except:
+            except ValueError:
                 ssh_port = -1
             errs.append((self.ssh_port_entry, ssh_port<0 or ssh_port>=2**16, "invalid SSH port number"))
         if sshtossh:
@@ -527,7 +529,7 @@ class ApplicationWindow:
             proxy_port = self.proxy_port_entry.get_text()
             try:
                 proxy_port = int(proxy_port)
-            except:
+            except ValueError:
                 proxy_port = -1
             errs.append((self.proxy_port_entry, proxy_port<0 or proxy_port>=2**16, "invalid SSH port number"))
         port = self.port_entry.get_text()
@@ -869,7 +871,7 @@ class ApplicationWindow:
             log.error("failed to start client", exc_info=True)
             self.handle_exception(e)
 
-    def do_start_XpraClient(self, conn, display_desc={}):
+    def do_start_XpraClient(self, conn, display_desc):
         log("do_start_XpraClient(%s, %s) client=%s", conn, display_desc, self.client)
         self.client.encoding = self.config.encoding
         self.client.display_desc = display_desc
@@ -900,7 +902,7 @@ class ApplicationWindow:
 
         def warn_and_quit_override(exit_code, warning):
             log("warn_and_quit_override(%s, %s)", exit_code, warning)
-            if self.exit_code == None:
+            if self.exit_code is None:
                 self.exit_code = exit_code
             password_warning = warning.find("invalid password")>=0
             if password_warning:
@@ -914,7 +916,7 @@ class ApplicationWindow:
 
         def quit_override(exit_code):
             log("quit_override(%s)", exit_code)
-            if self.exit_code == None:
+            if self.exit_code is None:
                 self.exit_code = exit_code
             handle_client_quit(self.exit_code==0)
 
@@ -959,9 +961,9 @@ class ApplicationWindow:
 
 
     def update_options_from_gui(self):
-        def pint(v):
+        def pint(vstr):
             try:
-                return int(v)
+                return int(vstr)
             except ValueError:
                 return 0
         self.config.host = self.host_entry.get_text()
@@ -986,7 +988,8 @@ class ApplicationWindow:
         elif mode_enc in ("ssl", "ssh", "ws", "wss", "ssh -> ssh"):
             self.config.mode = mode_enc
             self.config.encryption = ""
-        log("update_options_from_gui() %s", (self.config.username, self.config.password, self.config.mode, self.config.encryption, self.config.host, self.config.port, self.config.ssh_port, self.config.encoding))
+        log("update_options_from_gui() %s",
+            (self.config.username, self.config.password, self.config.mode, self.config.encryption, self.config.host, self.config.port, self.config.ssh_port, self.config.encoding))
 
     def update_gui_from_config(self):
         #mode:
@@ -1009,16 +1012,16 @@ class ApplicationWindow:
         self.username_entry.set_text(self.config.username)
         self.password_entry.set_text(self.config.password)
         self.host_entry.set_text(self.config.host)
-        def get_port(v, default_port=""):
+        def get_port(vstr, default_port=""):
             try:
-                iport = int(v)
-                if iport>0 and iport<2**16:
+                iport = int(vstr)
+                if 0<iport<2**16:
                     return str(iport)
-            except:
+            except ValueError:
                 pass
             return str(default_port)
         dport = DEFAULT_PORT
-        if mode=="ssh" or mode=="ssh -> ssh":
+        if mode in ("ssh", "ssh -> ssh"):
             #not required, so don't specify one
             dport = ""
         self.port_entry.set_text(get_port(self.config.port, dport))
@@ -1161,9 +1164,7 @@ def do_main(argv):
                 glib.timeout_add(1000, app.set_info_color, True)
             #call from UI thread:
             glib.idle_add(show_signal)
-        if sys.version_info[0]<3:
-            #breaks GTK3..
-            signal.signal(signal.SIGINT, app_signal)
+        signal.signal(signal.SIGINT, app_signal)
         signal.signal(signal.SIGTERM, app_signal)
         has_file = len(args) == 1
         if has_file:
@@ -1221,5 +1222,4 @@ def do_main(argv):
 
 
 if __name__ == "__main__":
-    v = main(sys.argv)
-    sys.exit(v)
+    sys.exit(main(sys.argv))

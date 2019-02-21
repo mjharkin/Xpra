@@ -93,6 +93,15 @@ class X11ServerCore(GTKServerBase):
     def init(self, opts):
         self.do_init(opts)
         GTKServerBase.init(self, opts)
+        self.features_init()
+
+    def features_init(self):
+        with xsync:
+            self.x11_init()
+        from xpra.server import server_features
+        if server_features.windows:
+            from xpra.x11.x11_window_filters import init_x11_window_filters
+            init_x11_window_filters()
 
     def do_init(self, opts):
         self.randr = opts.resize_display
@@ -101,12 +110,6 @@ class X11ServerCore(GTKServerBase):
         self.current_xinerama_config = None
         #x11 keyboard bits:
         self.current_keyboard_group = None
-        with xsync:
-            self.x11_init()
-        from xpra.server import server_features
-        if server_features.windows:
-            from xpra.x11.x11_window_filters import init_x11_window_filters
-            init_x11_window_filters()
 
 
     def x11_init(self):
@@ -210,7 +213,11 @@ class X11ServerCore(GTKServerBase):
                         k = bytestostr(parts[0].strip())
                         v = bytestostr(parts[1].strip())
                         self.opengl_props[k] = v
-                    log.info(" OpenGL is supported on this display")
+                    gllog("opengl props=%s", self.opengl_props)
+                    gllog.info(" OpenGL is supported on display '%s'", os.environ.get("DISPLAY"))
+                    renderer = self.opengl_props.get("renderer")
+                    if renderer:
+                        gllog.info(" using '%s' renderer", renderer)
                 else:
                     self.opengl_props["error-details"] = str(err).strip("\n\r")
                     error = "unknown error"
@@ -363,17 +370,17 @@ class X11ServerCore(GTKServerBase):
         if not self.readonly:
             with xsync:
                 info.setdefault("keyboard", {}).update({
-                                                        "state"             : {
-                                                                               "keys_pressed"   : tuple(self.keys_pressed.keys())
-                                                                               },
-                                                        "fast-switching"    : True,
-                                                        "layout-group"      : X11Keyboard.get_layout_group(),
-                                                        })
+                    "state"             : {
+                        "keys_pressed"   : tuple(self.keys_pressed.keys())
+                        },
+                    "fast-switching"    : True,
+                    "layout-group"      : X11Keyboard.get_layout_group(),
+                    })
         sinfo = info.setdefault("server", {})
         try:
             from xpra.x11.gtk_x11.composite import CompositeHelper
             sinfo["XShm"] = CompositeHelper.XShmEnabled
-        except:
+        except ImportError:
             pass
         #cursor:
         log("do_get_info: adding cursor=%s", self.last_cursor_image)
@@ -404,8 +411,9 @@ class X11ServerCore(GTKServerBase):
         cd = self.last_cursor_image
         if cd is None:
             return {"" : "None"}
+        dci = self.default_cursor_image
         cinfo = {
-            "is_default"   : bool(self.default_cursor_image and len(self.default_cursor_image)>=8 and len(cd)>=8 and cd[7]==cd[7]),
+            "is-default"   : bool(dci) and len(dci)>=8 and len(cd)>=8 and cd[7]==dci[7],
             }
         #all but pixels:
         for i, x in enumerate(("x", "y", "width", "height", "xhot", "yhot", "serial", None, "name")):
@@ -467,7 +475,7 @@ class X11ServerCore(GTKServerBase):
         if self.keys_pressed:
             keylog("clearing keys pressed: %s", self.keys_pressed)
             with xsync:
-                for keycode in self.keys_pressed.keys():
+                for keycode in self.keys_pressed:
                     X11Keyboard.xtest_fake_key(keycode, False)
             self.keys_pressed = {}
         #this will take care of any remaining ones we are not aware of:
@@ -776,7 +784,6 @@ class X11ServerCore(GTKServerBase):
         self.last_cursor_serial = event.cursor_serial
         for ss in self._server_sources.values():
             ss.send_cursor()
-        return False
 
 
     def _motion_signaled(self, model, event):
@@ -973,10 +980,10 @@ class X11ServerCore(GTKServerBase):
             log("screenshot: no regions found, returning empty 0x0 image!")
             return ["screenshot", 0, 0, "png", -1, ""]
         #in theory, we could run the rest in a non-UI thread since we're done with GTK..
-        minx = min([x for (_,x,_,_) in regions])
-        miny = min([y for (_,_,y,_) in regions])
-        maxx = max([(x+img.get_width()) for (_,x,_,img) in regions])
-        maxy = max([(y+img.get_height()) for (_,_,y,img) in regions])
+        minx = min(x for (_,x,_,_) in regions)
+        miny = min(y for (_,_,y,_) in regions)
+        maxx = max((x+img.get_width()) for (_,x,_,img) in regions)
+        maxy = max((y+img.get_height()) for (_,_,y,img) in regions)
         width = maxx-minx
         height = maxy-miny
         log("screenshot: %sx%s, min x=%s y=%s", width, height, minx, miny)

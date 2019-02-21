@@ -78,6 +78,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         #skip doing internal init again:
         if not hasattr(self, "exit_code"):
             self.defaults_init()
+        ServerInfoMixin.__init__(self)
         FilePrintMixin.__init__(self)
         self._init_done = False
         #insert in order:
@@ -137,7 +138,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         self.init_packet_handlers()
         sanity_checks()
 
-    def init(self, opts, _extra_args=[]):
+    def init(self, opts, _extra_args=()):
         if self._init_done:
             #the gtk client classes can inherit this method
             #from multiple parents, skip initializing twice
@@ -156,8 +157,6 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         self.encryption_keyfile = opts.encryption_keyfile or opts.tcp_encryption_keyfile
         #register the authentication challenge handlers:
         ch = tuple(x.strip().lower() for x in (opts.challenge_handlers or "").split(","))
-        def has_h(name):
-            return "all" in ch or name in ch
         for ch_name in ch:
             if ch_name=="all":
                 self.challenge_handlers.update(self.default_challenge_methods)
@@ -173,14 +172,14 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
             self.timeout_add(10*1000, print_leaks)
 
 
-    def timeout_add(self, *args):
-        raise Exception("override me!")
+    def timeout_add(self, *_args):
+        raise NotImplementedError("override me!")
 
-    def idle_add(self, *args):
-        raise Exception("override me!")
+    def idle_add(self, *_args):
+        raise NotImplementedError("override me!")
 
-    def source_remove(self, *args):
-        raise Exception("override me!")
+    def source_remove(self, *_args):
+        raise NotImplementedError("override me!")
 
 
     def may_notify(self, nid, summary, body, *args, **kwargs):
@@ -203,7 +202,8 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         signal.signal(signal.SIGINT, self.handle_deadly_signal)
         signal.signal(signal.SIGTERM, self.handle_deadly_signal)
         self.signal_cleanup()
-        self.timeout_add(0, self.signal_disconnect_and_quit, 128 + signum, "exit on signal %s" % SIGNAMES.get(signum, signum))
+        reason = "exit on signal %s" % SIGNAMES.get(signum, signum)
+        self.timeout_add(0, self.signal_disconnect_and_quit, 128 + signum, reason)
 
     def install_signal_handlers(self):
         signal.signal(signal.SIGINT, self.handle_app_signal)
@@ -296,7 +296,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
             for d in (self._packet_handlers, self._ui_packet_handlers):
                 try:
                     del d[k]
-                except:
+                except KeyError:
                     pass
 
     def set_packet_handlers(self, to, defs):
@@ -505,7 +505,8 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
             p.source_has_more()
 
     def next_packet(self):
-        netlog("next_packet() packets in queues: priority=%i, ordinary=%i, mouse=%s", len(self._priority_packets), len(self._ordinary_packets), bool(self._mouse_position))
+        netlog("next_packet() packets in queues: priority=%i, ordinary=%i, mouse=%s",
+               len(self._priority_packets), len(self._ordinary_packets), bool(self._mouse_position))
         synchronous = True
         if self._priority_packets:
             packet = self._priority_packets.pop(0)
@@ -566,7 +567,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         #ie: ("disconnect", "version error", "incompatible version")
         info = tuple(nonl(bytestostr(x)) for x in packet[1:])
         reason = info[0]
-        if self.server_capabilities is None or len(self.server_capabilities)==0:
+        if not self.server_capabilities:
             #server never sent hello to us - so disconnect is an error
             #(but we don't know which one - the info message may help)
             self.server_disconnect_warning("disconnected before the session could be established", *info)
@@ -792,7 +793,8 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
             info = self._protocol.get_info(False)
             key_handle_filenames = []
             for hostinfo in ("-%s" % info.get("host", ""), ""):
-                key_handle_filenames += [os.path.join(d, "u2f-keyhandle%s.hex" % hostinfo) for d in get_user_conf_dirs()]
+                for d in get_user_conf_dirs():
+                    key_handle_filenames.append(os.path.join(d, "u2f-keyhandle%s.hex" % hostinfo))
             for filename in key_handle_filenames:
                 p = osexpand(filename)
                 key_handle_str = load_binary_file(p)
@@ -831,7 +833,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
             authlog("xor challenge, encrypted=%s, local=%s", encrypted, local)
             if local and ALLOW_LOCALHOST_PASSWORDS:
                 return True
-            elif not encrypted and not ALLOW_UNENCRYPTED_PASSWORDS:
+            if not encrypted and not ALLOW_UNENCRYPTED_PASSWORDS:
                 self.auth_error(EXIT_ENCRYPTION, "server requested '%s' digest, cowardly refusing to use it without encryption" % digest, "invalid digest")
                 return False
         salt_digest = "xor"
@@ -939,7 +941,8 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         if not key:
             XPRA_ENCRYPTION_KEY = "XPRA_ENCRYPTION_KEY"
             key = strtobytes(os.environ.get(XPRA_ENCRYPTION_KEY, ''))
-            cryptolog("get_encryption_key() got %i bytes from '%s' environment variable", len(key or ""), XPRA_ENCRYPTION_KEY)
+            cryptolog("get_encryption_key() got %i bytes from '%s' environment variable",
+                      len(key or ""), XPRA_ENCRYPTION_KEY)
         if not key:
             raise InitExit(1, "no encryption key")
         return key.strip(b"\n\r")
@@ -960,7 +963,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
 
     def capsget(self, capabilities, key, default):
         v = capabilities.get(strtobytes(key), default)
-        if PYTHON3 and type(v)==bytes:
+        if PYTHON3 and isinstance(v, bytes):
             v = bytestostr(v)
         return v
 
@@ -1028,7 +1031,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
 
     def _process_gibberish(self, packet):
         log("process_gibberish(%s)", repr_ellipsized(packet))
-        (_, message, data) = packet
+        message, data = packet[1:3]
         p = self._protocol
         show_as_text = p and p.input_packetcount==0 and all(c in string.printable for c in bytestostr(data))
         if show_as_text:
@@ -1046,7 +1049,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         self.quit(EXIT_PACKET_FAILURE)
 
     def _process_invalid(self, packet):
-        (_, message, data) = packet
+        message, data = packet[1:3]
         netlog.info("Received invalid packet: %s", message)
         netlog(" data: %s", repr_ellipsized(data))
         self.quit(EXIT_PACKET_FAILURE)
@@ -1070,4 +1073,5 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         except KeyboardInterrupt:
             raise
         except:
-            netlog.error("Unhandled error while processing a '%s' packet from peer using %s", packet_type, handler, exc_info=True)
+            netlog.error("Unhandled error while processing a '%s' packet from peer using %s",
+                         packet_type, handler, exc_info=True)

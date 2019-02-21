@@ -1,6 +1,6 @@
 # This file is part of Xpra.
 # Copyright (C) 2011 Serviware (Arthur Huillet, <ahuillet@serviware.com>)
-# Copyright (C) 2010-2017 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008, 2010 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -32,8 +32,18 @@ AWT_DIALOG_WORKAROUND = envbool("XPRA_AWT_DIALOG_WORKAROUND", WIN32)
 
 class ClientWindowBase(ClientWidgetBase):
 
-    def __init__(self, client, group_leader, watcher_pid, wid, wx, wy, ww, wh, bw, bh, metadata, override_redirect, client_properties, border, max_window_size, default_cursor_data, pixel_depth):
-        log("%s%s", type(self), (client, group_leader, watcher_pid, wid, wx, wy, ww, wh, bw, bh, metadata, override_redirect, client_properties, max_window_size, default_cursor_data, pixel_depth))
+    #(overriden in subclasses)
+    NAME_TO_HINT = {}
+
+    def __init__(self, client, group_leader, watcher_pid, wid,
+                 wx, wy, ww, wh, bw, bh,
+                 metadata, override_redirect, client_properties,
+                 border, max_window_size, default_cursor_data, pixel_depth):
+        log("%s%s", type(self),
+            (client, group_leader, watcher_pid, wid,
+             wx, wy, ww, wh, bw, bh,
+             metadata, override_redirect, client_properties,
+             border, max_window_size, default_cursor_data, pixel_depth))
         ClientWidgetBase.__init__(self, client, watcher_pid, wid, metadata.boolget("has-alpha"))
         self._override_redirect = override_redirect
         self.group_leader = group_leader
@@ -85,7 +95,8 @@ class ClientWindowBase(ClientWidgetBase):
         self._desktop_workspace = self.get_desktop_workspace()
         def wn(w):
             return WORKSPACE_NAMES.get(w, w)
-        workspacelog("init_window(..) workspace=%s, current workspace=%s", wn(self._window_workspace), wn(self._desktop_workspace))
+        workspacelog("init_window(..) workspace=%s, current workspace=%s",
+                     wn(self._window_workspace), wn(self._desktop_workspace))
         if self.max_window_size and b"size-constraints" not in metadata:
             #this ensures that we will set size-constraints and honour max_window_size:
             metadata[b"size-constraints"] = {}
@@ -132,7 +143,7 @@ class ClientWindowBase(ClientWidgetBase):
                 #ie: "encodings.rgb_formats" -> "rgb_formats"
                 #ie: "encoding.full_csc_modes" -> "full_csc_modes"
                 ek = k.split(".", 1)[1]
-            except:
+            except IndexError:
                 ek = k
             dv = encoding_defaults.get(ek)
             if dv is not None and dv==v:
@@ -211,7 +222,7 @@ class ClientWindowBase(ClientWidgetBase):
                         if PYTHON2:
                             value = value.decode("utf-8")
                         return value
-                    title = re.sub("@[\w\-]*@", metadata_replace, title)
+                    title = re.sub(r"@[\w\-]*@", metadata_replace, title)
                 if PYTHON2:
                     utf8_title = title.encode("utf-8")
                 else:
@@ -230,9 +241,10 @@ class ClientWindowBase(ClientWidgetBase):
             self.reset_icon()
 
         if b"size-constraints" in metadata:
-            self.size_constraints = typedict(metadata.dictget("size-constraints"))
-            self._set_initial_position = self.size_constraints.boolget("set-initial-position", self._set_initial_position)
-            self.set_size_constraints(self.size_constraints, self.max_window_size)
+            sc = typedict(metadata.dictget("size-constraints"))
+            self.size_constraints = sc
+            self._set_initial_position = sc.boolget("set-initial-position", self._set_initial_position)
+            self.set_size_constraints(sc, self.max_window_size)
 
         if b"set-initial-position" in metadata:
             #this should be redundant - but we keep it here for consistency
@@ -346,7 +358,7 @@ class ClientWindowBase(ClientWidgetBase):
             skip_pager = metadata.boolget("skip-pager")
             if self._skip_pager!=skip_pager:
                 self._skip_pager = skip_pager
-                self.set_skip_taskbar_hint(skip_pager)
+                self.set_skip_pager_hint(skip_pager)
 
         if b"workspace" in metadata:
             self.set_workspace(metadata.intget("workspace"))
@@ -385,7 +397,7 @@ class ClientWindowBase(ClientWidgetBase):
     def set_bypass_compositor(self, v):
         pass        #see gtk client window base
 
-    def set_strut(self, d):
+    def set_strut(self, strut):
         pass        #see gtk client window base
 
     def set_fullscreen_monitors(self, fsm):
@@ -450,14 +462,15 @@ class ClientWindowBase(ClientWidgetBase):
             #not honouring "base" + "inc", but honouring just "min" instead:
             maxw = max(minw, maxw)
             maxh = max(minh, maxh)
-            geomlog("modified hints for max window size %s: %s (rw=%s, rh=%s) -> max=%sx%s", max_window_size, hints, rw, rh, maxw, maxh)
+            geomlog("modified hints for max window size %s: %s (rw=%s, rh=%s) -> max=%sx%s",
+                    max_window_size, hints, rw, rh, maxw, maxh)
             #ensure we don't have duplicates with bytes / strings,
             #and that keys are always "bytes":
             #(in practice this code should never fire, just here as a reminder)
             for x in ("max_width", "max_height"):
                 try:
                     del hints[x]
-                except:
+                except KeyError:
                     pass
             hints[b"max_width"] = maxw
             hints[b"max_height"] = maxh
@@ -589,7 +602,7 @@ class ClientWindowBase(ClientWidgetBase):
         #the "ClientWindow"
         self._client.send_refresh_all()
 
-    def draw_region(self, x, y, width, height, coding, img_data, rowstride, packet_sequence, options, callbacks):
+    def draw_region(self, x, y, width, height, coding, img_data, rowstride, _packet_sequence, options, callbacks):
         """ Note: this runs from the draw thread (not UI thread) """
         backing = self._backing
         if not backing:
@@ -598,7 +611,8 @@ class ClientWindowBase(ClientWidgetBase):
             fire_paint_callbacks(callbacks, -1, "no backing")
             return
         def after_draw_refresh(success, message=""):
-            plog("after_draw_refresh(%s, %s) %sx%s at %sx%s encoding=%s, options=%s", success, message, width, height, x, y, coding, options)
+            plog("after_draw_refresh(%s, %s) %sx%s at %sx%s encoding=%s, options=%s",
+                 success, message, width, height, x, y, coding, options)
             if success<=0:
                 return
             backing = self._backing
@@ -630,7 +644,7 @@ class ClientWindowBase(ClientWidgetBase):
         #with normal windows, we just queue a draw request
         #and let the expose event paint the spinner
         w, h = self.get_size()
-        self.queue_draw(self, 0, 0, w, h)
+        self.queue_draw(0, 0, w, h)
 
     def can_have_spinner(self):
         if self._backing is None:
@@ -687,7 +701,7 @@ class ClientWindowBase(ClientWidgetBase):
             log.error(" this server does not support dbus-proxying")
             return
         rpc_args = [self._id]+args
-        return self._client.rpc_call("dbus", rpc_args, **kwargs)
+        self._client.rpc_call("dbus", rpc_args, **kwargs)
 
 
     def get_mouse_event_wid(self, _x, _y):
@@ -709,7 +723,7 @@ class ClientWindowBase(ClientWidgetBase):
     def _device_info(self, event):
         try:
             return event.device.get_name()
-        except:
+        except AttributeError:
             return ""
 
     def _button_action(self, button, event, depressed, *args):
@@ -717,7 +731,8 @@ class ClientWindowBase(ClientWidgetBase):
             return
         pointer, relative_pointer, modifiers, buttons = self._pointer_modifiers(event)
         wid = self.get_mouse_event_wid(*pointer)
-        mouselog("_button_action(%s, %s, %s) wid=%s / focus=%s / window wid=%i, device=%s, pointer=%s, modifiers=%s, buttons=%s", button, event, depressed, wid, self._client._focused, self._id, self._device_info(event), pointer, modifiers, buttons)
+        mouselog("_button_action(%s, %s, %s) wid=%s / focus=%s / window wid=%i, device=%s, pointer=%s, modifiers=%s, buttons=%s",
+                 button, event, depressed, wid, self._client._focused, self._id, self._device_info(event), pointer, modifiers, buttons)
         #map wheel buttons via translation table to support inverted axes:
         server_button = button
         if button>3:

@@ -49,7 +49,9 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
     http_headers_cache = {}
     http_headers_time = {}
 
-    def __init__(self, sock, addr, web_root="/usr/share/xpra/www/", http_headers_dir="/usr/share/xpra/http-headers", script_paths={}):
+    def __init__(self, sock, addr,
+                 web_root="/usr/share/xpra/www/",
+                 http_headers_dir="/usr/share/xpra/http-headers", script_paths={}):
         self.web_root = web_root
         self.http_headers_dir = http_headers_dir
         self.script_paths = script_paths
@@ -181,16 +183,9 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
         content = self.send_head()
         if content:
             self.wfile.write(content)
-        self.wfile.flush()
-        self.wfile.close()
 
     def do_HEAD(self):
-        if self.only_upgrade:
-            self.send_error(405, "Method Not Allowed")
-        else:
-            self.send_head()
-        self.wfile.flush()
-        self.wfile.close()
+        self.send_head()
 
     #code taken from MIT licensed code in GzipSimpleHTTPServer.py
     def send_head(self):
@@ -204,8 +199,6 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
         path = self.translate_path(self.path)
         if not path:
             self.send_error(404, "Path not found")
-            self.wfile.flush()
-            self.wfile.close()
             return None
         if os.path.isdir(path):
             if not path.endswith('/'):
@@ -276,7 +269,10 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
                 content = f.read()
                 assert len(content)==content_length, \
                     "expected %s to contain %i bytes but read %i bytes" % (path, content_length, len(content))
-                if content_length>128 and ("gzip" in accept) and ("gzip" in HTTP_ACCEPT_ENCODING) and (ext not in (".png", )):
+                if content_length>128 and \
+                ("gzip" in accept) and \
+                ("gzip" in HTTP_ACCEPT_ENCODING) \
+                and (ext not in (".png", )):
                     #gzip it on the fly:
                     import zlib
                     assert len(content)==content_length, \
@@ -306,12 +302,13 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
                 log.error(" %s", e)
             try:
                 self.send_error(404, "File not found")
-            except:
-                log("failed to send 404 error - maybe some of the headers were already sent?")
+            except (IOError, OSError):
+                log("failed to send 404 error - maybe some of the headers were already sent?", exc_info=True)
+            return None
+        finally:
             if f:
                 try:
                     f.close()
-                except:
-                    pass
-            return None
+                except (IOError, OSError):
+                    log("failed to close", exc_info=True)
         return content

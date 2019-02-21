@@ -316,7 +316,7 @@ class WebSocketConnection(SocketConnection):
                 buf = self.pending_read.get()
                 log("read() returning pending read buffer, len=%i", len(buf))
                 self.input_bytecount += len(buf)
-                return buf
+                return memoryview_to_bytes(buf)
             bufs, closed_string = self.ws_handler.recv_frames()
             if closed_string:
                 log("read() closed_string: %s", closed_string)
@@ -328,7 +328,7 @@ class WebSocketConnection(SocketConnection):
                     for v in bufs[1:]:
                         self.pending_read.put(v)
                 self.input_bytecount += len(buf)
-                return buf
+                return memoryview_to_bytes(buf)
 
     def write(self, buf):
         self.ws_handler.send_frames([memoryview_to_bytes(buf)])

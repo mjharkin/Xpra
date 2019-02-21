@@ -10,21 +10,29 @@
 # FIXME: Cython.Distutils.build_ext leaves crud in the source directory.  (So
 # does the make_constants hack.)
 
+import ssl
+import sys
 import glob
+import shutil
+import os.path
+
 from distutils.core import setup
 from distutils.extension import Extension
-import sys
-import os.path
 from distutils.command.build import build
 from distutils.command.install_data import install_data
-import shutil
+
+import xpra
+from xpra.os_util import (
+    get_status_output, getUbuntuVersion,
+    PYTHON3, BITS, WIN32, OSX, LINUX, POSIX, NETBSD, FREEBSD, OPENBSD,
+    is_Ubuntu, is_Debian, is_Raspbian, is_Fedora, is_CentOS,
+    )
 
 if sys.version<'2.7':
     raise Exception("xpra no longer supports Python 2 versions older than 2.7")
 if sys.version[0]=='3' and sys.version<'3.4':
     raise Exception("xpra no longer supports Python 3 versions older than 3.4")
 #we don't support versions of Python without the new ssl code:
-import ssl
 assert ssl.SSLContext, "xpra requires a Python version with ssl.SSLContext support"
 
 print(" ".join(sys.argv))
@@ -32,7 +40,6 @@ print(" ".join(sys.argv))
 #*******************************************************************************
 # build options, these may get modified further down..
 #
-import xpra
 data_files = []
 modules = []
 packages = []       #used by py2app
@@ -61,16 +68,6 @@ setup_options = {
                  "py_modules"       : modules,
                  }
 
-WIN32 = sys.platform.startswith("win") or sys.platform.startswith("msys")
-OSX = sys.platform.startswith("darwin")
-LINUX = sys.platform.startswith("linux")
-NETBSD = sys.platform.startswith("netbsd")
-FREEBSD = sys.platform.startswith("freebsd")
-OPENBSD = sys.platform.startswith("openbsd")
-
-PYTHON3 = sys.version_info[0] == 3
-POSIX = os.name=="posix"
-
 
 if "pkg-info" in sys.argv:
     with open("PKG-INFO", "wb") as f:
@@ -93,8 +90,6 @@ print("Xpra version %s" % XPRA_VERSION)
 # using --with-OPTION or --without-OPTION
 # only the default values are specified here:
 #*******************************************************************************
-from xpra.os_util import get_status_output, getUbuntuVersion, PYTHON3, BITS, \
-    is_Ubuntu, is_Debian, is_Raspbian, is_Fedora, is_CentOS
 
 PKG_CONFIG = os.environ.get("PKG_CONFIG", "pkg-config")
 has_pkg_config = False
@@ -118,8 +113,7 @@ def no_pkgconfig(*_pkgs_options, **_ekw):
     return {}
 
 def pkg_config_ok(*args):
-    cmd = [PKG_CONFIG]  + [str(x) for x in args]
-    return get_status_output(cmd)[0]==0
+    return get_status_output([PKG_CONFIG] + [str(x) for x in args])[0]==0
 
 def pkg_config_version(req_version, pkgname):
     cmd = [PKG_CONFIG, "--modversion", pkgname]
@@ -485,14 +479,14 @@ if modules_ENABLED:
 
 def add_data_files(target_dir, files):
     #this is overriden below because cx_freeze uses the opposite structure (files first...). sigh.
-    assert type(target_dir)==str
-    assert type(files) in (list, tuple)
+    assert isinstance(target_dir, str)
+    assert isinstance(files, (list, tuple))
     data_files.append((target_dir, files))
 
 
 #for pretty printing of options:
 def print_option(prefix, k, v):
-    if type(v)==dict:
+    if isinstance(v, dict):
         print("%s* %s:" % (prefix, k))
         for kk,vv in v.items():
             print_option(" "+prefix, kk, vv)
@@ -501,20 +495,25 @@ def print_option(prefix, k, v):
 
 #*******************************************************************************
 # Utility methods for building with Cython
-def cython_version_check(min_version):
+def cython_version_compare(min_version):
     from distutils.version import LooseVersion
     assert cython_ENABLED
     from Cython.Compiler.Version import version as cython_version
-    if LooseVersion(cython_version) < LooseVersion(".".join([str(x) for x in min_version])):
+    return LooseVersion(cython_version) >= LooseVersion(min_version)
+
+def cython_version_check(min_version):
+    if not cython_version_compare(min_version):
+        from Cython.Compiler.Version import version as cython_version
         sys.exit("ERROR: Your version of Cython is too old to build this package\n"
                  "You have version %s\n"
                  "Please upgrade to Cython %s or better"
-                 % (cython_version, ".".join([str(part) for part in min_version])))
+                 % (cython_version, min_version))
 
-def cython_add(extension, min_version=(0, 19)):
+def cython_add(extension, min_version="0.25"):
     #gentoo does weird things, calls --no-compile with build *and* install
     #then expects to find the cython modules!? ie:
-    #python2.7 setup.py build -b build-2.7 install --no-compile --root=/var/tmp/portage/x11-wm/xpra-0.7.0/temp/images/2.7
+    #python2.7 setup.py build -b build-2.7 install --no-compile \
+    #    --root=/var/tmp/portage/x11-wm/xpra-0.7.0/temp/images/2.7
     if "--no-compile" in sys.argv and not ("build" in sys.argv and "install" in sys.argv):
         return
     assert cython_ENABLED, "cython compilation is disabled"
@@ -556,8 +555,8 @@ GCC_VERSION = []
 def get_gcc_version():
     global GCC_VERSION
     if not GCC_VERSION:
-        cmd = [os.environ.get("CC", "gcc"), "-v"]
-        r, _, err = get_status_output(cmd)
+        cc = os.environ.get("CC", "gcc")
+        r, _, err = get_status_output([cc]+["-v"])
         if r==0:
             V_LINE = "gcc version "
             for line in err.splitlines():
@@ -649,7 +648,7 @@ def exec_pkgconfig(*pkgs_options, **ekw):
     kw = dict(ekw)
     optimize = kw.pop("optimize", None)
     if optimize and not debug_ENABLED:
-        if type(optimize)==bool:
+        if isinstance(optimize, bool):
             optimize = int(optimize)*3
         add_to_keywords(kw, 'extra_compile_args', "-O%i" % optimize)
     ignored_flags = kw.pop("ignored_flags", [])
@@ -660,8 +659,8 @@ def exec_pkgconfig(*pkgs_options, **ekw):
     if not (is_Fedora() or is_Debian() or is_CentOS()):
         import shlex
         import sysconfig
-        for x in shlex.split(sysconfig.get_config_var('CFLAGS') or ''):
-            add_to_keywords(kw, 'extra_compile_args', x)
+        for cflag in shlex.split(sysconfig.get_config_var('CFLAGS') or ''):
+            add_to_keywords(kw, 'extra_compile_args', cflag)
 
     def add_tokens(s, extra="extra_link_args", extra_map={"-W" : "extra_compile_args"}):
         if not s:
@@ -697,12 +696,13 @@ def exec_pkgconfig(*pkgs_options, **ekw):
                 options = package_options       #got given a list of options
             for option in options:
                 cmd = ["pkg-config", "--exists", option]
-                r, _, _ = get_status_output(cmd)
+                r = get_status_output(cmd)[0]
                 if r==0:
                     valid_option = option
                     break
             if not valid_option:
-                raise Exception("ERROR: cannot find a valid pkg-config entry for %s using PKG_CONFIG_PATH=%s" % (" or ".join(options), os.environ.get("PKG_CONFIG_PATH", "(empty)")))
+                raise Exception("ERROR: cannot find a valid pkg-config entry for %s using PKG_CONFIG_PATH=%s" %
+                                (" or ".join(options), os.environ.get("PKG_CONFIG_PATH", "(empty)")))
             package_names.append(valid_option)
         if verbose_ENABLED and list(pkgs_options)!=list(package_names):
             print("exec_pkgconfig(%s,%s) using package names=%s" % (pkgs_options, ekw, package_names))
@@ -736,7 +736,8 @@ def exec_pkgconfig(*pkgs_options, **ekw):
             eifd = ["-Werror"]
             if is_Debian() or is_Ubuntu() or is_Raspbian():
                 #needed on Debian and Ubuntu to avoid this error:
-                #/usr/include/gtk-2.0/gtk/gtkitemfactory.h:47:1: error: function declaration isn't a prototype [-Werror=strict-prototypes]
+                #/usr/include/gtk-2.0/gtk/gtkitemfactory.h:47:1:
+                # error: function declaration isn't a prototype [-Werror=strict-prototypes]
                 eifd.append("-Wno-error=strict-prototypes")
                 #the cython version shipped with Xenial emits warnings:
                 if getUbuntuVersion()<=(16,4):
@@ -913,7 +914,7 @@ def build_xpra_conf(install_dir):
             'dbus_control'          : bstr(dbus_ENABLED),
             'mmap'                  : bstr(True),
             }
-    def convert_templates(subdirs=[]):
+    def convert_templates(subdirs):
         dirname = os.path.join(*(["etc", "xpra"] + subdirs))
         #get conf dir for install, without stripping the build root
         target_dir = os.path.join(get_conf_dir(install_dir, stripbuildroot=False), *subdirs)
@@ -939,13 +940,14 @@ def build_xpra_conf(install_dir):
             with open(target_file, "w") as f_out:
                 config_data = template % SUBS
                 f_out.write(config_data)
-    convert_templates()
+    convert_templates([])
 
 
 #*******************************************************************************
-if 'clean' in sys.argv or 'sdist' in sys.argv:
+def clean():
     #clean and sdist don't actually use cython,
     #so skip this (and avoid errors)
+    global pkgconfig
     pkgconfig = no_pkgconfig
     #always include everything in this case:
     add_packages("xpra")
@@ -1038,6 +1040,9 @@ if 'clean' in sys.argv or 'sdist' in sys.argv:
                 print("removing Cython/build generated file: %s" % x)
             os.unlink(filename)
 
+if 'clean' in sys.argv or 'sdist' in sys.argv:
+    clean()
+
 from add_build_info import record_build_info, BUILD_INFO_FILE, record_src_info, SRC_INFO_FILE, has_src_info
 
 if "clean" not in sys.argv:
@@ -1072,8 +1077,7 @@ def glob_recurse(srcdir):
     for root, _, files in os.walk(srcdir):
         for f in files:
             dirname = root[len(srcdir)+1:]
-            filename = os.path.join(root, f)
-            m.setdefault(dirname, []).append(filename)
+            m.setdefault(dirname, []).append(os.path.join(root, f))
     return m
 
 
@@ -1112,8 +1116,8 @@ if WIN32:
         def add_data_files(target_dir, files):
             if verbose_ENABLED:
                 print("add_data_files(%s, %s)" % (target_dir, files))
-            assert type(target_dir)==str
-            assert type(files) in (list, tuple)
+            assert isinstance(target_dir, str)
+            assert isinstance(files, (list, tuple))
             for f in files:
                 target_file = os.path.join(target_dir, os.path.basename(f))
                 data_files.append((f, target_file))
@@ -1124,21 +1128,21 @@ if WIN32:
         def add_dir(base, defs):
             if verbose_ENABLED:
                 print("add_dir(%s, %s)" % (base, defs))
-            if type(defs) in (list, tuple):
+            if isinstance(defs, (list, tuple)):
                 for sub in defs:
-                    if type(sub)==dict:
+                    if isinstance(sub, dict):
                         add_dir(base, sub)
                     else:
-                        assert type(sub)==str
+                        assert isinstance(sub, str)
                         filename = os.path.join(gnome_include_path, base, sub)
                         if os.path.exists(filename):
                             add_data_files(base, [filename])
                         else:
                             print("Warning: missing '%s'" % filename)
             else:
-                assert type(defs)==dict
+                assert isinstance(defs, dict)
                 for d, sub in defs.items():
-                    assert type(sub) in (dict, list, tuple)
+                    assert isinstance(sub, (dict, list, tuple))
                     #recurse down:
                     add_dir(os.path.join(base, d), sub)
 
@@ -1161,7 +1165,7 @@ if WIN32:
             dll_names = list(dll_names)
             dll_files = []
             import re
-            version_re = re.compile("-[0-9\.-]+$")
+            version_re = re.compile(r"-[0-9\.-]+$")
             dirs = os.environ.get("PATH").split(os.path.pathsep)
             if os.path.exists(gnome_include_path):
                 dirs.insert(0, gnome_include_path)
@@ -1175,7 +1179,8 @@ if WIN32:
                     x = x.lower()
                     if os.path.isdir(dll_path) or not x.startswith("lib") or not x.endswith(".dll"):
                         continue
-                    nameversion = x[3:-4]                       #strip "lib" and ".dll": "libatk-1.0-0.dll" -> "atk-1.0-0"
+                    #strip "lib" and ".dll": "libatk-1.0-0.dll" -> "atk-1.0-0"
+                    nameversion = x[3:-4]
                     if verbose_ENABLED:
                         print("checking %s: %s" % (x, nameversion))
                     m = version_re.search(nameversion)          #look for version part of filename
@@ -1454,7 +1459,7 @@ if WIN32:
         if "clean" not in sys.argv and html5_ENABLED:
             install_html5(os.path.join(install, "www"), )
             for k,v in glob_recurse("build/www").items():
-                if (k!=""):
+                if k!="":
                     k = os.sep+k
                 add_data_files('www'+k, v)
 
@@ -1516,7 +1521,11 @@ if WIN32:
             try:
                 shutil.copytree(
                     module_dir, os.path.join(install, "lib", module_name),
-                    ignore = shutil.ignore_patterns("Tk", "AGL", "EGL", "GLX", "GLX.*", "_GLX.*", "GLE", "GLES1", "GLES2", "GLES3")
+                    ignore = shutil.ignore_patterns(
+                        "Tk", "AGL", "EGL",
+                        "GLX", "GLX.*", "_GLX.*",
+                        "GLE", "GLES1", "GLES2", "GLES3",
+                        )
                 )
                 print("copied %s to %s/%s" % (module_dir, install, module_name))
             except Exception as e:
@@ -1548,7 +1557,7 @@ else:
         if OPENBSD:
             man_path = "man"
         add_data_files("%s/man1" % man_path,  ["man/xpra.1", "man/xpra_launcher.1"])
-        add_data_files("share/applications",  ["xdg/xpra-shadow.desktop", "xdg/xpra-launcher.desktop", "xdg/xpra-browser.desktop", "xdg/xpra.desktop"])
+        add_data_files("share/applications",  glob.glob("xdg/*.desktop"))
         add_data_files("share/mime/packages", ["xdg/application-x-xpraconfig.xml"])
         add_data_files("share/icons",         ["xdg/xpra.png", "xdg/xpra-mdns.png", "xdg/xpra-shadow.png"])
         add_data_files("share/appdata",       ["xdg/xpra.appdata.xml"])
@@ -1679,7 +1688,8 @@ else:
 
     #gentoo does weird things, calls --no-compile with build *and* install
     #then expects to find the cython modules!? ie:
-    #> python2.7 setup.py build -b build-2.7 install --no-compile --root=/var/tmp/portage/x11-wm/xpra-0.7.0/temp/images/2.7
+    #> python2.7 setup.py build -b build-2.7 install --no-compile \
+    # --root=/var/tmp/portage/x11-wm/xpra-0.7.0/temp/images/2.7
     #otherwise we use the flags to skip pkgconfig
     if ("--no-compile" in sys.argv or "--skip-build" in sys.argv) and not ("build" in sys.argv and "install" in sys.argv):
         pkgconfig = no_pkgconfig
@@ -1691,7 +1701,7 @@ else:
         #don't use py_modules or scripts with py2app, and no cython:
         del setup_options["py_modules"]
         scripts = []
-        def cython_add(*args, **kwargs):
+        def cython_add(*_args, **_kwargs):
             pass
 
         remove_packages("ctypes.wintypes", "colorsys")
@@ -1699,7 +1709,7 @@ else:
 
         try:
             from xpra.src_info import REVISION
-        except:
+        except ImportError:
             REVISION = "unknown"
         Plist = {
             "CFBundleDocumentTypes" : {
@@ -1954,7 +1964,7 @@ toggle_packages(tests_ENABLED, "unit")
 if bundle_tests_ENABLED:
     #bundle the tests directly (not in library.zip):
     for k,v in glob_recurse("unit").items():
-        if (k!=""):
+        if k!="":
             k = os.sep+k
         add_data_files("unit"+k, v)
 
@@ -2006,7 +2016,13 @@ if client_ENABLED or server_ENABLED:
     add_modules("xpra.codecs")
 toggle_packages(keyboard_ENABLED, "xpra.keyboard")
 if client_ENABLED or server_ENABLED:
-    add_modules("xpra.scripts.config", "xpra.scripts.parsing", "xpra.scripts.exec_util", "xpra.scripts.fdproxy", "xpra.scripts.version")
+    add_modules(
+        "xpra.scripts.config",
+        "xpra.scripts.parsing",
+        "xpra.scripts.exec_util",
+        "xpra.scripts.fdproxy",
+        "xpra.scripts.version",
+        )
 if server_ENABLED or proxy_ENABLED:
     add_modules("xpra.scripts.server")
 if WIN32 and client_ENABLED and (gtk2_ENABLED or gtk3_ENABLED):
@@ -2015,7 +2031,10 @@ if WIN32 and client_ENABLED and (gtk2_ENABLED or gtk3_ENABLED):
 toggle_packages(not WIN32, "xpra.platform.pycups_printing")
 #we can't just include "xpra.client.gl" because cx_freeze then do the wrong thing
 #and tries to include both gtk3 and gtk2, and fails hard..
-for x in ("gl_check", "gl_colorspace_conversions", "gl_window_backing_base", "gl_drivers", "window_backend"):
+for x in (
+    "gl_check", "gl_drivers", "gl_spinner",
+    "gl_colorspace_conversions", "gl_window_backing_base", "window_backend",
+    ):
     toggle_packages(client_ENABLED and opengl_ENABLED, "xpra.client.gl.%s" % x)
 toggle_packages(client_ENABLED and opengl_ENABLED and (gtk2_ENABLED or gtk3_ENABLED), "xpra.client.gl.gtk_base")
 
@@ -2085,7 +2104,13 @@ if nvenc_ENABLED and cuda_kernels_ENABLED:
     if WIN32:
         nvcc_exe = "nvcc.exe"
         CUDA_DIR = os.environ.get("CUDA_DIR", "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA")
-        path_options = [os.path.join(CUDA_DIR, x, "bin") for x in ("v9.2", "v9.1", "v9.0", "v8.0", "v7.5")] + path_options
+        path_options = [os.path.join(CUDA_DIR, x, "bin") for x in (
+            "v9.2",
+            "v9.1",
+            "v9.0",
+            "v8.0",
+            "v7.5",
+            )] + path_options
         #pycuda may link against curand, find it and ship it:
         for p in path_options:
             if os.path.exists(p):
@@ -2113,20 +2138,24 @@ if nvenc_ENABLED and cuda_kernels_ENABLED:
     except:
         pass
     nvcc_versions = {}
+    def get_nvcc_version(command):
+        if not os.path.exists(command):
+            return None
+        code, out, _ = get_status_output([command, "--version"])
+        if code!=0:
+            return None
+        vpos = out.rfind(", V")
+        if vpos>0:
+            version = out[vpos+3:].strip("\n")
+            version_str = " version %s" % version
+        else:
+            version = "0"
+            version_str = " unknown version!"
+        print("found CUDA compiler: %s%s" % (filename, version_str))
+        return tuple(int(x) for x in version.split("."))
     for filename in options:
-        if not os.path.exists(filename):
-            continue
-        code, out, err = get_status_output([filename, "--version"])
-        if code==0:
-            vpos = out.rfind(", V")
-            if vpos>0:
-                version = out[vpos+3:].strip("\n")
-                version_str = " version %s" % version
-            else:
-                version = "0"
-                version_str = " unknown version!"
-            print("found CUDA compiler: %s%s" % (filename, version_str))
-            vnum = tuple(int(x) for x in version.split("."))
+        vnum = get_nvcc_version(filename)
+        if vnum:
             nvcc_versions[vnum] = filename
     assert nvcc_versions, "cannot find nvcc compiler!"
     #choose the most recent one:
@@ -2216,12 +2245,10 @@ if nvenc_ENABLED:
     libraries = nvenc_pkgconfig.get("libraries", [])
     if "nvidia-encode" in libraries:
         libraries.remove("nvidia-encode")
-    if PYTHON3 and get_gcc_version()>=[6, 2]:
-        #with gcc 6.2 on Fedora:
-        #xpra/codecs/nvenc/encoder.c: In function '__Pyx_PyInt_LshiftObjC':
-        #xpra/codecs/nvenc/encoder.c:45878:34: error: comparison between signed and unsigned integer expressions [-Werror=sign-compare]
-        #    if (unlikely(!(b < sizeof(long)*8 && a == x >> b)) && a) {
-        add_to_keywords(nvenc_pkgconfig, 'extra_compile_args', "-Wno-sign-compare")
+    if not cython_version_compare("0.29"):
+        #older versions emit spurious warnings:
+        print("Warning: using workaround for outdated version of cython")
+        add_to_keywords(nvenc_pkgconfig, 'extra_compile_args', "-Wno-error=sign-compare")
     cython_add(Extension("xpra.codecs.%s.encoder" % nvencmodule,
                          ["xpra/codecs/%s/encoder.pyx" % nvencmodule],
                          **nvenc_pkgconfig))
@@ -2388,7 +2415,7 @@ def main():
             print("setup_options=%s" % (setup_options,))
         try:
             from xpra.util import repr_ellipsized as pv
-        except:
+        except ImportError:
             def pv(v):
                 return str(v)
         for k,v in setup_options.items():

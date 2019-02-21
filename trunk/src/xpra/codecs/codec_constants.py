@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2012-2014 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2012-2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -9,26 +9,41 @@ import weakref
 
 #note: this is just for defining the order of encodings,
 #so we have both core encodings (rgb24/rgb32) and regular encodings (rgb) in here:
-PREFERED_ENCODING_ORDER = ["h264", "vp9", "vp8", "mpeg4", "mpeg4+mp4", "h264+mp4", "vp8+webm", "vp9+webm", "png", "png/P", "png/L", "webp", "rgb", "rgb24", "rgb32", "jpeg", "h265", "jpeg2000", "mpeg1", "mpeg2"]
+PREFERED_ENCODING_ORDER = (
+    "h264", "vp9", "vp8", "mpeg4",
+    "mpeg4+mp4", "h264+mp4", "vp8+webm", "vp9+webm",
+    "png", "png/P", "png/L", "webp",
+    "rgb", "rgb24", "rgb32", "jpeg",
+    "h265", "jpeg2000", "mpeg1", "mpeg2",
+    )
 #encoding order for edges (usually one pixel high or wide):
-EDGE_ENCODING_ORDER = ["rgb24", "rgb32", "jpeg", "png", "webp", "png/P", "png/L", "rgb"]
+EDGE_ENCODING_ORDER = (
+    "rgb24", "rgb32",
+    "png", "webp",
+    "png/P", "png/L", "rgb", "jpeg",
+    )
 
-HELP_ORDER = ("auto", "h264", "h265", "vp8", "vp9", "mpeg4", "png", "png/P", "png/L", "webp", "rgb", "jpeg", "jpeg2000")
+HELP_ORDER = (
+    "auto", "h264", "h265", "vp8", "vp9", "mpeg4",
+    "png", "png/P", "png/L", "webp",
+    "rgb", "jpeg", "jpeg2000",
+    )
 
 #those are currently so useless that we don't want the user to select them by mistake
 PROBLEMATIC_ENCODINGS = ("h265", )
 
 
 #value: how much smaller the output is
-LOSSY_PIXEL_FORMATS = {"YUV420P" : 2,
-                       "YUV422P" : 1.5
-                       }
+LOSSY_PIXEL_FORMATS = {
+    "YUV420P" : 2,
+    "YUV422P" : 1.5,
+    }
 
 PIXEL_SUBSAMPLING = {
-         "YUV420P"   : ((1, 1), (2, 2), (2, 2)),
-         "YUV422P"   : ((1, 1), (2, 1), (2, 1)),
-         "YUV444P"   : ((1, 1), (1, 1), (1, 1)),
-         "GBRP"      : ((1, 1), (1, 1), (1, 1)),
+    "YUV420P"   : ((1, 1), (2, 2), (2, 2)),
+    "YUV422P"   : ((1, 1), (2, 1), (2, 1)),
+    "YUV444P"   : ((1, 1), (1, 1), (1, 1)),
+    "GBRP"      : ((1, 1), (1, 1), (1, 1)),
 }
 def get_subsampling_divs(pixel_format):
     # Return size dividers for the given pixel format
@@ -104,7 +119,8 @@ class _codec_spec(object):
         log = Logger("encoding")
         cur = self.get_instance_count()
         if (self.max_instances>0 and cur>=self.max_instances) or cur>=_codec_spec.WARN_LIMIT:
-            log.warn("Warning: already %s active instances of %s: %s", cur, self.codec_class, tuple(self.instances.keys()))
+            log.warn("Warning: already %s active instances of %s: %s",
+                     cur, self.codec_class, tuple(self.instances.keys()))
             from xpra.util import dump_references
             dump_references(log, self.instances.keys())
         else:

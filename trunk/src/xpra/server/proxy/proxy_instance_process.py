@@ -8,6 +8,7 @@ import socket
 import os
 import signal
 from threading import Timer, RLock
+from multiprocessing import Process
 from time import sleep
 
 from xpra.server.server_core import get_server_info, get_thread_info
@@ -24,7 +25,7 @@ from xpra.os_util import (
     SIGNAMES, POSIX,
     Queue, osexpand, monotonic_time, bytestostr, strtobytes,
     getuid, getgid, get_username_for_uid, setuidgid,
-    ) 
+    )
 from xpra.util import (
     flatten_dict, typedict, updict,
     repr_ellipsized, envint, envbool,
@@ -38,7 +39,6 @@ from xpra.version_util import full_version_str
 from xpra.server.socket_util import create_unix_domain_socket
 from xpra.platform.dotxpra import DotXpra
 from xpra.net.bytestreams import SocketConnection, SOCKET_TIMEOUT
-from multiprocessing import Process
 from xpra.log import Logger
 
 log = Logger("proxy")
@@ -58,9 +58,10 @@ def set_blocking(conn):
     #fails in mysterious ways, so we duplicate the code here instead
     log("set_blocking(%s)", conn)
     try:
-        log("calling %s.setblocking(1)", conn._socket)
-        conn._socket.setblocking(1)
-    except:
+        sock = conn._socket
+        log("calling %s.setblocking(1)", sock)
+        sock.setblocking(1)
+    except IOError:
         log("cannot set %s to blocking mode", conn)
 
 
@@ -868,11 +869,13 @@ class ProxyInstanceProcess(Process):
             #we must verify that the encoder is still valid
             #and scrap it if not (ie: when window is resized)
             if ve.get_width()!=width or ve.get_height()!=height:
-                enclog("closing existing video encoder %s because dimensions have changed from %sx%s to %sx%s", ve, ve.get_width(), ve.get_height(), width, height)
+                enclog("closing existing video encoder %s because dimensions have changed from %sx%s to %sx%s",
+                       ve, ve.get_width(), ve.get_height(), width, height)
                 ve.clean()
                 ve = None
             elif ve.get_encoding()!=encoding:
-                enclog("closing existing video encoder %s because encoding has changed from %s to %s", ve.get_encoding(), encoding)
+                enclog("closing existing video encoder %s because encoding has changed from %s to %s",
+                       ve.get_encoding(), encoding)
                 ve.clean()
                 ve = None
         #scaling and depth are proxy-encoder attributes:
@@ -949,7 +952,7 @@ class ProxyInstanceProcess(Process):
         for encoding in try_encodings:
             colorspace_specs = self.video_helper.get_encoder_specs(encoding)
             especs = colorspace_specs.get(rgb_format)
-            if len(especs)==0:
+            if not especs:
                 continue
             for etype in self.video_encoder_types:
                 for spec in especs:

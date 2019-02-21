@@ -35,9 +35,9 @@ def get_gtk_keymap(ignore_keys=[None, "VoidSymbol", "0xffffff"]):
             found, keys, keyvals = entries
             if not found:
                 continue
-            for i in range(len(keys)):
-                key = keys[i]
-                keyval = keyvals[i]
+            for j in range(len(keys)):
+                key = keys[j]
+                keyval = keyvals[j]
                 keycode = key.keycode
                 name = gdk.keyval_name(keyval)
                 name = KEY_TRANSLATIONS.get((name, keyval, keycode), name)

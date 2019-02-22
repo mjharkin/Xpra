@@ -3,14 +3,17 @@
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
+from xpra.util import envbool
 from xpra.notifications.notifier_base import NotifierBase, log
 from xpra.platform.win32.win32_balloon import notify
 from xpra.gtk_common import gtk_notifier
 
 try:
     from xpra.gtk_common.gtk_notifier import GTK_Notifier
+    GTK_NOTIFIER = envbool("XPRA_WIN32_GTK_NOTIFIER", True)
 except ImportError:
     GTK_Notifier = None
+    GTK_NOTIFIER = False
 
 
 class Win32_Notifier(NotifierBase):
@@ -32,7 +35,7 @@ class Win32_Notifier(NotifierBase):
 
     def show_notify(self, dbus_id, tray, nid, app_name, replaces_nid, app_icon, summary, body, actions, hints, expire_timeout, icon):
         getHWND = getattr(tray, "getHWND", None)
-        if tray is None or getHWND is None or actions:
+        if GTK_NOTIFIER or tray is None or getHWND is None or actions:
             gtk_notifier = self.get_gtk_notifier()
             if gtk_notifier:
                 gtk_notifier.show_notify(dbus_id, tray, nid, app_name, replaces_nid, app_icon, summary, body, actions, hints, expire_timeout, icon)
@@ -43,7 +46,7 @@ class Win32_Notifier(NotifierBase):
             return
         hwnd = getHWND()
         app_id = tray.app_id
-        log("show_notify%s hwnd=%i, app_id=%i", (dbus_id, tray, nid, app_name, replaces_nid, app_icon, summary, body, actions, hints, expire_timeout, icon), hwnd, app_id)
+        log("show_notify%s hwnd=%#x, app_id=%i", (dbus_id, tray, nid, app_name, replaces_nid, app_icon, summary, body, actions, hints, expire_timeout, icon), hwnd, app_id)
         #FIXME: remove handles when notification is closed
         self.notification_handles[nid] = (hwnd, app_id)
         notify(hwnd, app_id, summary, body, expire_timeout, icon)

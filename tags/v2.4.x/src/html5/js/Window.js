@@ -1008,7 +1008,7 @@ XpraWindow.prototype._init_video = function(width, height, coding, profile, leve
 		codec_string = 'video/webm;codecs="vp9"';
 	}
 	else {
-		throw Exception("invalid encoding: "+coding);
+		throw "invalid encoding: "+coding;
 	}
 	this.log("video codec string: "+codec_string+" for "+coding+" profile '"+profile+"', level '"+level+"'");
 	this.media_source.addEventListener('sourceopen', function() {

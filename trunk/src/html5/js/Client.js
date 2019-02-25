@@ -153,6 +153,7 @@ XpraClient.prototype.init_state = function(container) {
     this.server_screen_sizes = [];
     this.server_is_desktop = false;
     this.server_is_shadow = false;
+    this.server_readonly = false;
 
     this.server_connection_data = false;
 
@@ -650,6 +651,9 @@ XpraClient.prototype._check_browser_language = function(key_layout) {
 
 
 XpraClient.prototype._keyb_process = function(pressed, event) {
+	if (this.server_readonly) {
+		return;
+	}
 	if (!this.capture_keyboard) {
 		return true;
 	}
@@ -1261,6 +1265,9 @@ XpraClient.prototype.do_window_mouse_move = function(e, window) {
 	}
 	
 	this._check_browser_language();
+	if (this.server_readonly) {
+		return;
+	}
 	var mouse = this.getMouse(e, window),
 		x = Math.round(mouse.x),
 		y = Math.round(mouse.y);
@@ -1284,10 +1291,9 @@ XpraClient.prototype._window_mouse_up = function(ctx, e, window) {
 }
 
 XpraClient.prototype.do_window_mouse_click = function(e, window, pressed) {
-	if(e.target.localName!="canvas"){
+	if (this.server_readonly) {
 		return;
 	}
-	
 	var mouse = this.getMouse(e, window),
 		x = Math.round(mouse.x),
 		y = Math.round(mouse.y);
@@ -1320,6 +1326,9 @@ XpraClient.prototype._window_mouse_scroll = function(ctx, e, window) {
 }
 
 XpraClient.prototype.do_window_mouse_scroll = function(e, window) {
+	if (this.server_readonly) {
+		return;
+	}
 	var mouse = this.getMouse(e, window),
 		x = Math.round(mouse.x),
 		y = Math.round(mouse.y);
@@ -1389,6 +1398,9 @@ XpraClient.prototype.do_window_mouse_scroll = function(e, window) {
  * Focus
  */
 XpraClient.prototype._window_set_focus = function(win) {
+	if (this.server_readonly) {
+		return;
+	}
 	// don't send focus packet for override_redirect windows!
 	if (win.override_redirect || win.tray) {
 		return;
@@ -1681,6 +1693,7 @@ XpraClient.prototype._process_hello = function(packet, ctx) {
 	}
     ctx.server_is_desktop = Boolean(hello["desktop"]);
     ctx.server_is_shadow = Boolean(hello["shadow"]);
+    ctx.server_readonly = Boolean(hello["readonly"]);
     if (ctx.server_is_desktop || ctx.server_is_shadow) {
     	jQuery("body").addClass("desktop");
     }
@@ -1990,17 +2003,16 @@ XpraClient.prototype._new_window = function(wid, x, y, w, h, metadata, override_
 }
 
 XpraClient.prototype._new_window_common = function(packet, override_redirect) {
-	var wid, x, y, w, h, metadata;
-	wid = packet[1];
-	x = packet[2];
-	y = packet[3];
-	w = packet[4];
-	h = packet[5];
-	metadata = packet[6];
+	var wid = packet[1],
+		x = packet[2],
+		y = packet[3],
+		w = packet[4],
+		h = packet[5],
+		metadata = packet[6];
 	if (wid in this.id_to_window)
 		throw new Error("we already have a window " + wid);
 	if (w<=0 || h<=0) {
-		this.error("window dimensions are wrong: "+w+"x"+h);
+		this.error("window dimensions are wrong:", w, h);
 		w, h = 1, 1;
 	}
 	var client_properties = {}

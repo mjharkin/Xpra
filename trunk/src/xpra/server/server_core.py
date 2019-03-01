@@ -35,7 +35,7 @@ from xpra.os_util import (
     filedata_nocrlf, get_machine_id, get_user_uuid, platform_name,
     strtobytes, bytestostr, get_hex_uuid,
     getuid, monotonic_time, get_peercred, hexstr,
-    SIGNAMES, WIN32, POSIX, PYTHON3, BITS,
+    WIN32, POSIX, PYTHON3, BITS,
     )
 from xpra.server.background_worker import stop_worker, get_worker
 from xpra.make_thread import start_thread
@@ -400,6 +400,8 @@ class ServerCore(object):
     # dbus:
     def init_dbus_server(self):
         dbuslog("init_dbus_server() dbus_control=%s", self.dbus_control)
+        dbuslog("init_dbus_server() env: %s", dict((k,v) for k,v in os.environ.items()
+                                               if bytestostr(k).startswith("DBUS_")))
         if not self.dbus_control:
             return
         try:

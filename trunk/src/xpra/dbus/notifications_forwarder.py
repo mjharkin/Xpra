@@ -57,13 +57,13 @@ class DBUSNotificationsForwarder(dbus.service.Object):
 
     @dbus.service.method(BUS_NAME, in_signature='susssasa{sv}i', out_signature='u')
     def Notify(self, app_name, replaces_nid, app_icon, summary, body, actions, hints, expire_timeout):
-        log("Notify%s", (app_name, replaces_nid, app_icon, summary, body, actions, hints, expire_timeout))
         if replaces_nid==0:
             nid = self.next_id()
         else:
             nid = int(replaces_nid)
-        log("Notify%s counter=%i, callback=%s",
-            (app_name, replaces_nid, app_icon, summary, body, actions, hints, expire_timeout), self.counter, self.notify_callback)
+        log("Notify%s nid=%s, counter=%i, callback=%s",
+            (app_name, replaces_nid, app_icon, summary, body, actions, hints, expire_timeout),
+            nid, self.counter, self.notify_callback)
         self.active_notifications.add(nid)
         if self.notify_callback:
             try:
@@ -162,8 +162,11 @@ class DBUSNotificationsForwarder(dbus.service.Object):
     def release(self):
         try:
             self.bus.release_name(BUS_NAME)
-        except Exception as e:
-            log.error("failed to release dbus notification forwarder: %s", e)
+        except dbus.exceptions.DBusException as e:
+            log("release()", exc_info=True)
+            log.error("Error releasing the dbus notification forwarder:")
+            for x in str(e).split(": "):
+                log.error(" %s", x)
 
     def __str__(self):
         return  "DBUS-NotificationsForwarder(%s)" % BUS_NAME
@@ -176,9 +179,9 @@ def register(notify_callback=None, close_callback=None, replace=False):
     if replace:
         flags |= dbus.bus.NAME_FLAG_REPLACE_EXISTING
     request = bus.request_name(BUS_NAME, flags)
+    log("notifications: bus name '%s', request=%s" % (BUS_NAME, request))
     if request==dbus.bus.REQUEST_NAME_REPLY_EXISTS:
         raise Exception("the name '%s' is already claimed on the session bus" % BUS_NAME)
-    log("notifications: bus name '%s', request=%s" % (BUS_NAME, request))
     return DBUSNotificationsForwarder(bus, notify_callback, close_callback)
 
 

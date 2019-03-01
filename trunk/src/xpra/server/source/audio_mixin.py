@@ -105,8 +105,10 @@ class AudioMixin(StubSourceMixin):
         #check pulseaudio id if we have it
         pulseaudio_id = self.sound_properties.get("pulseaudio", {}).get("id")
         pulseaudio_cookie_hash = self.sound_properties.get("pulseaudio", {}).get("cookie-hash")
-        log("audio_loop_check(%s) pulseaudio id=%s, client pulseaudio id=%s, pulseaudio cookie hash=%s, client pulseaudio cookie hash=%s",
-                 mode, pulseaudio_id, self.pulseaudio_id, pulseaudio_cookie_hash, self.pulseaudio_cookie_hash)
+        log("audio_loop_check(%s) pulseaudio id=%s, client pulseaudio id=%s",
+                 mode, pulseaudio_id, self.pulseaudio_id)
+        log("audio_loop_check(%s) pulseaudio cookie hash=%s, client pulseaudio cookie hash=%s",
+                 mode, pulseaudio_cookie_hash, self.pulseaudio_cookie_hash)
         if pulseaudio_id and self.pulseaudio_id:
             if self.pulseaudio_id!=pulseaudio_id:
                 return True
@@ -127,7 +129,8 @@ class AudioMixin(StubSourceMixin):
             log.warn(" %s", x)
         return False
 
-    def start_sending_sound(self, codec=None, volume=1.0, new_stream=None, new_buffer=None, skip_client_codec_check=False):
+    def start_sending_sound(self, codec=None, volume=1.0,
+                            new_stream=None, new_buffer=None, skip_client_codec_check=False):
         assert self.hello_sent
         log("start_sending_sound(%s)", codec)
         ss = None
@@ -161,7 +164,9 @@ class AudioMixin(StubSourceMixin):
                 return None
             from xpra.sound.wrapper import start_sending_sound
             plugins = self.sound_properties.strlistget("plugins", [])
-            ss = start_sending_sound(plugins, self.sound_source_plugin, None, codec, volume, True, [codec], self.pulseaudio_server, self.pulseaudio_id)
+            ss = start_sending_sound(plugins, self.sound_source_plugin,
+                                     None, codec, volume, True, [codec],
+                                     self.pulseaudio_server, self.pulseaudio_id)
             self.sound_source = ss
             log("start_sending_sound() sound source=%s", ss)
             if not ss:

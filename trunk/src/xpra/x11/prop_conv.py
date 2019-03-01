@@ -11,7 +11,6 @@ Functions for converting to and from X11 properties.
 """
 
 import struct
-import cairo
 
 from xpra.os_util import hexstr, BytesIOClass, PYTHON3
 from xpra.x11.bindings.window_bindings import constants     #@UnresolvedImport
@@ -41,7 +40,7 @@ IconicState     = constants["IconicState"]
 InputHint       = constants["InputHint"]
 
 
-def unsupported(*args):
+def unsupported(*_args):
     raise Exception("unsupported")
 
 def _force_length(name, data, length, noerror_length=None):
@@ -128,50 +127,50 @@ class MotifWMHints(object):
     TEAROFF_WINDOW  = 0
 
     FLAGS_STR = {
-                 FUNCTIONS_BIT      : "functions",
-                 DECORATIONS_BIT    : "decorations",
-                 INPUT_MODE_BIT     : "input",
-                 STATUS_BIT         : "status",
-                 }
+        FUNCTIONS_BIT      : "functions",
+        DECORATIONS_BIT    : "decorations",
+        INPUT_MODE_BIT     : "input",
+        STATUS_BIT         : "status",
+        }
     FUNCTIONS_STR = {
-                     ALL_BIT        : "all",
-                     RESIZE_BIT     : "resize",
-                     MOVE_BIT       : "move",
-                     MINIMIZE_BIT   : "minimize",
-                     MAXIMIZE_BIT   : "maximize",
-                     CLOSE_BIT      : "close",
-                     SHADE_BIT      : "shade",
-                     STICK_BIT      : "stick",
-                     FULLSCREEN_BIT : "fullscreen",
-                     ABOVE_BIT      : "above",
-                     BELOW_BIT      : "below",
-                     MAXIMUS_BIT    : "maximus",
-                     }
+        ALL_BIT        : "all",
+        RESIZE_BIT     : "resize",
+        MOVE_BIT       : "move",
+        MINIMIZE_BIT   : "minimize",
+        MAXIMIZE_BIT   : "maximize",
+        CLOSE_BIT      : "close",
+        SHADE_BIT      : "shade",
+        STICK_BIT      : "stick",
+        FULLSCREEN_BIT : "fullscreen",
+        ABOVE_BIT      : "above",
+        BELOW_BIT      : "below",
+        MAXIMUS_BIT    : "maximus",
+        }
     DECORATIONS_STR = {
-                       ALL_BIT      : "all",
-                       BORDER_BIT   : "border",
-                       RESIZEH_BIT  : "resizeh",
-                       TITLE_BIT    : "title",
-                       MENU_BIT     : "menu",
-                       MINIMIZE_BIT : "minimize",
-                       MAXIMIZE_BIT : "maximize",
-                       }
+        ALL_BIT      : "all",
+        BORDER_BIT   : "border",
+        RESIZEH_BIT  : "resizeh",
+        TITLE_BIT    : "title",
+        MENU_BIT     : "menu",
+        MINIMIZE_BIT : "minimize",
+        MAXIMIZE_BIT : "maximize",
+        }
     INPUT_STR = {
-                 MODELESS                   : "modeless",
-                 PRIMARY_APPLICATION_MODAL  : "primary-application-modal",
-                 SYSTEM_MODAL               : "system-modal",
-                 FULL_APPLICATION_MODAL     : "full-application-modal",
-                 }
+        MODELESS                   : "modeless",
+        PRIMARY_APPLICATION_MODAL  : "primary-application-modal",
+        SYSTEM_MODAL               : "system-modal",
+        FULL_APPLICATION_MODAL     : "full-application-modal",
+        }
 
     STATUS_STR = {
         TEAROFF_WINDOW : "tearoff",
         }
 
     def bits_to_strs(self, int_val, flag_bit, dict_str):
-        if flag_bit and not (self.flags & (2**flag_bit)):
+        if flag_bit and not self.flags & (2**flag_bit):
             #the bit is not set, ignore this attribute
-            return []
-        return [v for k,v in dict_str.items() if (int_val & (2**k))]
+            return ()
+        return tuple(v for k,v in dict_str.items() if int_val & (2**k))
     def flags_strs(self):
         return self.bits_to_strs(self.flags,
                                  0,
@@ -194,12 +193,13 @@ class MotifWMHints(object):
                                  MotifWMHints.STATUS_STR)
 
     def __str__(self):
-        return "MotifWMHints(%s)" % {"flags"        : self.flags_strs(),
-                                     "functions"    : self.functions_strs(),
-                                     "decorations"  : self.decorations_strs(),
-                                     "input_mode"   : self.input_strs(),
-                                     "status"       : self.status_strs(),
-                                     }
+        return "MotifWMHints(%s)" % {
+            "flags"         : self.flags_strs(),
+            "functions"     : self.functions_strs(),
+            "decorations"   : self.decorations_strs(),
+            "input_mode"    : self.input_strs(),
+            "status"        : self.status_strs(),
+            }
 
 
 def _read_image(_disp, stream):
@@ -215,28 +215,7 @@ def _read_image(_disp, stream):
     except Exception as e:
         log.warn("Weird corruption in _NET_WM_ICON: %s", e)
         return None
-    # Cairo wants a native-endian array here, and since the icon is
-    # transmitted as CARDINALs, that's what we get. It might seem more
-    # sensible to use ImageSurface.create_for_data (at least it did to me!)
-    # but then you end up with a surface that refers to the memory you pass in
-    # directly, and also .get_data() doesn't work on it, and it breaks the
-    # test suite and blah. This at least works, as odd as it is:
-    surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
-    # old versions of cairo do not have this method, just ignore it
-    if not hasattr(surf, "get_data"):
-        log.warn("Your Cairo is too old! Carrying on as best I can, "
-                 "but don't expect a miracle")
-        return None
-    surf.get_data()[:] = data
-    # Cairo uses premultiplied alpha. EWMH actually doesn't specify what it
-    # uses, but apparently the de-facto standard is non-premultiplied. (At
-    # least that's what Compiz's sources say.)
-    try:
-        from xpra.codecs.argb.argb import premultiply_argb_in_place #@UnresolvedImport
-        premultiply_argb_in_place(surf.get_data())
-    except ImportError:
-        log("no argb premultiply", exc_info=True)
-    return (width * height, surf)
+    return width, height, "BGRA", data
 
 # This returns a cairo ImageSurface which contains the largest icon defined in
 # a _NET_WM_ICON property.
@@ -244,14 +223,13 @@ def NetWMIcons(disp, data):
     icons = []
     stream = BytesIOClass(data)
     while True:
-        size_image = _read_image(disp, stream)
-        if size_image is None:
+        icon = _read_image(disp, stream)
+        if icon is None:
             break
-        icons.append(size_image)
+        icons.append(icon)
     if not icons:
         return None
-    icons.sort()
-    return icons[-1][1]
+    return icons
 
 
 def _to_latin1(_disp, v):
@@ -294,7 +272,7 @@ PROP_TYPES = {
                       unsupported, NetWMStrut, None),
     "motif-hints": (MotifWMHints, "_MOTIF_WM_HINTS", 32,
               unsupported, MotifWMHints, None),
-    "icon": (cairo.ImageSurface, "CARDINAL", 32,
+    "icons": (list, "CARDINAL", 32,
               unsupported, NetWMIcons, None),
     # For uploading ad-hoc instances of the above complex structures to the
     # server, so we can test reading them out again:
@@ -308,8 +286,7 @@ PROP_TYPES = {
 def prop_encode(disp, etype, value):
     if isinstance(etype, list):
         return _prop_encode_list(disp, etype[0], value)
-    else:
-        return _prop_encode_scalar(disp, etype, value)
+    return _prop_encode_scalar(disp, etype, value)
 
 def _prop_encode_scalar(disp, etype, value):
     (pytype, atom, formatbits, serialize, _, _) = PROP_TYPES[etype]
@@ -329,8 +306,7 @@ def _prop_encode_list(disp, etype, value):
 def prop_decode(disp, etype, data):
     if isinstance(etype, list):
         return _prop_decode_list(disp, etype[0], data)
-    else:
-        return _prop_decode_scalar(disp, etype, data)
+    return _prop_decode_scalar(disp, etype, data)
 
 def _prop_decode_scalar(disp, etype, data):
     (pytype, _, _, _, deserialize, _) = PROP_TYPES[etype]

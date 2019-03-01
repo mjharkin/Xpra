@@ -2043,7 +2043,7 @@ if nvenc_ENABLED and cuda_kernels_ENABLED:
     if WIN32:
         nvcc_exe = "nvcc.exe"
         CUDA_DIR = os.environ.get("CUDA_DIR", "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA")
-        path_options = [os.path.join(CUDA_DIR, x, "bin") for x in ("v9.2", "v9.1", "v9.0", "v8.0", "v7.5")] + path_options
+        path_options = [os.path.join(CUDA_DIR, x, "bin") for x in ("v10.1", "v10.0", "v9.2", "v9.1", "v9.0", "v8.0", "v7.5")] + path_options
         #pycuda may link against curand, find it and ship it:
         for p in path_options:
             if os.path.exists(p):
@@ -2052,7 +2052,7 @@ if nvenc_ENABLED and cuda_kernels_ENABLED:
                 break
     else:
         nvcc_exe = "nvcc"
-        for v in ("", "10.0", "9.2", "9.1", "-9.0", "-8.0", "-7.5"):
+        for v in ("", "-10.1", "-10.0", "-9.2", "-9.1", "-9.0", "-8.0", "-7.5"):
             path_options += ["/usr/local/cuda%s/bin" % v, "/opt/cuda%s/bin" % v]
     options = [os.path.join(x, nvcc_exe) for x in path_options]
     def which(cmd):

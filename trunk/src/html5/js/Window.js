@@ -447,7 +447,7 @@ XpraWindow.prototype.set_metadata_safe = function(metadata) {
         	var trimmedTitle = decodedTitle.length > trimLength ? 
                     decodedTitle.substring(0, trimLength - 3) + "..." : 
                     decodedTitle;
-		jQuery('#windowdropdowntitle'+this.wid).text(trimmedTitle);
+		jQuery('#windowlistitemtitle'+this.wid).text(trimmedTitle);
 	}
 	if ("has-alpha" in metadata) {
 		this.has_alpha = metadata["has-alpha"];
@@ -546,7 +546,7 @@ XpraWindow.prototype.apply_size_constraints = function() {
 	}
 	if(minw>0 && minw==maxw && minh>0 && minh==maxh) {
 		jQuery(this.d_maximizebtn).hide();
-		jQuery('#windowdropdownmax' + String(this.wid)).hide();
+		jQuery('#windowlistitemmax' + String(this.wid)).hide();
 		jQuery(this.div).resizable('disable');
 	} else {
 		jQuery(this.d_maximizebtn).show();
@@ -955,7 +955,7 @@ XpraWindow.prototype.update_icon = function(width, height, encoding, img_data) {
 		src = "data:image/"+encoding+";base64," + Utilities.ArrayBufferToBase64(img_data);
 	}
 	jQuery('#windowicon' + String(this.wid)).attr('src', src);
-	jQuery('#windowdropdownicon' + String(this.wid)).attr('src', src);
+	jQuery('#windowlistitemicon' + String(this.wid)).attr('src', src);
 	return src;
 };
 

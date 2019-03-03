@@ -360,8 +360,23 @@ class EncodingsMixin(StubSourceMixin):
             for colorspace, spec_props in colorspace_specs.items():
                 for spec_prop in spec_props:
                     #make a new spec based on spec_props:
-                    spec = video_spec(codec_class=Encoder, codec_type="proxy", encoding=encoding)
+                    spec_prop = typedict(spec_prop)
+                    input_colorspace = spec_prop.strget("input_colorspace")
+                    output_colorspaces = spec_prop.strlistget("output_colorspaces")
+                    if not input_colorspace or not output_colorspaces:
+                        log.warn("Warning: invalid proxy video encoding '%s':", encoding)
+                        log.warn(" missing colorspace attributes")
+                        continue
+                    spec = video_spec(codec_class=Encoder,
+                                      has_lossless_mode=spec_prop.boolget("has_lossless_mode", False),
+                                      input_colorspace=input_colorspace,
+                                      output_colorspaces=output_colorspaces,
+                                      codec_type="proxy", encoding=encoding,
+                                      )
                     for k,v in spec_prop.items():
+                        if k.startswith("_") or not hasattr(spec, k):
+                            log.warn("Warning: invalid proxy codec attribute '%s'", k)
+                            continue
                         setattr(spec, k, v)
                     proxylog("parse_proxy_video() adding: %s / %s / %s", encoding, colorspace, spec)
                     self.video_helper.add_encoder_spec(encoding, colorspace, spec)

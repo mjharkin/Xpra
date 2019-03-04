@@ -157,6 +157,9 @@ function XpraWindow(client, canvas_state, wid, x, y, w, h, metadata, override_re
 		this.d_maximizebtn = '#maximize' + String(wid);
 		this.d_minimizebtn = '#minimize' + String(wid);
 		if (this.resizable) {
+			jQuery(this.d_header).dblclick(function() {
+				me.toggle_maximized();
+			});
 			jQuery(this.d_closebtn).click(function() {
 				window_closed_cb(me);
 			});

@@ -1304,7 +1304,7 @@ XpraClient.prototype.do_window_mouse_click = function(e, window, pressed) {
 		wid = window.wid;
 	}
 	// dont call set focus unless the focus has actually changed
-	if (wid>0 && this.focus != wid) {
+	if (wid>0 && this.focus != wid && pressed) {
 		this._window_set_focus(window);
 	}
 	

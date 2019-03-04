@@ -1706,7 +1706,7 @@ XpraClient.prototype._process_hello = function(packet, ctx) {
 			var li = document.createElement("li");
 			li.className = "-hasSubmenu";
 			var a = document.createElement("a");
-			a.appendChild(document.createTextNode(key));
+			a.appendChild(document.createTextNode(ctx.xdg_menu[key].Name));
 			a.href="#";
 			a.setAttribute("data-icon", "apps")
 			li.appendChild(a);

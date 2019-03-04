@@ -250,7 +250,7 @@ SOFTWARE.
     /* Minimum width of dropdown menus */
     .Menu.-horizontal li > ul,
     .Menu.-floating {
-        min-width: 400px;
+        min-width: 200px;
     }
 
     /* Animation speed of dropdown menus */

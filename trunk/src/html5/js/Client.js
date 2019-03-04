@@ -2060,7 +2060,7 @@ XpraClient.prototype._new_window = function(wid, x, y, w, h, metadata, override_
 		this._window_closed
 		);
 	if(win && !override_redirect && win.metadata["window-type"]=="NORMAL"){
-		var trimLength=23;
+		var trimLength=35;
 		var decodedTitle = decodeURIComponent(escape(win.title));
 		var trimmedTitle = decodedTitle.length > trimLength ? 
                     decodedTitle.substring(0, trimLength - 3) + "..." : 

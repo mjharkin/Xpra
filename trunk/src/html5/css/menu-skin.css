@@ -23,6 +23,11 @@ SOFTWARE.
 
 */
 
+.windowlist-li {
+    min-width: 400px;
+}
+
+
 
 .windowlist-divleft {
     float:left;

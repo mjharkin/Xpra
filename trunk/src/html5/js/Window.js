@@ -443,7 +443,7 @@ XpraWindow.prototype.set_metadata_safe = function(metadata) {
 		this.title = metadata["title"];
 		var decodedTitle = decodeURIComponent(escape(this.title));
 		jQuery('#title' + this.wid).html(decodedTitle);
-		var trimLength = 25;
+		var trimLength = 35;
         	var trimmedTitle = decodedTitle.length > trimLength ? 
                     decodedTitle.substring(0, trimLength - 3) + "..." : 
                     decodedTitle;

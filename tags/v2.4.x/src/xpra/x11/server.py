@@ -326,7 +326,7 @@ class XpraServer(gobject.GObject, X11ServerBase):
                 "configure.delta"        : True,
                 "signals"                : WINDOW_SIGNALS,
                 "dragndrop"              : True,
-                "states"                 : ["iconified", "fullscreen", "above", "below", "sticky", "iconified", "maximized"],
+                "states"                 : ["iconified", "focused", "fullscreen", "above", "below", "sticky", "iconified", "maximized"],
                 })
         return capabilities
 

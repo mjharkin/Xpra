@@ -125,7 +125,7 @@ function XpraWindow(client, canvas_state, wid, x, y, w, h, metadata, override_re
 	}
 	else if((this.windowtype == "") || (this.windowtype == "NORMAL") || (this.windowtype == "DIALOG") || (this.windowtype == "UTILITY")) {
 		this.resizable = true;
-		jQuery(this.div).css({"border-color":"grey","border-width":"1px","border-style":"solid"});
+		jQuery(this.div).css({"border-color":"grey","border-width":"1px","border-style":"solid","box-shadow":"0px 10px 25px rgba(0, 0, 0, 0.5)"});
 		// add a title bar to this window if we need to
 		// create header
 		jQuery(this.div).prepend('<div id="head' + String(wid) + '" class="windowhead"> '+

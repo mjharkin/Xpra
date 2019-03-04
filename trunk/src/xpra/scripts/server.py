@@ -881,9 +881,14 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
             log.error(" %s", str(e) or type(e))
             del e
         try:
-            os.close(displayfd)
-        except IOError:
-            pass
+            os.fsync(displayfd)
+        except (IOError, OSError):
+            log("os.fsync(%i)", displayfd, exc_info=True)
+        if displayfd>2:
+            try:
+                os.close(displayfd)
+            except (IOError, OSError):
+                log("os.close(%i)", displayfd, exc_info=True)
 
     kill_display = None
     if not proxying:
@@ -1116,7 +1121,7 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
                         xdg_override = os.path.join(x, "xdg-open")
                         if os.path.exists(xdg_override):
                             os.environ["PATH"] = x+os.pathsep+os.environ.get("PATH", "")
-                            os.environ["XPRA_XDG_OPEN_SERVER_SOCKET"] = ud_paths[0]
+                            os.environ["XPRA_SERVER_SOCKET"] = ud_paths[0]
                             break
             else:
                 log.warn("Warning: no local server sockets,")

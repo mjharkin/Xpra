@@ -442,7 +442,7 @@ def run_mode(script_file, error_cb, options, args, mode, defaults):
             "_proxy",
             "_proxy_start",
             "_proxy_start_desktop",
-            "_shadow_start",
+            "_proxy_shadow_start",
             ) and (supports_server or supports_shadow):
             nox()
             return run_proxy(error_cb, options, script_file, args, mode, defaults)
@@ -1598,7 +1598,7 @@ def run_remote_server(error_cb, opts, args, mode, defaults):
         params["display_as_args"] = proxy_args
         #and use a proxy subcommand to start the server:
         params["proxy_command"] = [{
-                                   "shadow"         : "_shadow_start",
+                                   "shadow"         : "_proxy_shadow_start",
                                    "start"          : "_proxy_start",
                                    "start-desktop"  : "_proxy_start_desktop",
                                    }.get(mode)]
@@ -1894,10 +1894,17 @@ def start_server_subprocess(script_file, args, mode, opts, username="", uid=getu
             if not OSX and not matching_display:
                 #use "--displayfd" switch to tell us which display was chosen:
                 r_pipe, w_pipe = os.pipe()
+                log("subprocess displayfd pipes: %s", (r_pipe, w_pipe))
                 cmd.append("--displayfd=%s" % w_pipe)
                 close_fds = False
                 def no_close_pipes():
                     from xpra.os_util import close_fds as osclose_fds
+                    if PYTHON3:
+                        try:
+                            for fd in (r_pipe, w_pipe):
+                                os.set_inheritable(fd, True)
+                        except:
+                            log.error("no_close_pipes()", exc_info=True)
                     osclose_fds([0, 1, 2, r_pipe, w_pipe])
                 preexec_fn = no_close_pipes
         log("start_server_subprocess: command=%s", csv(["'%s'" % x for x in cmd]))
@@ -2024,11 +2031,11 @@ def identify_new_socket(proc, dotxpra, existing_sockets, matching_display, new_s
 
 def run_proxy(error_cb, opts, script_file, args, mode, defaults):
     no_gtk()
-    if mode in ("_proxy_start", "_proxy_start_desktop", "_shadow_start"):
+    if mode in ("_proxy_start", "_proxy_start_desktop", "_proxy_shadow_start"):
         server_mode = {
                        "_proxy_start"           : "start",
                        "_proxy_start_desktop"   : "start-desktop",
-                       "_shadow_start"          : "shadow",
+                       "_proxy_shadow_start"    : "shadow",
                        }.get(mode)
         #strip defaults, only keep extra ones:
         for x in ("start", "start-child",
@@ -2056,8 +2063,6 @@ def run_proxy(error_cb, opts, script_file, args, mode, defaults):
     from xpra.scripts.fdproxy import XpraProxy
     from xpra.net.bytestreams import TwoFileConnection
     app = XpraProxy("xpra-pipe-proxy", TwoFileConnection(sys.stdout, sys.stdin, socktype="stdin/stdout"), server_conn)
-    signal.signal(signal.SIGINT, app.quit)
-    signal.signal(signal.SIGTERM, app.quit)
     app.run()
     return  0
 

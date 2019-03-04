@@ -23,23 +23,32 @@ SOFTWARE.
 
 */
 
-.windowlist-li {
-    min-width: 400px;
+#dragmenu { 
+	width: 80px; 
+	height: 40px; 
+	padding: 0px 0px 0px 10px; 
+	z-index: 100000; 
+	background: repeating-linear-gradient(
+		  90deg,
+		  white,
+		  white 1px,
+		  black 1px,
+		  black 2px
+		);
+	  
 }
 
-
-
-.windowlist-divleft {
+.menu-divleft {
     float:left;
     clear:left;
 }
 
-.windowlist-divright {
+.menu-divright {
     float:right;
     clear:right;
 }
 
-.windowlist-content-left {
+.menu-content-left {
     white-space: nowrap;
     width: 20px;
     height: 20px;
@@ -49,7 +58,7 @@ SOFTWARE.
     display: inline;
 }
 
-.windowlist-content-right {
+.menu-content-right {
     white-space: nowrap;
     float: right;
     width: 16px;
@@ -60,7 +69,9 @@ SOFTWARE.
     display: inline;
 }
 
-
+.windowlist-li {
+    min-width: 400px;
+}
 
 
 .Menu {

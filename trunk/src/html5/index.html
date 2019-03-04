@@ -48,6 +48,7 @@
 		
 		<link rel="stylesheet" type="text/css" href="css/menu.css"/>
 		<script type="application/javascript" src="js/Menu.js"></script>
+		<script type="application/javascript" src="js/Menu-custom.js"></script>
 		<link rel="stylesheet" type="text/css" href="css/menu-skin.css"/>
 		<link rel="stylesheet" type="text/css" href="css/icon.css"/>
 	</head>
@@ -55,104 +56,8 @@
 	<body background="background.png">
 		<script>
 
-			function addWindowListItem(wid, title)
-			{
-				var li = document.createElement("li");
-				li.className="windowlist-li";
-				li.id = "windowlistitem"+wid;
-				
-				var a = document.createElement("a");
-				
-				a.id = "windowlistitemlink"+wid;
-				
-				a.onmouseover=function(){client._window_set_focus(client.id_to_window[wid])};
-				a.onclick=function(){
-					if(jQuery(client.id_to_window[wid].div).is(":hidden")){
-						jQuery(client.id_to_window[wid].div).show();
-					}
-				};
-				
-				var divLeft = document.createElement("div");
-				divLeft.id="windowlistdivleft"+wid;
-				divLeft.className="windowlist-divleft";
-				var img = new Image();
-				img.id = "windowlistitemicon"+wid;
-				img.src="/favicon.png";
-				img.className="windowlist-content-left";
-				divLeft.appendChild(img);
-				
-				var titleDiv = document.createElement("div");
-				titleDiv.appendChild(document.createTextNode(title));
-				titleDiv.id = "windowlistitemtitle"+wid;
-				titleDiv.className="windowlist-content-left";
-				divLeft.appendChild(titleDiv);
-				
-				
-				
-				var divRight = document.createElement("div");
-				divRight.className="windowlist-divright";
 
-				var img2 = new Image();
-				img2.id = "windowlistitemclose"+wid;
-				img2.src="icons/close.png";
-				img2.title="Close";
-				img2.className="windowlist-content-right";
-				img2.onclick=function(){client._window_closed(client.id_to_window[wid])};
-				var img3 = new Image();
-				img3.id = "windowlistitemmax"+wid;
-				img3.src="icons/maximize.png";
-				img3.title="Maximize";
-				img3.onclick=function(){client.id_to_window[wid].toggle_maximized()};
-				img3.className="windowlist-content-right";
-				var img4 = new Image();
-				img4.id = "windowlistitemmin"+wid;
-				img4.src="icons/minimize.png";
-				img4.title="Minimize";
-				img4.onclick=function(){client.id_to_window[wid].toggle_minimized()};
-				img4.className="windowlist-content-right";
-
-				
-				divRight.appendChild(img2);
-				divRight.appendChild(img3);
-				divRight.appendChild(img4);
-				a.appendChild(divLeft);
-				a.appendChild(divRight);
-				li.appendChild(a);
-				
-				
-				document.getElementById("open_windows_list").appendChild(li);
-			}
-			
-			function removeWindowListItem(itemId)
-			{
-				var element = document.getElementById("windowlistitem" + itemId);
-				if(element && element.parentNode){
-					element.parentNode.removeChild(element);
-				}
-			}
-			
-			  $(function() {
-				  $("#dragmenu").draggable({
-					cancel: '.noDrag'
-				  });
-				});
 		</script>
-		  <style>
-  #dragmenu { 
-	  width: 80px; 
-	  height: 40px; 
-	  padding: 0px 0px 0px 10px; 
-	  z-index: 100000; 
-	  background: repeating-linear-gradient(
-		  90deg,
-		  white,
-		  white 1px,
-		  black 1px,
-		  black 2px
-		);
-	  
-	}
-  </style>
 		<div id="dpi" style="width: 1in; height: 1in; left: -100%; top: -100%; position: absolute;">
 		</div>
 

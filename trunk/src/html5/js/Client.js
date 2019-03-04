@@ -1744,15 +1744,15 @@ XpraClient.prototype._process_hello = function(packet, ctx) {
 				
 				
 				var divLeft = document.createElement("div");
-				divLeft.className="windowlist-divleft";
+				divLeft.className="menu-divleft";
 				var img = new Image();
 				img.src = "data:image/png;base64," + Utilities.ArrayBufferToBase64(icon_data);
-				img.className="windowlist-content-left";
+				img.className="menu-content-left";
 				divLeft.appendChild(img);
 				
 				var titleDiv = document.createElement("div");
 				titleDiv.appendChild(document.createTextNode(name));
-				titleDiv.className="windowlist-content-left";
+				titleDiv.className="menu-content-left";
 				divLeft.appendChild(titleDiv);
 				
 				a2.appendChild(divLeft);

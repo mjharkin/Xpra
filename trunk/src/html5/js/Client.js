@@ -1307,6 +1307,11 @@ XpraClient.prototype.do_window_mouse_click = function(e, window, pressed) {
 	if (wid>0 && this.focus != wid) {
 		this._window_set_focus(window);
 	}
+	
+	if(window==null || !window.focused){
+		return;
+	}
+	
 	var button = mouse.button;
 	this.debug("mouse", "click:", button, pressed, x, y);
 	if (button==4) {

@@ -42,6 +42,7 @@ SOFTWARE.
         //hack to hide the menu from javascript
         if(!ul || ul.classList.contains("-hide")){
 			ul.classList.remove("-hide");
+			ul.parentElement.classList.remove("-active");
 			return;
 		};
 

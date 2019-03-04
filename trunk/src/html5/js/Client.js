@@ -1268,10 +1268,6 @@ XpraClient.prototype.do_window_mouse_move = function(e, window) {
 		return;
 	}
 	
-	if (e.target.localName!="canvas") {
-		return;
-	}
-	
 	var mouse = this.getMouse(e, window),
 		x = Math.round(mouse.x),
 		y = Math.round(mouse.y);
@@ -1320,9 +1316,7 @@ XpraClient.prototype.do_window_mouse_click = function(e, window, pressed) {
 		button = 9;
 	}
 	var me = this;
-//	if(window==null || !window.focused){
-//		return;
-//	}
+	
 	
 	setTimeout(function() {
 		me.send(["button-action", wid, button, pressed, [x, y], modifiers, buttons]);

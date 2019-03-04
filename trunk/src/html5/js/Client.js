@@ -1732,9 +1732,30 @@ XpraClient.prototype._process_hello = function(packet, ctx) {
 				
 				var name = entry.Name;
 				var command = entry.Exec.replace(/%[uUfF]/g,"");
+				var icon_data = entry.IconData;
+				if (typeof icon_data === 'string') {
+					var uint = new Uint8Array(icon_data.length);
+					for(var i=0;i<icon_data.length;++i) {
+						uint[i] = icon_data.charCodeAt(i);
+					}
+					icon_data = uint;
+				}
 				var ignore = "False";
 				
-				a2.appendChild(document.createTextNode(name));
+				
+				var divLeft = document.createElement("div");
+				divLeft.className="windowlist-divleft";
+				var img = new Image();
+				img.src = "data:image/png;base64," + Utilities.ArrayBufferToBase64(icon_data);
+				img.className="windowlist-content-left";
+				divLeft.appendChild(img);
+				
+				var titleDiv = document.createElement("div");
+				titleDiv.appendChild(document.createTextNode(name));
+				titleDiv.className="windowlist-content-left";
+				divLeft.appendChild(titleDiv);
+				
+				a2.appendChild(divLeft);
 				a2.title = command;
 				
 				a2.onclick = function(){
@@ -1751,7 +1772,6 @@ XpraClient.prototype._process_hello = function(packet, ctx) {
 					this.parentElement.parentElement.className="";
 				};
 
-				a2.setAttribute("data-icon", "apps")
 				li2.appendChild(a2);
 				ul.appendChild(li2);
 				

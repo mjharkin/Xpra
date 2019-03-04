@@ -68,7 +68,7 @@
 		</div>
 
 		<div id="screen" style="width: 100%; height:100%;">
-			<div id="dragmenu">
+			<div id="float_menu">
 				<ul class="Menu -horizontal">
 					<li class="-hasSubmenu">
 						<a href="#" title="Xpra" class="noDrag" data-icon="menu"></a>
@@ -81,6 +81,7 @@
 							<li class="-hasSubmenu">
 								<a href="#" data-icon="kitchen">Server</a>
 								<ul>
+									<li><a href="#" data-icon="access_time" onclick="return false" id="clock_text"></a></li>
 									<li><a href="#" data-icon="cloud_upload" onclick="upload_file(event); return false">Upload file</a></li>
 									<li><a href="#" data-icon="exit_to_app" onclick="confirm_shutdown_server(event); return false">Shutdown Server</a></li>
 								</ul>

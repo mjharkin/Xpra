@@ -76,7 +76,7 @@
 			}
 			
 			  $(function() {
-				  $("#dragmenu").draggable({
+				  $("#float_menu").draggable({
 					cancel: '.noDrag'
 				  });
 				});

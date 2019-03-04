@@ -370,10 +370,7 @@ table#sessiondata td {
 	float: left;
 	padding-left: 100px;
 }
-#clock_text {
-	font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
-	color: #fff;
-}
+
 
 .audio {
 	float: right;

@@ -1308,7 +1308,7 @@ XpraClient.prototype.do_window_mouse_click = function(e, window, pressed) {
 		this._window_set_focus(window);
 	}
 	
-	if(window==null || !window.focused){
+	if(window==null || (!window.focused && !window.override_redirect)){
 		return;
 	}
 	

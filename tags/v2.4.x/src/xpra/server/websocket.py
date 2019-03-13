@@ -319,7 +319,7 @@ class WebSocketConnection(SocketConnection):
                 return memoryview_to_bytes(buf)
             bufs, closed_string = self.ws_handler.recv_frames()
             if closed_string:
-                log("read() closed_string: %s", closed_string)
+                log("read() closed_string: %s", memoryview_to_bytes(closed_string))
                 self.active = False
             log("read() got %i ws frames", len(bufs))
             if bufs:

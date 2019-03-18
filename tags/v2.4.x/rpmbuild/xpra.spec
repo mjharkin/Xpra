@@ -574,8 +574,7 @@ rm -rf $RPM_BUILD_ROOT
 %config %{_sysconfdir}/xpra/conf.d/40_client.conf
 %config %{_sysconfdir}/xpra/conf.d/42_client_keyboard.conf
 %{_datadir}/applications/xpra-launcher.desktop
-%{_datadir}/applications/xpra-browser.desktop
-%{_datadir}/applications/xpra-shadow.desktop
+%{_datadir}/applications/xpra-gui.desktop
 %{_datadir}/applications/xpra.desktop
 %{_datadir}/mime/packages/application-x-xpraconfig.xml
 
@@ -588,6 +587,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_prefix}/lib/udev/rules.d/71-xpra-virtual-pointer.rules
 %{_datadir}/xpra/content-type
 %{_libexecdir}/xpra/xdg-open
+%{_datadir}/applications/xpra-shadow.desktop
 %{_libexecdir}/xpra/gnome-open
 %{_libexecdir}/xpra/gvfs-open
 %{_libexecdir}/xpra/auth_dialog
@@ -668,7 +668,8 @@ rm -rf $RPM_BUILD_ROOT
 
 %check
 /usr/bin/desktop-file-validate %{buildroot}%{_datadir}/applications/xpra-launcher.desktop
-/usr/bin/desktop-file-validate %{buildroot}%{_datadir}/applications/xpra-browser.desktop
+/usr/bin/desktop-file-validate %{buildroot}%{_datadir}/applications/xpra-gui.desktop
+/usr/bin/desktop-file-validate %{buildroot}%{_datadir}/applications/xpra-shadow.desktop
 /usr/bin/desktop-file-validate %{buildroot}%{_datadir}/applications/xpra.desktop
 
 %if 0%{?debug_tests}

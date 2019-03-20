@@ -1,3 +1,9 @@
+xpra (2.5-2) UNRELEASED; urgency=low
+  * fix compatibility with older versions of python-pillow
+  * fix sending of icons as 'premult_argb'
+
+ -- Antoine Martin <antoine@xpra.org>  Wed, 20 Mar 2019 19:19:44 +0700
+
 xpra (2.5-1) UNRELEASED; urgency=low
   * Python 3 port mostly complete, including packaging for Debian
   * pixel compression and bandwidth management:

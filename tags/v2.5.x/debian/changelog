@@ -1,3 +1,16 @@
+xpra (2.5.1-1) UNRELEASED; urgency=low
+ * fix sending of icons as premultipled ARGB
+ * fix compatibility with old versions of python-pillow
+ * fix scroll encoding code flow (should be impossible to hit)
+ * fix handling of info requests with Python3 servers
+ * fix missing option for lock option in man page
+ * try harder to prevent hash collisions in scroll encoding
+ * skip risky opengl probing when the initial check failed
+ * prevent file conflicts with older packages
+ * minor packaging fixes (dates)
+
+ -- Antoine Martin <antoine@nagafix.co.uk>  Thu, 28 Mar 2019 23:13:46 +0700
+
 xpra (2.5-2) UNRELEASED; urgency=low
   * fix compatibility with older versions of python-pillow
   * fix sending of icons as 'premult_argb'

@@ -1,3 +1,16 @@
+v2.5.1 (2019-03-28)
+======================
+	-- fix sending of icons as premultipled ARGB
+	-- fix compatibility with old versions of python-pillow
+	-- fix scroll encoding code flow (should be impossible to hit)
+	-- fix handling of info requests with Python3 servers
+	-- fix missing option for lock option in man page
+	-- try harder to prevent hash collisions in scroll encoding
+	-- skip risky opengl probing when the initial check failed
+	-- prevent file conflicts with older packages
+	-- minor packaging fixes (dates)
+
+
 v2.5 (2019-03-19)
 ======================
 	-- Python 3 port mostly complete, including packaging for Debian

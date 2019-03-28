@@ -3,7 +3,7 @@
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-%define version 2.5
+%define version 2.5.1
 
 %{!?__python2: %global __python2 python2}
 %{!?__python3: %define __python3 python3}
@@ -11,7 +11,7 @@
 %{!?python3_sitearch: %global python3_sitearch %(%{__python3} -c "from distutils.sysconfig import get_python_lib; print(get_python_lib(1))")}
 
 %define CFLAGS -O2
-%define DEFAULT_BUILD_ARGS --with-Xdummy --without-enc_x265	--pkg-config-path=%{_libdir}/xpra/pkgconfig --rpath=%{_libdir}/xpra --without-cuda_rebuild
+%define DEFAULT_BUILD_ARGS --with-Xdummy --without-enc_x2.5.1	--pkg-config-path=%{_libdir}/xpra/pkgconfig --rpath=%{_libdir}/xpra --without-cuda_rebuild
 
 %define update_firewall 1
 %define run_tests 1
@@ -822,6 +822,17 @@ fi
 
 
 %changelog
+* Thu Mar 28 2019 Antoine Martin <antoine@xpra.org> 2.5.1-1
+- fix sending of icons as premultipled ARGB
+- fix compatibility with old versions of python-pillow
+- fix scroll encoding code flow (should be impossible to hit)
+- fix handling of info requests with Python3 servers
+- fix missing option for lock option in man page
+- try harder to prevent hash collisions in scroll encoding
+- skip risky opengl probing when the initial check failed
+- prevent file conflicts with older packages
+- minor packaging fixes (dates)
+
 * Tue Mar 19 2019 Antoine Martin <antoine@xpra.org> 2.5-1
 - Python 3 port mostly complete, including packaging for Debian
 - pixel compression and bandwidth management:
@@ -1111,7 +1122,7 @@ fi
 -functional HTML5 client
 -add session idle timeout switch
 -add html command line switch for easily setting up an HTML5 xpra server
--dropped support for Python 2.5 and older, allowing many code cleanups and improvements
+-dropped support for Python 2.5.1 and older, allowing many code cleanups and improvements
 -include manual in html format with MS Windows and OSX builds
 -add option to control socket permissions (easier setup of containers)
 -client log output forwarding to the server
@@ -1249,7 +1260,7 @@ fi
 - fix painting of forwarded tray
 - fix initial window workspace
 - fix launcher with debug option in config file
-- fix compilation of x265 encoder
+- fix compilation of x2.5.1 encoder
 - fix infinite recursion in cython csc module
 - don't include sound utilities when building without sound
 
@@ -1293,7 +1304,7 @@ fi
 - fix RGB pixel data buffer size (re-stride as needed)
 - avoid buggy swscale 2.1.0 on Ubuntu
 
-* Sat May 03 2014 Antoine Martin <antoine@xpra.org> 0.12.5-1
+* Sat May 03 2014 Antoine Martin <antoine@xpra.org> 0.12.5.1-1
 - fix error when clients supply invalid screen dimensions
 - fix MS Windows build without ffmpeg
 - fix cairo backing alternative
@@ -1614,7 +1625,7 @@ fi
 - fix focus problems with old Xvfb display servers
 - fix RPM SELinux labelling of static codec builds (CentOS)
 - fix CentOS 5.x compatibility
-- fix Python 2.4 and 2.5 compatibility (many)
+- fix Python 2.4 and 2.5.1 compatibility (many)
 - fix failed server upgrades killing the virtual display
 - fix screenshot command with "OR" windows
 - fix support "OR" windows that move and resize
@@ -1969,7 +1980,7 @@ fi
 - toggle cursors, bell and notifications by telling the server not to bother sending them, saves bandwidth
 - build/deploy: don't modify file in source tree, generate it at build time only
 - add missing GPL2 license file to show in about dialog
-- Python 2.5: workarounds to restore support
+- Python 2.5.1: workarounds to restore support
 - turn off compression over local connections (when mmap is enabled)
 - clients can specify maximum refresh rate and screen update batching options
 

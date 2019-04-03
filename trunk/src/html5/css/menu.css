@@ -182,22 +182,22 @@ SOFTWARE.
     /* Height of navbar, and menu items */
     /* All of these must be of equal value */
     .Menu {
-        line-height: 40px;
+        line-height: 30px;
     }
     .Menu.-horizontal,
     .Menu li,
     .Menu li > :first-child {
-        height: 40px;
+        height: 30px;
     }
     .Menu *[data-icon]:before,
     .Menu .Icon {
-        width: 40px;
-        height: 40px;
+        width: 30px;
+        height: 30px;
     }
     .Menu *[data-icon] {
-        min-width: 40px;
-        min-height: 40px;
-        padding-left: 40px;
+        min-width: 30px;
+        min-height: 30px;
+        padding-left: 30px;
     }
 
     /* Default font settings for menu */

@@ -8,7 +8,7 @@ from xpra.gtk_common.error import xswallow, xsync
 from xpra.x11.gtk_x11.prop import prop_set, prop_get
 from xpra.gtk_common.gobject_compat import import_gdk, import_gobject, is_gtk3
 from xpra.gtk_common.gtk_util import (
-    display_get_default, get_default_root_window, get_xwindow, GDKWindow,
+    display_get_default, get_default_root_window, get_xwindow, GDKWindow, x11_foreign_new,
     STRUCTURE_MASK, EXPOSURE_MASK, PROPERTY_CHANGE_MASK,
     )
 from xpra.x11.bindings.window_bindings import constants, X11WindowBindings #@UnresolvedImport
@@ -218,7 +218,7 @@ class SystemTray(gobject.GObject):
     def dock_tray(self, xid):
         log("dock_tray(%#x)", xid)
         root = get_default_root_window()
-        window = gdk.window_foreign_new(xid)
+        window = x11_foreign_new(xid)
         if window is None:
             log.warn("could not find gdk window for tray window %#x", xid)
             return

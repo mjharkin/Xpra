@@ -250,20 +250,20 @@ def configure_imsettings_env(input_method):
         #the default: set DISABLE_IMSETTINGS=1, fallback to xim
         #that's because the 'ibus' 'immodule' breaks keyboard handling
         #unless its daemon is also running - and we don't know if it is..
-        imsettings_env(True, "xim", "xim", "none", "@im=none")
+        imsettings_env(True, "xim", "xim", "xim", "none", "@im=none")
     elif im=="keep":
         #do nothing and keep whatever is already set, hoping for the best
         pass
     elif im in ("xim", "IBus", "SCIM", "uim"):
         #ie: (False, "ibus", "ibus", "IBus", "@im=ibus")
-        imsettings_env(True, im.lower(), im.lower(), im, "@im=%s" % im.lower())
+        imsettings_env(True, im.lower(), im.lower(), im.lower(), im, "@im=%s" % im.lower())
     else:
-        v = imsettings_env(True, im.lower(), im.lower(), im, "@im=%s" % im.lower())
+        v = imsettings_env(True, im.lower(), im.lower(), im.lower(), im, "@im=%s" % im.lower())
         warn("using input method settings: %s" % str(v))
         warn("unknown input method specified: %s" % input_method)
         warn(" if it is correct, you may want to file a bug to get it recognized")
 
-def imsettings_env(disabled, gtk_im_module, qt_im_module, imsettings_module, xmodifiers):
+def imsettings_env(disabled, gtk_im_module, qt_im_module, clutter_im_module, imsettings_module, xmodifiers):
     #for more information, see imsettings:
     #https://code.google.com/p/imsettings/source/browse/trunk/README
     if disabled is True:
@@ -273,6 +273,8 @@ def imsettings_env(disabled, gtk_im_module, qt_im_module, imsettings_module, xmo
     v = {
          "GTK_IM_MODULE"      : gtk_im_module,            #or "gtk-im-context-simple"?
          "QT_IM_MODULE"       : qt_im_module,             #or "simple"?
+         "QT4_IM_MODULE"      : qt_im_module,
+         "CLUTTER_IM_MODULE"  : clutter_im_module,
          "IMSETTINGS_MODULE"  : imsettings_module,        #or "xim"?
          "XMODIFIERS"         : xmodifiers,
          #not really sure what to do with those:
@@ -334,11 +336,14 @@ def start_dbus(dbus_launch):
             close_fds()
         env = dict((k,v) for k,v in os.environ.items() if k in (
             "PATH",
-            "LANG",
-            "USER",
-            "PATH"))
+            "SSH_CLIENT", "SSH_CONNECTION",
+            "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE", "XDG_RUNTIME_DIR",
+            "SHELL", "LANG", "USER", "LOGNAME", "HOME",
+            "DISPLAY", "XAUTHORITY", "CKCON_X11_DISPLAY",
+            ))
         import shlex
         cmd = shlex.split(dbus_launch)
+        dbuslog("start_dbus(%s) env=%s", dbus_launch, env)
         proc = Popen(cmd, stdin=PIPE, stdout=PIPE, shell=False, env=env, preexec_fn=preexec)
         out = proc.communicate()[0]
         assert proc.poll()==0, "exit code is %s" % proc.poll()
@@ -346,12 +351,22 @@ def start_dbus(dbus_launch):
         dbus_env = {}
         dbuslog("out(%s)=%s", cmd, nonl(out))
         for l in bytestostr(out).splitlines():
-            parts = l.split("=", 1)
+            if l.startswith("export "):
+                continue
+            sep = "="
+            if l.startswith("setenv "):
+                l = l[len("setenv "):]
+                sep = " "
+            if l.startswith("set "):
+                l = l[len("set "):]
+            parts = l.split(sep, 1)
             if len(parts)!=2:
                 continue
             k,v = parts
             if v.startswith("'") and v.endswith("';"):
                 v = v[1:-2]
+            elif v.endswith(";"):
+                v = v[:-1]
             dbus_env[k] = v
         dbus_pid = int(dbus_env.get("DBUS_SESSION_BUS_PID", 0))
         dbuslog("dbus-env=%s", dbus_env)
@@ -390,6 +405,41 @@ def show_encoding_help(opts):
     for e in (x for x in HELP_ORDER if x in sb.encodings):
         print(" * %s" % encoding_help(e))
     return 0
+
+
+def set_server_features(opts):
+    def b(v):
+        return str(v).lower() not in FALSE_OPTIONS
+    #turn off some server mixins:
+    from xpra.server import server_features
+    impwarned = []
+    def impcheck(*modules):
+        for mod in modules:
+            try:
+                __import__("xpra.%s" % mod, {}, {}, [])
+            except ImportError:
+                if mod not in impwarned:
+                    impwarned.append(mod)
+                    log = get_util_logger()
+                    log.warn("Warning: missing %s module", mod)
+                return False
+        return True
+    server_features.notifications   = opts.notifications and impcheck("notifications")
+    server_features.webcam          = b(opts.webcam) and impcheck("codecs")
+    server_features.clipboard       = b(opts.clipboard) and impcheck("clipboard")
+    server_features.audio           = (b(opts.speaker) or b(opts.microphone)) and impcheck("sound")
+    server_features.av_sync         = server_features.audio and b(opts.av_sync)
+    server_features.fileprint       = b(opts.printing) or b(opts.file_transfer)
+    server_features.mmap            = b(opts.mmap)
+    server_features.input_devices   = not opts.readonly and impcheck("keyboard")
+    server_features.commands        = impcheck("server.control_command")
+    server_features.dbus            = opts.dbus_proxy and impcheck("dbus")
+    server_features.encoding        = impcheck("codecs")
+    server_features.logging         = b(opts.remote_logging)
+    #server_features.network_state   = ??
+    server_features.display         = opts.windows
+    server_features.windows         = opts.windows and impcheck("codecs")
+    server_features.rfb             = b(opts.rfb_upgrade) and impcheck("server.rfb")
 
 
 def make_desktop_server():
@@ -972,6 +1022,35 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
     if opts.chdir:
         os.chdir(opts.chdir)
 
+    dbus_pid = 0
+    dbus_env = {}
+    kill_dbus = None
+    if not shadowing and POSIX and not clobber:
+        no_gtk()
+        dbuslog = Logger("dbus")
+        assert starting or starting_desktop or proxying
+        bus_address = protected_env.get("DBUS_SESSION_BUS_ADDRESS")
+        dbuslog("dbus_launch=%s, current DBUS_SESSION_BUS_ADDRESS=%s", opts.dbus_launch, bus_address)
+        if opts.dbus_launch and not bus_address:
+            #start a dbus server:
+            def kill_dbus():
+                dbuslog("kill_dbus: dbus_pid=%s" % dbus_pid)
+                if dbus_pid<=0:
+                    return
+                try:
+                    os.kill(dbus_pid, signal.SIGINT)
+                except Exception as e:
+                    dbuslog("os.kill(%i, SIGINT)", dbus_pid, exc_info=True)
+                    dbuslog.warn("Warning: error trying to stop dbus with pid %i:", dbus_pid)
+                    dbuslog.warn(" %s", e)
+            add_cleanup(kill_dbus)
+            #this also updates os.environ with the dbus attributes:
+            dbus_pid, dbus_env = start_dbus(opts.dbus_launch)
+            dbuslog("dbus attributes: pid=%s, env=%s", dbus_pid, dbus_env)
+            if dbus_env:
+                os.environ.update(dbus_env)
+                os.environ.update(protected_env)
+
     display = None
     if not proxying:
         no_gtk()
@@ -1016,40 +1095,8 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
             netlog("ssh %s:%s : %s", "", ssh_port, socket)
             add_mdns(mdns_recs, "ssh", "", ssh_port)
 
-    def b(v):
-        return str(v).lower() not in FALSE_OPTIONS
-    #turn off some server mixins:
-    from xpra.server import server_features
-    impwarned = []
-    def impcheck(*modules):
-        for mod in modules:
-            try:
-                __import__("xpra.%s" % mod, {}, {}, [])
-            except ImportError:
-                if mod not in impwarned:
-                    impwarned.append(mod)
-                    log = get_util_logger()
-                    log.warn("Warning: missing %s module", mod)
-                return False
-        return True
-    server_features.notifications   = opts.notifications and impcheck("notifications")
-    server_features.webcam          = b(opts.webcam) and impcheck("codecs")
-    server_features.clipboard       = b(opts.clipboard) and impcheck("clipboard")
-    server_features.audio           = (b(opts.speaker) or b(opts.microphone)) and impcheck("sound")
-    server_features.av_sync         = server_features.audio and b(opts.av_sync)
-    server_features.fileprint       = b(opts.printing) or b(opts.file_transfer)
-    server_features.mmap            = b(opts.mmap)
-    server_features.input_devices   = not opts.readonly and impcheck("keyboard")
-    server_features.commands        = impcheck("server.control_command")
-    server_features.dbus            = opts.dbus_proxy and impcheck("dbus")
-    server_features.encoding        = impcheck("codecs")
-    server_features.logging         = b(opts.remote_logging)
-    #server_features.network_state   = ??
-    server_features.display         = opts.windows
-    server_features.windows         = opts.windows and impcheck("codecs")
-    server_features.rfb             = b(opts.rfb_upgrade) and impcheck("server.rfb")
+    set_server_features(opts)
 
-    kill_dbus = None
     if shadowing:
         app = make_shadow_server()
     elif proxying:
@@ -1066,50 +1113,25 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
         #make sure the pid we save is the real one:
         if not check_xvfb():
             return  1
-        if xvfb_pid is not None:
-            #save the new pid (we should have one):
-            save_xvfb_pid(xvfb_pid)
 
-        if POSIX:
+        #now we can save values on the display
+        #(we cannot access gtk3 until dbus has started up)
+        if not clobber:
+            if xvfb_pid:
+                save_xvfb_pid(xvfb_pid)
+            if dbus_pid:
+                save_dbus_pid(dbus_pid)
+            if dbus_env:
+                save_dbus_env(dbus_env)
+        else:
+            #get the saved pids and env
+            dbus_pid = get_dbus_pid()
+            dbus_env = get_dbus_env()
             dbuslog = Logger("dbus")
-            save_uinput_id(uinput_uuid)
-            dbus_pid = -1
-            dbus_env = {}
-            if clobber:
-                #get the saved pids and env
-                dbus_pid = get_dbus_pid()
-                dbus_env = get_dbus_env()
-                dbuslog("retrieved existing dbus attributes")
-            else:
-                assert starting or starting_desktop
-                if xvfb_pid is not None:
-                    #save the new pid (we should have one):
-                    save_xvfb_pid(xvfb_pid)
-                bus_address = protected_env.get("DBUS_SESSION_BUS_ADDRESS")
-                dbuslog("dbus_launch=%s, current DBUS_SESSION_BUS_ADDRESS=%s", opts.dbus_launch, bus_address)
-                if opts.dbus_launch and not bus_address:
-                    #start a dbus server:
-                    def kill_dbus():
-                        dbuslog("kill_dbus: dbus_pid=%s" % dbus_pid)
-                        if dbus_pid<=0:
-                            return
-                        try:
-                            os.kill(dbus_pid, signal.SIGINT)
-                        except Exception as e:
-                            dbuslog("os.kill(%i, SIGINT)", dbus_pid, exc_info=True)
-                            dbuslog.warn("Warning: error trying to stop dbus with pid %i:", dbus_pid)
-                            dbuslog.warn(" %s", e)
-                    add_cleanup(kill_dbus)
-                    #this also updates os.environ with the dbus attributes:
-                    dbus_pid, dbus_env = start_dbus(opts.dbus_launch)
-                    if dbus_pid>0:
-                        save_dbus_pid(dbus_pid)
-                    if dbus_env:
-                        save_dbus_env(dbus_env)
-            dbuslog("dbus attributes: pid=%s, env=%s", dbus_pid, dbus_env)
+            dbuslog("retrieved existing dbus attributes: %s, %s", dbus_pid, dbus_env)
             if dbus_env:
                 os.environ.update(dbus_env)
-                os.environ.update(protected_env)
+        save_uinput_id(uinput_uuid)
 
         if POSIX:
             #all unix domain sockets:

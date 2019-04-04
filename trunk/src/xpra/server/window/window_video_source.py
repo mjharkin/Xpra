@@ -17,7 +17,7 @@ from xpra.server.window.window_source import (
     WindowSource, DelayedRegions,
     STRICT_MODE, AUTO_REFRESH_SPEED, AUTO_REFRESH_QUALITY, MAX_RGB,
     )
-from xpra.rectangle import merge_all          #@UnresolvedImport
+from xpra.rectangle import rectangle, add_rectangle, merge_all          #@UnresolvedImport
 from xpra.server.window.motion import ScrollData                    #@UnresolvedImport
 from xpra.server.window.video_subregion import VideoSubregion, VIDEO_SUBREGION
 from xpra.server.window.video_scoring import get_pipeline_score
@@ -670,10 +670,7 @@ class WindowVideoSource(WindowSource):
         self.video_subregion.add_video_refresh(ir)
         #add any rectangles not in the video region
         #(if any: keep track if we actually added anything)
-        pixels_modified = 0
-        for r in region.substract_rect(vr):
-            pixels_modified += WindowSource.add_refresh_region(self, r)
-        return pixels_modified
+        return sum(WindowSource.add_refresh_region(self, r) for r in region.substract_rect(vr))
 
     def matches_video_subregion(self, width, height):
         vr = self.video_subregion.rectangle
@@ -745,7 +742,7 @@ class WindowVideoSource(WindowSource):
             #find how many pixels are within the region (roughly):
             #find all unique regions that intersect with it:
             inter = tuple(x for x in (vr.intersection_rect(r) for r in regions) if x is not None)
-            if len(inter)>0:
+            if inter:
                 #merge all regions into one:
                 in_region = merge_all(inter)
                 pixels_in_region = vr.width*vr.height
@@ -1031,6 +1028,7 @@ class WindowVideoSource(WindowSource):
         if vs:
             if (self.encoding!="auto" and self.encoding not in self.common_video_encodings) or \
                 self.full_frames_only or STRICT_MODE or not self.non_video_encodings or not self.common_video_encodings or \
+                self.content_type=="text" or \
                 (self._mmap and self._mmap_size>0):
                 #cannot use video subregions
                 #FIXME: small race if a refresh timer is due when we change encoding - meh
@@ -1093,6 +1091,9 @@ class WindowVideoSource(WindowSource):
         """
         if self._mmap and self._mmap_size>0:
             scorelog("cannot score: mmap enabled")
+            return
+        if self.content_type=="text":
+            scorelog("no pipelines for text content-type")
             return
         elapsed = monotonic_time()-self._last_pipeline_check
         max_elapsed = 0.75
@@ -1405,7 +1406,7 @@ class WindowVideoSource(WindowSource):
                         target = SCALING_PPS_TARGET             #ie: 1080p
                     if self.is_shadow:
                         #shadow servers look ugly when scaled:
-                        target *= 4
+                        target *= 16
                     elif self.content_type=="text":
                         #try to avoid scaling:
                         target *= 4
@@ -1602,7 +1603,9 @@ class WindowVideoSource(WindowSource):
             except TransientCodecException as e:
                 if self.is_cancelled():
                     return False
-                videolog.warn("setup_pipeline failed for %s: %s", option, e)
+                videolog.warn("Warning: setup_pipeline failed for")
+                videolog.warn(" %s:", option)
+                videolog.warn(" %s", e)
                 del e
             except:
                 if self.is_cancelled():
@@ -1730,7 +1733,7 @@ class WindowVideoSource(WindowSource):
         return packet
 
 
-    def encode_scrolling(self, scroll_data, image, options={}):
+    def encode_scrolling(self, scroll_data, image, options, match_pct):
         start = monotonic_time()
         try:
             del options["av-sync"]
@@ -1738,7 +1741,7 @@ class WindowVideoSource(WindowSource):
             pass
         #tells make_data_packet not to invalidate the scroll data:
         ww, wh = self.window_dimensions
-        scrolllog("encode_scrolling(%s, %s) window-dimensions=%s", image, options, (ww, wh))
+        scrolllog("encode_scrolling([], %s, %s, %i) window-dimensions=%s", image, options, match_pct, (ww, wh))
         x, y, w, h = image.get_geometry()[:4]
         raw_scroll, non_scroll = {}, {0 : h}
         if x+y>ww or y+h>wh:
@@ -1785,6 +1788,9 @@ class WindowVideoSource(WindowSource):
         #send the rest as rectangles:
         if non_scroll:
             speed, quality = self._current_speed, self._current_quality
+            #boost quality a bit, because lossless saves refreshing,
+            #more so if we have a high match percentage (less to send):
+            quality = min(100, quality + 10 + max(0, match_pct-50)//2)
             nsstart = monotonic_time()
             client_options = options.copy()
             for sy, sh in non_scroll.items():
@@ -1816,15 +1822,47 @@ class WindowVideoSource(WindowSource):
                 csize = len(data)
                 compresslog("compress: %5.1fms for %4ix%-4i pixels at %4i,%-4i for wid=%-5i using %9s with ratio %5.1f%%  (%5iKB to %5iKB), sequence %5i, client_options=%s",
                      (monotonic_time()-substart)*1000.0, w, sh, x+0, y+sy, self.wid, coding, 100.0*csize/psize, psize/1024, csize/1024, self._damage_packet_sequence, client_options)
-                scrolllog("non-scroll encoding using %s (quality=%i, speed=%i) took %ims for %i rectangles",
-                          encoding, self._current_quality, self._current_speed, (monotonic_time()-nsstart)*1000, len(non_scroll))
-            else:
-                #we can't send the non-scroll areas, ouch!
-                flush = 0
+            scrolllog("non-scroll encoding using %s (quality=%i, speed=%i) took %ims for %i rectangles",
+                      encoding, self._current_quality, self._current_speed, (monotonic_time()-nsstart)*1000, len(non_scroll))
+        else:
+            #we can't send the non-scroll areas, ouch!
+            flush = 0
         assert flush==0
         self.last_scroll_time = monotonic_time()
         scrolllog("scroll encoding total time: %ims", (self.last_scroll_time-start)*1000)
         return None
+
+    def do_schedule_auto_refresh(self, encoding, data, region, client_options, options):
+        #for scroll encoding, data is a LargeStructure wrapper:
+        if encoding=="scroll" and hasattr(data, "data"):
+            if not self.refresh_regions:
+                return
+            #check if any pending refreshes intersect the area containing the scroll data:
+            if not any(region.intersects_rect(r) for r in self.refresh_regions):
+                #nothing to do!
+                return
+            pixels_added = 0
+            for x, y, w, h, dx, dy in data.data:
+                #the region that moved
+                src_rect = rectangle(x, y, w, h)
+                for rect in self.refresh_regions:
+                    inter = src_rect.intersection_rect(rect)
+                    if inter:
+                        dst_rect = rectangle(inter.x+dx, inter.y+dy, inter.width, inter.height)
+                        pixels_added += self.add_refresh_region(dst_rect)
+            if pixels_added:
+                #if we end up with too many rectangles,
+                #bail out and simplify:
+                if len(self.refresh_regions)>=200:
+                    self.refresh_regions = [merge_all(self.refresh_regions)]
+                refreshlog("updated refresh regions with scroll data: %i pixels added", pixels_added)
+                refreshlog(" refresh_regions=%s", self.refresh_regions)
+            #we don't change any of the refresh scheduling
+            #if there are non-scroll packets following this one, they will
+            #and if not then we're OK anyway
+            return
+        WindowSource.do_schedule_auto_refresh(self, encoding, data, region, client_options, options)
+
 
     def get_fallback_encoding(self, encodings, order):
         if order is None:
@@ -1954,7 +1992,7 @@ class WindowVideoSource(WindowSource):
                               (end-start)*1000, match_pct, h, scroll)
                     #if enough scrolling is detected, use scroll encoding for this frame:
                     if match_pct>=self.scroll_min_percent:
-                        return self.encode_scrolling(scroll_data, image, options)
+                        return self.encode_scrolling(scroll_data, image, options, match_pct)
                 except Exception:
                     scrolllog("do_video_encode%s scrolling detection", (encoding, image, options), exc_info=True)
                     if not self.is_cancelled():

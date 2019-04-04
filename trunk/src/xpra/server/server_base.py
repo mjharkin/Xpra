@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
 # Copyright (C) 2011 Serviware (Arthur Huillet, <ahuillet@serviware.com>)
-# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 from threading import Thread
-from time import sleep
 
 from xpra.server.server_core import ServerCore, get_thread_info
 from xpra.server.mixins.server_base_controlcommands import ServerBaseControlCommands
@@ -207,7 +206,9 @@ class ServerBase(ServerBaseClass):
         disconnected = 0
         existing_sources = set(ss for p,ss in self._server_sources.items() if p!=proto)
         is_existing_client = uuid and any(ss.uuid==uuid for ss in existing_sources)
-        log("handle_sharing%s lock=%s, sharing=%s, existing sources=%s, is existing client=%s", (proto, ui_client, detach_request, share, uuid), self.lock, self.sharing, existing_sources, is_existing_client)
+        log("handle_sharing%s lock=%s, sharing=%s, existing sources=%s, is existing client=%s",
+            (proto, ui_client, detach_request, share, uuid),
+            self.lock, self.sharing, existing_sources, is_existing_client)
         #if other clients are connected, verify we can steal or share:
         if existing_sources and not is_existing_client:
             if self.sharing is True or (self.sharing is None and share and all(ss.share for ss in existing_sources)):
@@ -317,7 +318,8 @@ class ServerBase(ServerBaseClass):
                 self.antialias = c.dictget("antialias")
                 self.cursor_size = c.intget("cursor.size", 0)
             #FIXME: this belongs in DisplayManager!
-            screenlog("dpi=%s, dpi.x=%s, dpi.y=%s, antialias=%s, cursor_size=%s", self.dpi, self.xdpi, self.ydpi, self.antialias, self.cursor_size)
+            screenlog("dpi=%s, dpi.x=%s, dpi.y=%s, antialias=%s, cursor_size=%s",
+                      self.dpi, self.xdpi, self.ydpi, self.antialias, self.cursor_size)
             log("double-click time=%s, distance=%s", self.double_click_time, self.double_click_distance)
             #if we're not sharing, reset all the settings:
             reset = share_count==0
@@ -408,7 +410,8 @@ class ServerBase(ServerBaseClass):
         server_uuid = c.strget("server_uuid")
         if server_uuid:
             if server_uuid==self.uuid:
-                self.send_disconnect(proto, "cannot connect a client running on the same display that the server it connects to is managing - this would create a loop!")
+                self.send_disconnect(proto, "cannot connect a client running on the same display"
+                                     +" that the server it connects to is managing - this would create a loop!")
                 return  False
             log.warn("This client is running within the Xpra server %s", server_uuid)
         return True
@@ -503,7 +506,7 @@ class ServerBase(ServerBaseClass):
         #if len(packet>=2):
         #    uuid = packet[1]
         if len(packet)>=4:
-            categories = packet[3]
+            categories = tuple(bytestostr(x) for x in packet[3])
         def info_callback(_proto, info):
             assert proto==_proto
             if categories:
@@ -516,7 +519,8 @@ class ServerBase(ServerBaseClass):
         def cb(proto, info):
             self.do_send_info(proto, info, flatten)
             end = monotonic_time()
-            log.info("processed %s info request from %s in %ims", ["structured", "flat"][flatten], proto._conn, (end-start)*1000)
+            log.info("processed %s info request from %s in %ims",
+                     ["structured", "flat"][flatten], proto._conn, (end-start)*1000)
         self.get_all_info(cb, proto, None)
 
     def get_ui_info(self, proto, client_uuids=None, *args):
@@ -597,8 +601,10 @@ class ServerBase(ServerBaseClass):
             })
 
         # other clients:
-        info["clients"] = {""                   : len([p for p in self._server_sources.keys() if p!=proto]),
-                           "unauthenticated"    : len([p for p in self._potential_protocols if ((p is not proto) and (p not in self._server_sources.keys()))])}
+        info["clients"] = {
+            ""                   : sum(1 for p in self._server_sources if p!=proto),
+            "unauthenticated"    : sum(1 for p in self._potential_protocols if ((p is not proto) and (p not in self._server_sources))),
+           }
         #find the server source to report on:
         n = len(server_sources or [])
         if n==1:
@@ -670,7 +676,8 @@ class ServerBase(ServerBaseClass):
             #disconnect other users:
             for p,ss in tuple(self._server_sources.items()):
                 if p!=proto:
-                    self.disconnect_client(p, DETACH_REQUEST, "client %i no longer wishes to share the session" % ss.counter)
+                    self.disconnect_client(p, DETACH_REQUEST,
+                                           "client %i no longer wishes to share the session" % ss.counter)
 
     def _process_lock_toggle(self, proto, packet):
         assert self.lock is None
@@ -724,7 +731,7 @@ class ServerBase(ServerBaseClass):
             httplog.warn("Warning: no client matching uuid '%s'", uuid)
             return err()
         state = {}
-        def new_buffer(_sound_source, data, _metadata, packet_metadata=[]):
+        def new_buffer(_sound_source, data, _metadata, packet_metadata=()):
             if not state.get("started"):
                 httplog.warn("buffer received but stream is not started yet")
                 err()
@@ -760,7 +767,8 @@ class ServerBase(ServerBaseClass):
                 err()
         if source.sound_source:
             source.stop_sending_sound()
-        source.start_sending_sound("mp3", volume=1.0, new_stream=new_stream, new_buffer=new_buffer, skip_client_codec_check=True)
+        source.start_sending_sound("mp3", volume=1.0, new_stream=new_stream,
+                                   new_buffer=new_buffer, skip_client_codec_check=True)
         self.mp3_stream_check_timer = self.timeout_add(1000*5, timeout_check)
 
     def cancel_mp3_stream_check_timer(self):
@@ -870,22 +878,27 @@ class ServerBase(ServerBaseClass):
 
     ######################################################################
     # packets:
+    def add_packet_handler(self, packet_type, handler, main_thread=True):
+        netlog("add_packet_handler%s", (packet_type, handler, main_thread))
+        if main_thread:
+            handlers = self._authenticated_ui_packet_handlers
+        else:
+            handlers = self._authenticated_packet_handlers
+        handlers[packet_type] = handler
+
     def init_packet_handlers(self):
         for c in SERVER_BASES:
             c.init_packet_handlers(self)
-        self._authenticated_packet_handlers.update({
-            "sharing-toggle":                       self._process_sharing_toggle,
-            "lock-toggle":                          self._process_lock_toggle,
-          })
-        self._authenticated_ui_packet_handlers.update({
-            #attributes / settings:
-            "server-settings":                      self._process_server_settings,
-            "set_deflate":                          self._process_set_deflate,
-            #requests:
-            "shutdown-server":                      self._process_shutdown_server,
-            "exit-server":                          self._process_exit_server,
-            "info-request":                         self._process_info_request,
-            })
+        #no need for main thread:
+        self.add_packet_handler("sharing-toggle",   self._process_sharing_toggle, False)
+        self.add_packet_handler("lock-toggle",      self._process_lock_toggle, False)
+        #attributes / settings:
+        self.add_packet_handler("server-settings",  self._process_server_settings)
+        self.add_packet_handler("set_deflate",      self._process_set_deflate)
+        #requests:
+        self.add_packet_handler("shutdown-server",  self._process_shutdown_server)
+        self.add_packet_handler("exit-server",      self._process_exit_server)
+        self.add_packet_handler("info-request",     self._process_info_request)
 
     def init_aliases(self):
         packet_types = list(self._default_packet_handlers.keys())

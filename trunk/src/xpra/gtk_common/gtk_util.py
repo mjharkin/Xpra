@@ -8,7 +8,10 @@ import os.path
 import array
 
 from xpra.util import iround, first_time
-from xpra.os_util import strtobytes, bytestostr, WIN32, OSX, PYTHON2
+from xpra.os_util import (
+    strtobytes, bytestostr,
+    WIN32, OSX, PYTHON2, POSIX, is_Wayland,
+    )
 from xpra.gtk_common.gobject_compat import (
     import_gtk, import_gdk, import_glib, import_pixbufloader,
     import_pango, import_cairo, import_gobject, import_pixbuf, is_gtk3,
@@ -61,7 +64,7 @@ def get_gtk_version_info():
             V("pixbuf",     Pixbuf,     "PIXBUF_VERSION")
             def MAJORMICROMINOR(name, module):
                 try:
-                    v = [getattr(module, x) for x in ["MAJOR_VERSION", "MICRO_VERSION", "MINOR_VERSION"]]
+                    v = tuple(getattr(module, x) for x in ("MAJOR_VERSION", "MICRO_VERSION", "MINOR_VERSION"))
                     av(name, ".".join(str(x) for x in v))
                 except:
                     pass
@@ -140,8 +143,29 @@ if is_gtk3():
         mask = gdk.WindowAttributesType(attributes_mask)
         return gdk.Window(parent, attributes, mask)
 
-    def make_temp_window(title):
-        return GDKWindow(title=title)
+    def make_temp_window(title, window_type=gdk.WindowType.TEMP):
+        return GDKWindow(title=title, window_type=window_type)
+
+    def enable_alpha(window):
+        screen = window.get_screen()
+        visual = screen.get_rgba_visual()
+        #we can't do alpha on win32 with plain GTK,
+        #(though we handle it in the opengl backend)
+        if WIN32:
+            l = log
+        else:
+            l = log.error
+        if visual is None or not screen.is_composited():
+            l("Error: cannot handle window transparency")
+            if visual is None:
+                l(" no RGBA visual")
+            else:
+                assert not screen.is_composited()
+                l(" screen is not composited")
+            return False
+        log("enable_alpha(%s) using rgba visual %s", window, visual)
+        window.set_visual(visual)
+        return True
 
 
     def get_pixbuf_from_data(rgb_data, has_alpha, w, h, rowstride):
@@ -174,20 +198,21 @@ if is_gtk3():
     def get_xwindow(w):
         return w.get_xid()
     def get_default_root_window():
-        return gdk.Screen.get_default().get_root_window()
+        screen = gdk.Screen.get_default()
+        if screen is None:
+            return None
+        return screen.get_root_window()
     def get_root_size():
-        if WIN32:
+        if WIN32 or (POSIX and not OSX):
             #FIXME: hopefully, we can remove this code once GTK3 on win32 is fixed?
             #we do it the hard way because the root window geometry is invalid on win32:
             #and even just querying it causes this warning:
             #"GetClientRect failed: Invalid window handle."
-            display = gdk.Display.get_default()
-            n = display.get_n_screens()
-            w, h = 0, 0
-            for i in range(n):
-                screen = display.get_screen(i)
-                w += screen.get_width()
-                h += screen.get_height()
+            screen = gdk.Screen.get_default()
+            if screen is None:
+                return 1920, 1024
+            w = screen.get_width()
+            h = screen.get_height()
         else:
             #the easy way for platforms that work out of the box:
             root = get_default_root_window()
@@ -231,6 +256,10 @@ if is_gtk3():
     WIN_POS_CENTER  = gtk.WindowPosition.CENTER
     RESPONSE_CANCEL = gtk.ResponseType.CANCEL
     RESPONSE_OK     = gtk.ResponseType.OK
+    RESPONSE_ACCEPT = gtk.ResponseType.ACCEPT
+    RESPONSE_CLOSE  = gtk.ResponseType.CLOSE
+    RESPONSE_DELETE_EVENT = gtk.ResponseType.DELETE_EVENT
+
 
     WINDOW_STATE_WITHDRAWN  = gdk.WindowState.WITHDRAWN
     WINDOW_STATE_ICONIFIED  = gdk.WindowState.ICONIFIED
@@ -453,8 +482,19 @@ else:
                   event_mask=0, wclass=gdk.INPUT_OUTPUT, title=None, x=-1, y=-1, **kwargs):
         return gdk.Window(parent, width, height, window_type, event_mask, wclass, title, x, y, **kwargs)
 
-    def make_temp_window(title):
-        return GDKWindow(title=title)
+    def make_temp_window(title, window_type=gdk.WINDOW_TEMP):
+        return GDKWindow(title=title, window_type=window_type)
+
+    def enable_alpha(window):
+        screen = window.get_screen()
+        rgba = screen.get_rgba_colormap()
+        log("enable_alpha(%s) rgba colormap=%s", window, rgba)
+        if rgba is None:
+            log.error("Error: cannot handle window transparency, no RGBA colormap", exc_info=True)
+            return False
+        log("enable_alpha(%s) using rgba colormap %s", window, rgba)
+        window.set_colormap(rgba)
+        return True
 
     def get_pixbuf_from_window(window, x, y, w, h):
         pixbuf = gdk.Pixbuf(gdk.COLORSPACE_RGB, False, 8, w, h)
@@ -513,6 +553,9 @@ else:
     WIN_POS_CENTER  = gtk.WIN_POS_CENTER
     RESPONSE_CANCEL = gtk.RESPONSE_CANCEL
     RESPONSE_OK     = gtk.RESPONSE_OK
+    RESPONSE_ACCEPT = gtk.RESPONSE_ACCEPT
+    RESPONSE_CLOSE  = gtk.RESPONSE_CLOSE
+    RESPONSE_DELETE_EVENT = gtk.RESPONSE_DELETE_EVENT
 
     WINDOW_STATE_WITHDRAWN  = gdk.WINDOW_STATE_WITHDRAWN
     WINDOW_STATE_ICONIFIED  = gdk.WINDOW_STATE_ICONIFIED
@@ -708,7 +751,7 @@ else:
             gobject.timeout_add(OUTSIDE_TRAY_TIMEOUT, check_menu_left, mouse_in_tray_menu_counter)
         mouse_in_tray_menu_counter = 0
         mouse_in_tray_menu = False
-        traylog("popup_menu_workaround: adding events callbacks")
+        #traylog("popup_menu_workaround: adding events callbacks")
         menu.connect("enter-notify-event", enter_menu)
         menu.connect("leave-notify-event", leave_menu)
 
@@ -874,6 +917,8 @@ def get_screen_sizes(xscale=1, yscale=1):
     def swork(*workarea):
         return xs(workarea[0]), ys(workarea[1]), xs(workarea[2]), ys(workarea[3])
     display = display_get_default()
+    if not display:
+        return ()
     n_screens = display.get_n_screens()
     get_n_monitors = getattr(display, "get_n_monitors", None)
     if get_n_monitors:

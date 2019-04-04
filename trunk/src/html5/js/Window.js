@@ -241,11 +241,10 @@ function XpraWindow(client, canvas_state, wid, x, y, w, h, metadata, override_re
 		});
 	}
 
-	// need to update the CSS geometry
-	this.ensure_visible();
+	// adapt to screen size if needed (ie: shadow / desktop windows):
+	this.screen_resized();
+	// set the CSS geometry
 	this.updateCSSGeometry();
-	//show("placing new window at "+this.x+","+this.y);
-
 	// now read all metadata
 	this.update_metadata(metadata);
 };
@@ -273,6 +272,11 @@ XpraWindow.prototype.set_spinner = function(state) {
 }
 
 XpraWindow.prototype.ensure_visible = function() {
+	if (this.client.server_is_desktop || this.client.server_is_shadow) {
+		//those windows should usually be centered on screen,
+		//moving them would mess that up
+		return;
+	}
 	var oldx = this.x;
 	var oldy = this.y;
 	// for now make sure we don't out of top left
@@ -294,6 +298,7 @@ XpraWindow.prototype.ensure_visible = function() {
 	else if (oldy >= wh - min_visible) {
 		this.y = Math.min(oldy, wh - min_visible);
 	}
+	this.debug("geometry", "ensure_visible() oldx=", oldx, "oldy=", oldy, "x=", this.x, "y=", this.y);
 	if((oldx != this.x) || (oldy != this.y)) {
 		this.updateCSSGeometry();
 		return false;
@@ -335,6 +340,7 @@ XpraWindow.prototype.updateCSSGeometry = function() {
 	this.outerY = this.y - this.topoffset;
 	jQuery(this.div).css('left', this.outerX);
 	jQuery(this.div).css('top', this.outerY);
+	this.debug("geometry", "updateCSSGeometry() left=", this.outerX, ", top=", this.outerY, ", width=", this.outerW, ", height=", this.outerH);
 }
 
 XpraWindow.prototype.updateFocus = function() {
@@ -472,7 +478,7 @@ XpraWindow.prototype.set_metadata_safe = function(metadata) {
 			opacity = 1.0;
 		}
 		else {
-			opacity = opacity / 0x100000000
+			opacity = opacity / 0x100000000;
 		}
 		jQuery(this.div).css('opacity', ''+opacity);
 	}
@@ -518,7 +524,6 @@ XpraWindow.prototype.set_metadata_safe = function(metadata) {
 };
 
 XpraWindow.prototype.apply_size_constraints = function() {
-	var size_constraints = this.metadata["size-constraints"];
 	if (!this.resizable) {
 		return;
 	}
@@ -534,6 +539,7 @@ XpraWindow.prototype.apply_size_constraints = function() {
 		hdec = jQuery('#head' + this.wid).outerHeight(true);
 	}
 	var min_size = null, max_size = null;
+	var size_constraints = this.metadata["size-constraints"];
 	if (size_constraints) {
 		min_size = size_constraints["minimum-size"];
 		max_size = size_constraints["maximum-size"];
@@ -594,6 +600,7 @@ XpraWindow.prototype.save_geometry = function() {
 			"y"	: this.y,
 			"w"	: this.w,
 			"h" : this.h};
+	this.debug("geometry", "save_geometry() saved-geometry=", this.saved_geometry);
 }
 /**
  * Restores the saved geometry (if it exists).
@@ -606,6 +613,7 @@ XpraWindow.prototype.restore_geometry = function() {
 	this.y = this.saved_geometry["y"];
 	this.w = this.saved_geometry["w"];
 	this.h = this.saved_geometry["h"];
+	this.debug("geometry", "restore_geometry() saved-geometry=", this.saved_geometry);
 	// delete saved geometry
 	this.saved_geometry = null;
 	// then call local resized callback
@@ -690,6 +698,7 @@ XpraWindow.prototype._set_decorated = function(decorated) {
 		jQuery(this.div).addClass("window");
 		if (this.d_header) {
 			this.topoffset = this.topoffset + parseInt(jQuery(this.d_header).css('height'), 10);
+			this.debug("geometry", "_set_decorated(", decorated, ") new topoffset=", self.topoffset);
 		}
 	}
 	else {
@@ -726,6 +735,7 @@ XpraWindow.prototype.fill_screen = function() {
 	this.y = 0 + this.topoffset;
 	this.w = (screen_size[0] - this.leftoffset) - this.rightoffset;
 	this.h = (screen_size[1] - this.topoffset) - this.bottomoffset;
+	this.debug("geometry", "fill_screen() ", this.x, this.y, this.w, this.h);
 };
 
 
@@ -740,6 +750,7 @@ XpraWindow.prototype.handle_resized = function(e) {
 	// this function is called on local resize only,
 	// remote resize will call this.resize()
 	// need to update the internal geometry
+	this.debug("geometry", "handle_resized(", e, ")");
 	if(e) {
 		this.x = this.x + Math.round(e.position.left - e.originalPosition.left);
 		this.y = this.y + Math.round(e.position.top - e.originalPosition.top);
@@ -757,11 +768,14 @@ XpraWindow.prototype.handle_resized = function(e) {
  * store internal geometry, external is always in CSS left and top
  */
 XpraWindow.prototype.handle_moved = function(e) {
+	var left = Math.round(e.position.left),
+		top = Math.round(e.position.top);
+	this.debug("geometry", "handle_moved(", e, ") left=", left, ", top=", top);
 	// add on padding to the event position so that
 	// it reflects the internal geometry of the canvas
 	//this.log("handle moved: position=", e.position.left, e.position.top);
-	this.x = Math.round(e.position.left) + this.leftoffset;
-	this.y = Math.round(e.position.top) + this.topoffset;
+	this.x = left + this.leftoffset;
+	this.y = top + this.topoffset;
 	// make sure we are visible after move
 	this.ensure_visible();
 	// tell remote we have moved window
@@ -773,12 +787,15 @@ XpraWindow.prototype.handle_moved = function(e) {
  * if it is fullscreen or maximized.
  */
 XpraWindow.prototype.screen_resized = function() {
-	this.log("window: screen resized");
+	this.debug("geometry", "screen_resized() server_is_desktop=", this.client.server_is_desktop, ", server_is_shadow=", this.client.server_is_shadow);
 	if (this.client.server_is_desktop) {
 		this.match_screen_size();
 	}
 	if (this.client.server_is_shadow) {
-		if (Object.keys(this.client.id_to_window).length==1) {
+		//note: when this window is created,
+		// it may not have been added to the client's list yet
+		var ids = Object.keys(this.client.id_to_window);
+		if (ids.length==0 || ids[0]==this.wid) {
 			//single window, recenter it:
 			this.recenter();
 		}
@@ -793,18 +810,21 @@ XpraWindow.prototype.screen_resized = function() {
 XpraWindow.prototype.recenter = function() {
 	var x = this.x,
 		y = this.y;
-	if (this.x<=this.client.desktop_width) {
-		x = Math.round((this.client.desktop_width-this.w)/2);
-	}
-	if (this.w<=this.client.desktop_height) {
-		y = Math.round((this.client.desktop_height-this.h)/2);
-	}
+	this.debug("geometry", "recenter() x=", x, ", y=", y, ", desktop size: ", this.client.desktop_width, this.client.desktop_height);
+	x = Math.round((this.client.desktop_width-this.w)/2);
+	y = Math.round((this.client.desktop_height-this.h)/2);
 	if (this.x!=x || this.y!=y) {
-		this.log("window re-centered to:", x, y);
+		this.debug("geometry", "window re-centered to:", x, y);
 		this.x = x;
 		this.y = y;
 		this.updateCSSGeometry();
 		this.geometry_cb(this);
+	}
+	else {
+		this.debug("geometry", "recenter() unchanged at ", x, y);
+	}
+	if (this.x<0 || this.y<0) {
+		this.warn("window does not fit in canvas, offsets: ", x, y);
 	}
 }
 
@@ -840,7 +860,7 @@ XpraWindow.prototype.match_screen_size = function() {
 			}
 		}
 		if (neww==0 && newh==0) {
-			//not found, try to fine the smallest one:
+			//not found, try to find the smallest one:
 			best = 0;
 			for (var i = 0; i < screen_sizes.length; i++) {
 				screen_size = screen_sizes[i];
@@ -855,8 +875,7 @@ XpraWindow.prototype.match_screen_size = function() {
 		}
 		this.log("best screen size:", neww, newh);
 	}
-	this.resize(neww, newh);
-	this.handle_resized();
+	this.recenter();
 };
 
 
@@ -865,6 +884,7 @@ XpraWindow.prototype.match_screen_size = function() {
  */
 
 XpraWindow.prototype.move_resize = function(x, y, w, h) {
+	this.debug("geometry", "move_resize(", x, y, w, h, ")");
 	// only do it if actually changed!
 	if(!(this.w == w) || !(this.h == h) || !(this.x == x) || !(this.y == y)) {
 		if(!(this.h==(h-30))){
@@ -883,10 +903,12 @@ XpraWindow.prototype.move_resize = function(x, y, w, h) {
 };
 
 XpraWindow.prototype.move = function(x, y) {
+	this.debug("geometry", "move(", x, y, ")");
 	this.move_resize(x, y, this.w, this.h);
 };
 
 XpraWindow.prototype.resize = function(w, h) {
+	this.debug("geometry", "resize(", w, h, ")");
 	this.move_resize(this.x, this.y, w, h);
 };
 

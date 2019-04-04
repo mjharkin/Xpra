@@ -135,6 +135,9 @@ Recommends:
         ,ssh-askpass
 #for using SSH passwords from the GUI launcher:
         ,sshpass
+# for publishing servers via mdns:
+        ,python-avahi
+        ,python-netifaces
 #for html5 support:
         ,websockify
         ,libjs-jquery
@@ -152,9 +155,6 @@ Suggests: openssh-server
         ,python-pyinotify
         ,python-opencv
         ,v4l2loopback-dkms
-# for publishing servers via mdns:
-        ,python-avahi
-        ,python-netifaces
 # only useful when connecting using a JSON / YAML only client:
         ,python-yaml
 #nvenc support requires pycuda (and its huge list of dependencies!)

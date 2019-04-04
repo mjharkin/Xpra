@@ -182,14 +182,6 @@ if POSIX:
 else:
     paint_context_manager = DummyContextManager()
 
-def set_texture_level(target=GL_TEXTURE_RECTANGLE_ARB):
-    #only really needed with some drivers (NVidia)
-    #may cause errors with older drivers:
-    try:
-        glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-    except:
-        pass
-
 
 # Texture number assignment
 # The first four are used to update the FBO,
@@ -245,9 +237,9 @@ class GLWindowBackingBase(WindowBackingBase):
         self.tmp_fbo = None
         self.pending_fbo_paint = []
         self.last_flush = monotonic_time()
+        self.last_present_fbo_error = None
 
         WindowBackingBase.__init__(self, wid, window_alpha and self.HAS_ALPHA)
-
         self.init_gl_config(window_alpha)
         self.init_backing()
         self.bit_depth = self.get_bit_depth(pixel_depth)
@@ -407,6 +399,7 @@ class GLWindowBackingBase(WindowBackingBase):
 
         if not self.gl_setup:
             mt = get_max_texture_size()
+            rw, rh = self.render_size
             w, h = self.size
             if w>mt or h>mt:
                 raise Exception("invalid texture dimensions %ix%i, maximum is %i" % (w, h, mt))
@@ -445,15 +438,18 @@ class GLWindowBackingBase(WindowBackingBase):
             if self.textures is None:
                 self.gl_init_textures()
 
-            #upload pixel buffer full of zeroes:
-            empty_buf = b"\0"*(w*h*4)
-            pixel_data = self.pixels_for_upload(empty_buf)[1]
+            mag_filter = GL_NEAREST
+            if float(rw)/w!=rw//w or float(rh)/h!=rh//h:
+                #non integer scaling, use linear magnification filter:
+                mag_filter = GL_LINEAR
 
+            log("initializing FBOs")
             # Define empty tmp FBO
             target = GL_TEXTURE_RECTANGLE_ARB
             glBindTexture(target, self.textures[TEX_TMP_FBO])
-            set_texture_level(target)
-            glTexImage2D(target, 0, self.internal_format, w, h, 0, self.texture_pixel_format, GL_UNSIGNED_BYTE, pixel_data)
+            glTexParameteri(target, GL_TEXTURE_MAG_FILTER, mag_filter)
+            glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+            glTexImage2D(target, 0, self.internal_format, w, h, 0, self.texture_pixel_format, GL_UNSIGNED_BYTE, None)
             glBindFramebuffer(GL_FRAMEBUFFER, self.tmp_fbo)
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, target, self.textures[TEX_TMP_FBO], 0)
             glClear(GL_COLOR_BUFFER_BIT)
@@ -461,8 +457,9 @@ class GLWindowBackingBase(WindowBackingBase):
             # Define empty FBO texture and set rendering to FBO
             glBindTexture(target, self.textures[TEX_FBO])
             # nvidia needs this even though we don't use mipmaps (repeated through this file):
-            set_texture_level(target)
-            glTexImage2D(target, 0, self.internal_format, w, h, 0, self.texture_pixel_format, GL_UNSIGNED_BYTE, pixel_data)
+            glTexParameteri(target, GL_TEXTURE_MAG_FILTER, mag_filter)
+            glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+            glTexImage2D(target, 0, self.internal_format, w, h, 0, self.texture_pixel_format, GL_UNSIGNED_BYTE, None)
             glBindFramebuffer(GL_FRAMEBUFFER, self.offscreen_fbo)
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, target, self.textures[TEX_FBO], 0)
             glClear(GL_COLOR_BUFFER_BIT)
@@ -476,6 +473,7 @@ class GLWindowBackingBase(WindowBackingBase):
             # Bind program 0 for YUV painting by default
             glBindProgramARB(GL_FRAGMENT_PROGRAM_ARB, self.shaders[YUV2RGB_SHADER])
             self.gl_setup = True
+            log("gl_init() done")
 
     def close(self):
         #This seems to cause problems, so we rely
@@ -603,6 +601,7 @@ class GLWindowBackingBase(WindowBackingBase):
                 log.error("Error presenting FBO:")
                 log.error(" %s", e)
                 log("Error presenting FBO", exc_info=True)
+                self.last_present_fbo_error = str(e)
 
     def do_present_fbo(self):
         bw, bh = self.size
@@ -853,7 +852,6 @@ class GLWindowBackingBase(WindowBackingBase):
         self.set_alignment(width, width*4, rgb_format)
         glTexParameteri(target, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
         glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
-        set_texture_level(target)
         glTexParameteri(target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER)
         glTexParameteri(target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER)
         glTexImage2D(target, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixel_data)
@@ -906,7 +904,7 @@ class GLWindowBackingBase(WindowBackingBase):
         # Compute alignment and row length
         row_length = 0
         alignment = 1
-        for a in [2, 4, 8]:
+        for a in (2, 4, 8):
             # Check if we are a-aligned - ! (var & 0x1) means 2-aligned or better, 0x3 - 4-aligned and so on
             if (rowstride & a-1) == 0:
                 alignment = a
@@ -977,7 +975,6 @@ class GLWindowBackingBase(WindowBackingBase):
                 self.set_alignment(width, rowstride, rgb_format)
                 glTexParameteri(target, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
                 glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
-                set_texture_level(target)
                 glTexParameteri(target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER)
                 glTexParameteri(target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER)
                 glTexImage2D(target, 0, self.internal_format, width, height, 0, pformat, ptype, img_data)
@@ -1070,9 +1067,6 @@ class GLWindowBackingBase(WindowBackingBase):
             self.texture_size = (width, height)
             self.gl_marker("Creating new planar textures, pixel format %s", pixel_format)
             # Create textures of the same size as the window's
-            empty_buf = b"\0"*(width*height)
-            pixel_data = self.pixels_for_upload(empty_buf)[1]
-
             for texture, index in ((GL_TEXTURE0, TEX_Y), (GL_TEXTURE1, TEX_U), (GL_TEXTURE2, TEX_V)):
                 (div_w, div_h) = divs[index]
                 glActiveTexture(texture)
@@ -1083,8 +1077,7 @@ class GLWindowBackingBase(WindowBackingBase):
                     mag_filter = GL_LINEAR
                 glTexParameteri(target, GL_TEXTURE_MAG_FILTER, mag_filter)
                 glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
-                set_texture_level()
-                glTexImage2D(target, 0, GL_LUMINANCE, width//div_w, height//div_h, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, pixel_data)
+                glTexImage2D(target, 0, GL_LUMINANCE, width//div_w, height//div_h, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, None)
                 #glBindTexture(target, 0)        #redundant: we rebind below:
 
         self.gl_marker("updating planar textures: %sx%s %s", width, height, pixel_format)

@@ -178,9 +178,13 @@ Requires:			xpra-common = %{version}-%{release}
 Requires:			python2-lz4
 Requires:			python2-rencode
 Requires:			python2-pillow
+%if 0%{?el7}
+Requires:			libvpx-xpra
+%else
 Requires:			libvpx
 Conflicts:			libvpx-xpra
 Obsoletes:          libvpx-xpra
+%endif
 Requires:			x264-xpra
 Requires:			ffmpeg-xpra
 Requires:			turbojpeg
@@ -328,9 +332,13 @@ Requires:			python3-pillow
 Requires:			python3-rencode
 Requires:			python3-numpy
 Requires:			libyuv
+%if 0%{?el7}
+Requires:			libvpx-xpra
+%else
 Requires:			libvpx
 Conflicts:			libvpx-xpra
 Obsoletes:          libvpx-xpra
+%endif
 Requires:			x264-xpra
 Requires:			ffmpeg-xpra
 Requires:			python3-cryptography
@@ -400,6 +408,10 @@ Recommends:			python3-cups
 Recommends:			python3-pyopengl
 Recommends:			python3-pyu2f
 Recommends:			python3-xdg
+%if 0%{?fedora}
+#without this, the system tray is unusable!
+Recommends:			gnome-shell-extension-topicons-plus
+%endif
 Recommends:			libappindicator-gtk3
 Suggests:			sshpass
 %if 0%{?run_tests}
@@ -571,8 +583,7 @@ rm -rf $RPM_BUILD_ROOT
 %config %{_sysconfdir}/xpra/conf.d/40_client.conf
 %config %{_sysconfdir}/xpra/conf.d/42_client_keyboard.conf
 %{_datadir}/applications/xpra-launcher.desktop
-%{_datadir}/applications/xpra-browser.desktop
-%{_datadir}/applications/xpra-shadow.desktop
+%{_datadir}/applications/xpra-gui.desktop
 %{_datadir}/applications/xpra.desktop
 %{_datadir}/mime/packages/application-x-xpraconfig.xml
 
@@ -585,6 +596,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_prefix}/lib/udev/rules.d/71-xpra-virtual-pointer.rules
 %{_datadir}/xpra/content-type
 %{_datadir}/xpra/content-categories
+%{_datadir}/applications/xpra-shadow.desktop
 %{_libexecdir}/xpra/xdg-open
 %{_libexecdir}/xpra/gnome-open
 %{_libexecdir}/xpra/gvfs-open
@@ -666,7 +678,8 @@ rm -rf $RPM_BUILD_ROOT
 
 %check
 /usr/bin/desktop-file-validate %{buildroot}%{_datadir}/applications/xpra-launcher.desktop
-/usr/bin/desktop-file-validate %{buildroot}%{_datadir}/applications/xpra-browser.desktop
+/usr/bin/desktop-file-validate %{buildroot}%{_datadir}/applications/xpra-gui.desktop
+/usr/bin/desktop-file-validate %{buildroot}%{_datadir}/applications/xpra-shadow.desktop
 /usr/bin/desktop-file-validate %{buildroot}%{_datadir}/applications/xpra.desktop
 
 %if 0%{?debug_tests}
@@ -809,8 +822,56 @@ fi
 
 
 %changelog
-* Sun Oct 14 2018 Antoine Martin <antoine@xpra.org> 2.5-1
+* Tue Mar 19 2019 Antoine Martin <antoine@xpra.org> 3.0-1
 - TODO
+
+* Tue Mar 19 2019 Antoine Martin <antoine@xpra.org> 2.5-1
+- Python 3 port mostly complete, including packaging for Debian
+- pixel compression and bandwidth management:
+- better recovery from network congestion
+- distinguish refresh from normal updates
+- better tuning for mmap connections
+- heuristics improvements
+- use video encoders more aggressively
+- prevent too many delayed frames with x264
+- better video region detection with opengl content
+- better automatic tuning for client applications
+- based on application categories
+- application supplied hints
+- application window encoding hints
+- using environment variables and disabling video
+- HTML5 client improvements
+- Client improvements:
+- make it easier to start new commands, provide start menu
+- probe OpenGL in a subprocess to detect and workaround driver crashes
+- use appindicator if available
+- Packaging:
+- merge xpra and its dependencies into the ​MSYS2 repository
+- ship fewer files in MS Windows installers
+- partial support for parallel installation of 32-bit and 64-bit version on MS Windows
+- MacOS library updates
+- CentOS 7: libyuv and turbojpeg
+- Windows Services for Linux (WSL) support
+- Fedora 30 and Ubuntu Disco support
+- Ubuntu HWE compatibility (manual steps required due to upstream bug)
+- Server improvements:
+- start command on last client exit
+- honour minimum window size
+- Python 3
+- upgrade-desktop subcommand
+- Network layer:
+- less copying
+- use our own websocket layer
+- make it easier to install mdns on MS Windows
+- make mmap group configurable
+- TCP CORK support on Linux
+- SSH transport:
+- support .ssh/config with paramiko backend
+- connecting via ssh proxy hosts
+- SSHFP with paramiko:
+- clipboard: restrict clipboard data transfers size
+- audio: support wasapi on MS Windows
+- code cleanups, etc
 
 * Sat Oct 13 2018 Antoine Martin <antoine@xpra.org> 2.4-1
 - SSH client integration (paramiko)

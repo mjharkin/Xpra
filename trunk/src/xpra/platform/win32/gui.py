@@ -35,8 +35,8 @@ from xpra.platform.win32.common import (
     GetMonitorInfo,
     user32,
     )
-from xpra.util import AdHocStruct, csv, envint, envbool
-from xpra.os_util import PYTHON2, PYTHON3, get_util_logger
+from xpra.util import AdHocStruct, csv, envint, envbool, typedict
+from xpra.os_util import PYTHON2, PYTHON3, get_util_logger, strtobytes
 
 from xpra.log import Logger
 
@@ -147,6 +147,24 @@ def init_appid():
         log.warn("Warning: failed to set process app ID")
 
 
+def use_stdin():
+    if os.environ.get("MSYSCON") or os.environ.get("CYGWIN"):
+        return False
+    stdin = sys.stdin
+    if not stdin or not stdin.isatty():
+        return False
+    try:
+        from xpra.platform.win32.common import GetStdHandle
+        from xpra.platform.win32 import STD_INPUT_HANDLE, not_a_console, get_console_position 
+        hstdin = GetStdHandle(STD_INPUT_HANDLE)
+        if not_a_console(hstdin):
+            return False
+        return get_console_position(hstdin)!=(-1, -1)
+    except:
+        pass
+    return True
+
+
 def get_native_notifier_classes():
     try:
         from xpra.platform.win32.win32_notifier import Win32_Notifier
@@ -228,9 +246,8 @@ def get_window_handle(window):
     if PYTHON2:
         return gdk_window.handle
     gpointer =  PyCapsule_GetPointer(gdk_window.__gpointer__, None)
-    log("gpointer=%#x", gpointer)
     hwnd = gdkdll.gdk_win32_window_get_handle(gpointer)
-    log("hwnd=%#x", hwnd)
+    #log("get_window_handle(%s) gpointer=%#x, hwnd=%#x", gpointer, hwnd)
     return hwnd
 
 def get_desktop_name():
@@ -294,7 +311,7 @@ def win32_propsys_set_group_leader(self, leader):
     if not lhandle:
         return
     try:
-        log("win32 hooks: get_window_handle(%s)=%s, set_group(%#x)", self, hwnd, lhandle)
+        log("win32 hooks: get_window_handle(%s)=%#x, set_group(%#x)", self, hwnd, lhandle)
         set_window_group(hwnd, lhandle)
     except Exception as e:
         log("set_window_group error", exc_info=True)
@@ -398,10 +415,12 @@ def fixup_window_style(self, *_args):
                     style &= ~win32con.WS_MAXIMIZEBOX
                     style &= ~win32con.WS_SIZEBOX
         if style!=cur_style:
-            log("fixup_window_style() using %s (%#x) instead of %s (%#x) on window %#x with metadata=%s", style_str(style), style, style_str(cur_style), cur_style, hwnd, metadata)
+            log("fixup_window_style() using %s (%#x) instead of %s (%#x) on window %#x with metadata=%s",
+                style_str(style), style, style_str(cur_style), cur_style, hwnd, metadata)
             SetWindowLongW(hwnd, win32con.GWL_STYLE, style)
         else:
-            log("fixup_window_style() unchanged style %s (%#x) on window %#x", style_str(style), style, hwnd)
+            log("fixup_window_style() unchanged style %s (%#x) on window %#x",
+                style_str(style), style, hwnd)
         ws_visible = bool(style & win32con.WS_VISIBLE)
         client = self._client
         cur_ws_visible = getattr(self, "_ws_visible", True)
@@ -441,16 +460,17 @@ def apply_maxsize_hints(window, hints):
     handle = get_window_handle(window)
     if not handle:
         return
-    log("apply_maxsize_hints(%s, %s) handle=%s", window, hints, handle)
+    log("apply_maxsize_hints(%s, %s) handle=%#x", window, hints, handle)
     if not window.get_decorated():
         workarea = get_monitor_workarea_for_window(handle)
         log("using workarea as window size limit for undecorated window: %s", workarea)
         if workarea:
             workw, workh = workarea[2:4]
-    minw = hints.get("min_width", 0)
-    minh = hints.get("min_height", 0)
-    maxw = hints.get("max_width", 0)
-    maxh = hints.get("max_height", 0)
+    thints = typedict(hints)
+    minw = thints.intget("min_width", 0)
+    minh = thints.intget("min_height", 0)
+    maxw = thints.intget("max_width", 0)
+    maxh = thints.intget("max_height", 0)
     if workw>0 and workh>0:
         #clamp to workspace for undecorated windows:
         if maxw>0 and maxh>0:
@@ -475,8 +495,14 @@ def apply_maxsize_hints(window, hints):
     #remove them so GTK doesn't try to set attributes,
     #which would remove the maximize button:
     for x in ("min_width", "min_height", "max_width", "max_height"):
-        if x in hints:
+        try:
             del hints[x]
+        except KeyError:
+            pass
+        try:
+            del hints[strtobytes(x)]
+        except KeyError:
+            pass
     window_state_updated(window)
 
 def apply_geometry_hints(self, hints):
@@ -1017,7 +1043,7 @@ class ClientExtras(object):
                     if keyname.startswith("Super"):
                         keycode = 0
                         #find the modifier keycode: (try the exact key we hit first)
-                        for x in [keyname, "Super_L", "Super_R"]:
+                        for x in (keyname, "Super_L", "Super_R"):
                             keycodes = modifier_keycodes.get(x, [])
                             for k in keycodes:
                                 #only interested in numeric keycodes:

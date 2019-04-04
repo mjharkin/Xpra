@@ -33,7 +33,9 @@ if sys.version<'2.7':
 if sys.version[0]=='3' and sys.version<'3.4':
     raise Exception("xpra no longer supports Python 3 versions older than 3.4")
 #we don't support versions of Python without the new ssl code:
-assert ssl.SSLContext, "xpra requires a Python version with ssl.SSLContext support"
+if not hasattr(ssl, "SSLContext"):
+    print("Warning: xpra requires a Python version with ssl.SSLContext support")
+    print(" SSL support will not be available!")
 
 print(" ".join(sys.argv))
 
@@ -170,8 +172,8 @@ vsock_ENABLED           = LINUX and os.path.exists("/usr/include/linux/vm_socket
 bencode_ENABLED         = DEFAULT
 cython_bencode_ENABLED  = DEFAULT
 clipboard_ENABLED       = DEFAULT
-Xdummy_ENABLED          = None          #None means auto-detect
-Xdummy_wrapper_ENABLED  = None          #None means auto-detect
+Xdummy_ENABLED          = None if POSIX else False  #None means auto-detect
+Xdummy_wrapper_ENABLED  = None if POSIX else False  #None means auto-detect
 if WIN32 or OSX:
     Xdummy_ENABLED = False
 sound_ENABLED           = DEFAULT
@@ -206,7 +208,7 @@ csc_libyuv_ENABLED      = DEFAULT and pkg_config_ok("--exists", "libyuv")
 example_ENABLED         = DEFAULT
 
 #Cython / gcc / packaging build options:
-annotate_ENABLED        = True
+annotate_ENABLED        = DEFAULT
 warn_ENABLED            = True
 strict_ENABLED          = True
 PIC_ENABLED             = not WIN32     #ming32 moans that it is always enabled already
@@ -214,7 +216,7 @@ debug_ENABLED           = False
 verbose_ENABLED         = False
 bundle_tests_ENABLED    = False
 tests_ENABLED           = False
-rebuild_ENABLED         = True
+rebuild_ENABLED         = "--skip-build" not in sys.argv
 
 #allow some of these flags to be modified on the command line:
 SWITCHES = [
@@ -240,9 +242,6 @@ SWITCHES = [
     "debug", "PIC",
     "Xdummy", "Xdummy_wrapper", "verbose", "tests", "bundle_tests",
     ]
-if WIN32:
-    SWITCHES.append("zip")
-    zip_ENABLED = True
 HELP = "-h" in sys.argv or "--help" in sys.argv
 if HELP:
     setup()
@@ -509,7 +508,7 @@ def cython_version_check(min_version):
                  "Please upgrade to Cython %s or better"
                  % (cython_version, min_version))
 
-def cython_add(extension, min_version="0.23"):
+def cython_add(extension, min_version="0.20"):
     #gentoo does weird things, calls --no-compile with build *and* install
     #then expects to find the cython modules!? ie:
     #python2.7 setup.py build -b build-2.7 install --no-compile \
@@ -740,7 +739,7 @@ def exec_pkgconfig(*pkgs_options, **ekw):
                 # error: function declaration isn't a prototype [-Werror=strict-prototypes]
                 eifd.append("-Wno-error=strict-prototypes")
                 #the cython version shipped with Xenial emits warnings:
-                if getUbuntuVersion()<=(16,4):
+                if (14,4)<getUbuntuVersion()<=(16,4):
                     eifd.append("-Wno-error=shift-count-overflow")
                     eifd.append("-Wno-error=sign-compare")
             if NETBSD:
@@ -849,7 +848,7 @@ def build_xpra_conf(install_dir):
         return "yes" if int(b) else "no"
     start_env = "\n".join("start-env = %s" % x for x in DEFAULT_ENV)
     conf_dir = get_conf_dir(install_dir)
-    from xpra.platform.features import DEFAULT_SSH_COMMAND, DEFAULT_PULSEAUDIO_CONFIGURE_COMMANDS
+    from xpra.platform.features import DEFAULT_PULSEAUDIO_CONFIGURE_COMMANDS
     from xpra.platform.paths import get_socket_dirs
     from xpra.scripts.config import (
         get_default_key_shortcuts, get_default_systemd_run, get_default_pulseaudio_command,
@@ -889,7 +888,7 @@ def build_xpra_conf(install_dir):
     mdns = mdns_ENABLED and (OSX or WIN32 or (not is_RH() and dbus_ENABLED))
     SUBS = {
             'xvfb_command'          : pretty_cmd(xvfb_command),
-            'ssh_command'           : DEFAULT_SSH_COMMAND,
+            'ssh_command'           : "auto",
             'key_shortcuts'         : "".join(("key-shortcut = %s\n" % x) for x in get_default_key_shortcuts()),
             'remote_logging'        : "both",
             'start_env'             : start_env,
@@ -1466,8 +1465,6 @@ if WIN32:
     if data_ENABLED:
         add_data_files(share_xpra,              ["win32/website.url"])
         add_data_files('%s/icons' % share_xpra,  glob.glob('icons\\*.ico'))
-
-    if webcam_ENABLED:
         add_data_files(share_xpra,              ["win32\\DirectShow.tlb"])
 
     remove_packages(*external_excludes)
@@ -2278,11 +2275,11 @@ if pillow_ENABLED:
 toggle_packages(webp_ENABLED, "xpra.codecs.webp")
 if webp_ENABLED:
     webp_pkgconfig = pkgconfig("libwebp")
-    cython_add(Extension("xpra.codecs.webp.encode",
-                    ["xpra/codecs/webp/encode.pyx"],
+    cython_add(Extension("xpra.codecs.webp.encoder",
+                    ["xpra/codecs/webp/encoder.pyx"],
                     **webp_pkgconfig))
-    cython_add(Extension("xpra.codecs.webp.decode",
-                ["xpra/codecs/webp/decode.pyx"],
+    cython_add(Extension("xpra.codecs.webp.decoder",
+                ["xpra/codecs/webp/decoder.pyx"],
                 **webp_pkgconfig))
 
 jpeg = jpeg_decoder_ENABLED or jpeg_encoder_ENABLED
@@ -2307,6 +2304,8 @@ libav_common = dec_avcodec2_ENABLED or csc_swscale_ENABLED
 toggle_packages(libav_common, "xpra.codecs.libav_common")
 if libav_common:
     avutil_pkgconfig = pkgconfig("libavutil")
+    if get_gcc_version()>=[9, 0]:
+        add_to_keywords(avutil_pkgconfig, 'extra_compile_args', "-Wno-error=attributes")
     cython_add(Extension("xpra.codecs.libav_common.av_log",
                 ["xpra/codecs/libav_common/av_log.pyx"],
                 **avutil_pkgconfig))
@@ -2315,6 +2314,8 @@ if libav_common:
 toggle_packages(dec_avcodec2_ENABLED, "xpra.codecs.dec_avcodec2")
 if dec_avcodec2_ENABLED:
     avcodec2_pkgconfig = pkgconfig("libavcodec", "libavutil", "libavformat")
+    if get_gcc_version()>=[9, 0]:
+        add_to_keywords(avcodec2_pkgconfig, 'extra_compile_args', "-Wno-error=attributes")
     cython_add(Extension("xpra.codecs.dec_avcodec2.decoder",
                 ["xpra/codecs/dec_avcodec2/decoder.pyx", "xpra/codecs/dec_avcodec2/register_compat.c"],
                 **avcodec2_pkgconfig))
@@ -2331,6 +2332,8 @@ if csc_libyuv_ENABLED:
 toggle_packages(csc_swscale_ENABLED, "xpra.codecs.csc_swscale")
 if csc_swscale_ENABLED:
     swscale_pkgconfig = pkgconfig("libswscale", "libavutil")
+    if get_gcc_version()>=[9, 0]:
+        add_to_keywords(swscale_pkgconfig, 'extra_compile_args', "-Wno-error=attributes")
     cython_add(Extension("xpra.codecs.csc_swscale.colorspace_converter",
                 ["xpra/codecs/csc_swscale/colorspace_converter.pyx"],
                 **swscale_pkgconfig))
@@ -2349,6 +2352,8 @@ if vpx_ENABLED:
 toggle_packages(enc_ffmpeg_ENABLED, "xpra.codecs.enc_ffmpeg")
 if enc_ffmpeg_ENABLED:
     ffmpeg_pkgconfig = pkgconfig("libavcodec", "libavformat", "libavutil")
+    if get_gcc_version()>=[9, 0]:
+        add_to_keywords(ffmpeg_pkgconfig, 'extra_compile_args', "-Wno-error=attributes")
     cython_add(Extension("xpra.codecs.enc_ffmpeg.encoder",
                 ["xpra/codecs/enc_ffmpeg/encoder.pyx"],
                 **ffmpeg_pkgconfig))

@@ -109,6 +109,7 @@ def dialog_confirm(title, prompt, qinfo="", icon="", buttons=(("OK", 1),)):
     for label, code in buttons:
         cmd.append(nonl(label))
         cmd.append(str(code))
+    log("dialog_confirm%s", (title, prompt, qinfo, icon, buttons))
     return exec_dialog_subprocess(cmd)
 
 def confirm_key(info=()):
@@ -124,6 +125,7 @@ def confirm_key(info=()):
         r = code==200
         log.info("host key %sconfirmed", ["not ", ""][r])
         return r
+    log("confirm_key(%s) will use stdin prompt", nonl(info))
     prompt = "Are you sure you want to continue connecting (yes/NO)? "
     sys.stderr.write(os.linesep.join(info)+os.linesep+prompt)
     v = sys.stdin.readline().rstrip(os.linesep)
@@ -371,13 +373,18 @@ def do_ssh_paramiko_connect_to(transport, host, username, password, host_config=
                         log("verifyhostkeydns failed", exc_info=True)
                         log.warn("Warning: cannot check SSHFP DNS records")
                         log.warn(" %s", e)
-            log.info("dnscheck=%s", dnscheck)
+            log("dnscheck=%s", dnscheck)
             def adddnscheckinfo(q):
                 if dnscheck is not True:
-                    q += [
-                        "SSHFP validation failed:",
-                        dnscheck
-                        ]
+                    if dnscheck:
+                        q += [
+                            "SSHFP validation failed:",
+                            dnscheck
+                            ]
+                    else:
+                        q += [
+                            "SSHFP validation failed"
+                            ]
             if dnscheck is True:
                 #DNSSEC provided a matching record
                 log.info("found a valid SSHFP record for host %s", host)
@@ -516,7 +523,8 @@ keymd5(host_key),
             transport.auth_password(username, password)
         except SSHException as e:
             log("auth_password(..)", exc_info=True)
-            log.info("SSH password authentication failed: %s", e)
+            log.info("SSH password authentication failed:")
+            log.info(" %s", getattr(e, "message", e))
 
     def auth_interactive():
         log("trying interactive authentication")
@@ -537,7 +545,8 @@ keymd5(host_key),
             transport.auth_interactive(username, myiauthhandler.handlestuff, "")
         except SSHException as e:
             log("auth_interactive(..)", exc_info=True)
-            log.info("SSH password authentication failed: %s", e)
+            log.info("SSH password authentication failed:")
+            log.info(" %s", getattr(e, "message", e))
 
     banner = transport.get_banner()
     if banner:

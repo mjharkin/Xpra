@@ -1,28 +1,30 @@
 # This file is part of Xpra.
-# Copyright (C) 2012-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2012-2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
+from xpra.util import envint
 from xpra.gtk_common.gobject_util import one_arg_signal
 from xpra.gtk_common.error import xswallow, xsync
 from xpra.x11.gtk_x11.prop import prop_set, prop_get
-from xpra.gtk_common.gobject_compat import import_gdk, import_gobject, is_gtk3
+from xpra.gtk_common.gobject_compat import import_gdk, import_gobject, import_glib, is_gtk3
 from xpra.gtk_common.gtk_util import (
     display_get_default, get_default_root_window, get_xwindow, GDKWindow,
     STRUCTURE_MASK, EXPOSURE_MASK, PROPERTY_CHANGE_MASK,
     )
 from xpra.x11.bindings.window_bindings import constants, X11WindowBindings #@UnresolvedImport
-X11Window = X11WindowBindings()
-
 from xpra.x11.gtk_x11.gdk_bindings import (
     add_event_receiver,                          #@UnresolvedImport
     remove_event_receiver,                       #@UnresolvedImport
     )
+from xpra.log import Logger
+
+X11Window = X11WindowBindings()
 
 gdk = import_gdk()
 gobject = import_gobject()
+glib = import_glib()
 
-from xpra.log import Logger
 log = Logger("x11", "tray")
 
 
@@ -63,11 +65,18 @@ TRAY_ORIENTATION_VERT   = 1
 
 XPRA_TRAY_WINDOW_PROPERTY = "_xpra_tray_window_"
 
+SYSTEM_TRAY_REQUEST_DOCK = 0
+SYSTEM_TRAY_BEGIN_MESSAGE = 1
+SYSTEM_TRAY_CANCEL_MESSAGE = 2
+
 #TRANSPARENCY = False
 TRANSPARENCY = True
 
 #Java can send this message to the tray (no idea why):
 IGNORED_MESSAGE_TYPES = ("_GTK_LOAD_ICONTHEMES", )
+
+
+MAX_TRAY_SIZE = envint("XPRA_MAX_TRAY_SIZE", 64)
 
 
 def get_tray_window(tray_window):
@@ -115,7 +124,8 @@ class SystemTray(gobject.GObject):
             owner = X11Window.XGetSelectionOwner(SELECTION)
             if owner==get_xwindow(self.tray_window):
                 X11Window.XSetSelectionOwner(0, SELECTION)
-                log("SystemTray.cleanup() reset %s selection owner to %#x", SELECTION, X11Window.XGetSelectionOwner(SELECTION))
+                log("SystemTray.cleanup() reset %s selection owner to %#x",
+                    SELECTION, X11Window.XGetSelectionOwner(SELECTION))
             else:
                 log.warn("Warning: we were no longer the tray selection owner")
         remove_event_receiver(self.tray_window, self)
@@ -167,7 +177,8 @@ class SystemTray(gobject.GObject):
         try:
             with xsync:
                 setsel = X11Window.XSetSelectionOwner(xtray, SELECTION)
-                log("setup tray: set selection owner returned %s, owner=%#x", setsel, X11Window.XGetSelectionOwner(SELECTION))
+                log("setup tray: set selection owner returned %s, owner=%#x",
+                    setsel, X11Window.XGetSelectionOwner(SELECTION))
                 event_mask = StructureNotifyMask
                 log("setup tray: sending client message")
                 xid = get_xwindow(root)
@@ -185,20 +196,13 @@ class SystemTray(gobject.GObject):
     def do_xpra_client_message_event(self, event):
         if event.message_type=="_NET_SYSTEM_TRAY_OPCODE" and event.window==self.tray_window and event.format==32:
             opcode = event.data[1]
-            SYSTEM_TRAY_REQUEST_DOCK = 0
-            SYSTEM_TRAY_BEGIN_MESSAGE = 1
-            SYSTEM_TRAY_CANCEL_MESSAGE = 2
             if opcode==SYSTEM_TRAY_REQUEST_DOCK:
                 xid = event.data[2]
                 log("tray docking request from %#x", xid)
-                try:
-                    with xsync:
-                        self.dock_tray(xid)
-                except Exception as e:
-                    log("do_xpra_client_message_event(%s)", event, exc_info=True)
-                    log.warn("Warning: failed to dock tray %#x:", xid)
-                    log.warn(" %s", e)
-                    log.warn(" the application may retry later")
+                window = gdk.window_foreign_new(xid)
+                log("tray docking window %s", window)
+                if window:
+                    glib.idle_add(self.dock_tray, xid)
             elif opcode==SYSTEM_TRAY_BEGIN_MESSAGE:
                 timeout = event.data[2]
                 mlen = event.data[3]
@@ -217,6 +221,16 @@ class SystemTray(gobject.GObject):
 
     def dock_tray(self, xid):
         log("dock_tray(%#x)", xid)
+        try:
+            with xsync:
+                X11Window.getGeometry(xid)
+                self.do_dock_tray(xid)
+        except Exception as e:
+            log.warn("Warning: failed to dock tray %#x:", xid)
+            log.warn(" %s", e)
+            log.warn(" the application may retry later")
+
+    def do_dock_tray(self, xid):
         root = get_default_root_window()
         window = gdk.window_foreign_new(xid)
         if window is None:
@@ -231,24 +245,29 @@ class SystemTray(gobject.GObject):
         event_mask = STRUCTURE_MASK | EXPOSURE_MASK | PROPERTY_CHANGE_MASK
         window.set_events(event_mask=event_mask)
         add_event_receiver(window, self)
-        w = max(1, min(128, w))
-        h = max(1, min(128, h))
+        w = max(1, min(MAX_TRAY_SIZE, w))
+        h = max(1, min(MAX_TRAY_SIZE, h))
         title = prop_get(window, "_NET_WM_NAME", "utf8", ignore_errors=True)
         if title is None:
             title = prop_get(window, "WM_NAME", "latin1", ignore_errors=True)
         if title is None:
             title = ""
         xid = get_xwindow(root)
-        log("dock_tray(%#x) gdk window=%#x, geometry=%s, title=%s, visual.depth=%s", xid, xid, window.get_geometry(), title, window.get_visual().depth)
+        log("dock_tray(%#x) gdk window=%#x, geometry=%s, title=%s",
+            xid, xid, window.get_geometry(), title)
         kwargs = {}
         if not is_gtk3():
-            kwargs["colormap"] = window.get_colormap()
+            colormap = window.get_colormap()
+            if colormap:
+                kwargs["colormap"] = colormap
+        visual = window.get_visual()
+        if visual:
+            kwargs["visual"] = visual
         tray_window = GDKWindow(root, width=w, height=h,
                                            event_mask = event_mask,
                                            title=title,
                                            x=-200, y=-200,
                                            override_redirect=True,
-                                           visual=window.get_visual(),
                                            **kwargs)
         log("dock_tray(%#x) setting tray properties", xid)
         set_tray_window(tray_window, window)

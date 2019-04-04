@@ -15,7 +15,10 @@ from xpra.util import (
     updict, pver, iround, flatten_dict, envbool, repr_ellipsized, csv, first_time,
     DEFAULT_METADATA_SUPPORTED, XPRA_OPENGL_NOTIFICATION_ID,
     )
-from xpra.os_util import bytestostr, strtobytes, hexstr, monotonic_time, WIN32, OSX, POSIX
+from xpra.os_util import (
+    bytestostr, strtobytes, hexstr, monotonic_time,
+    WIN32, OSX, POSIX, is_Wayland,
+    )
 from xpra.simple_stats import std_unit
 from xpra.exit_codes import EXIT_PASSWORD_REQUIRED
 from xpra.scripts.config import TRUE_OPTIONS, FALSE_OPTIONS
@@ -25,8 +28,10 @@ from xpra.gtk_common.gtk_util import (
     new_Cursor_for_display, new_Cursor_from_pixbuf, icon_theme_get_default,
     pixbuf_new_from_file, display_get_default, screen_get_default, get_pixbuf_from_data,
     get_default_root_window, get_root_size, get_xwindow, image_new_from_stock,
-    get_screen_sizes, GDKWindow,
+    get_screen_sizes, load_contents_async, load_contents_finish, GDKWindow,
+    FILE_CHOOSER_ACTION_OPEN,
     CLASS_INPUT_ONLY,
+    RESPONSE_CANCEL, RESPONSE_OK, RESPONSE_ACCEPT,
     INTERP_BILINEAR, WINDOW_TOPLEVEL, DIALOG_MODAL, DESTROY_WITH_PARENT, MESSAGE_INFO,
     BUTTONS_CLOSE, ICON_SIZE_BUTTON, GRAB_STATUS_STRING,
     BUTTON_PRESS_MASK, BUTTON_RELEASE_MASK, POINTER_MOTION_MASK, POINTER_MOTION_HINT_MASK,
@@ -448,16 +453,16 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             self.file_dialog.present()
             return
         filelog("show_file_upload%s can open=%s", args, self.remote_open_files)
-        buttons = [gtk.STOCK_CANCEL,    gtk.RESPONSE_CANCEL]
+        buttons = [gtk.STOCK_CANCEL,    RESPONSE_CANCEL]
         if self.remote_open_files:
-            buttons += [gtk.STOCK_OPEN,      gtk.RESPONSE_ACCEPT]
-        buttons += [gtk.STOCK_OK,        gtk.RESPONSE_OK]
+            buttons += [gtk.STOCK_OPEN,      RESPONSE_ACCEPT]
+        buttons += [gtk.STOCK_OK,        RESPONSE_OK]
         self.file_dialog = gtk.FileChooserDialog(
             "File to upload",
             parent=None,
-            action=gtk.FILE_CHOOSER_ACTION_OPEN,
+            action=FILE_CHOOSER_ACTION_OPEN,
             buttons=tuple(buttons))
-        self.file_dialog.set_default_response(gtk.RESPONSE_OK)
+        self.file_dialog.set_default_response(RESPONSE_OK)
         self.file_dialog.connect("response", self.file_upload_dialog_response)
         self.file_dialog.show()
 
@@ -468,7 +473,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             self.file_dialog = None
 
     def file_upload_dialog_response(self, dialog, v):
-        if v not in (gtk.RESPONSE_OK, gtk.RESPONSE_ACCEPT):
+        if v not in (RESPONSE_OK, RESPONSE_ACCEPT):
             filelog("dialog response code %s", v)
             self.close_file_upload_dialog()
             return
@@ -485,12 +490,12 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         gfile = dialog.get_file()
         self.close_file_upload_dialog()
         filelog("load_contents: filename=%s, response=%s", filename, v)
-        gfile.load_contents_async(self.file_upload_ready, user_data=(filename, v==gtk.RESPONSE_ACCEPT))
+        load_contents_async(gfile, self.file_upload_ready, user_data=(filename, v==RESPONSE_ACCEPT))
 
     def file_upload_ready(self, gfile, result, user_data):
         filelog("file_upload_ready%s", (gfile, result, user_data))
         filename, openit = user_data
-        data, filesize, entity = gfile.load_contents_finish(result)
+        data, filesize, entity = load_contents_finish(gfile, result)
         filelog("load_contents_finish(%s)=%s", result, (type(data), filesize, entity))
         if not data:
             log.warn("Warning: failed to load file '%s'", filename)
@@ -680,7 +685,10 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         return self.cp(p[0], p[1])
 
     def get_current_modifiers(self):
-        modifiers_mask = self.get_root_window().get_pointer()[-1]
+        root = self.get_root_window()
+        if root is None:
+            return ()
+        modifiers_mask = root.get_pointer()[-1]
         return self.mask_to_names(modifiers_mask)
 
 
@@ -692,22 +700,23 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             #tell the server which icons GTK can use
             #so it knows when it should supply one as fallback
             it = icon_theme_get_default()
-            #this would add our bundled icon directory
-            #to the search path, but I don't think we have
-            #any extra icons that matter in there:
-            #from xpra.platform.paths import get_icon_dir
-            #d = get_icon_dir()
-            #if d not in it.get_search_path():
-            #    it.append_search_path(d)
-            #    it.rescan_if_needed()
-            log("default icon theme: %s", it)
-            log("icon search path: %s", it.get_search_path())
-            log("contexts: %s", it.list_contexts())
-            icons = []
-            for context in it.list_contexts():
-                icons += it.list_icons(context)
-            log("icons: %s", icons)
-            capabilities["theme.default.icons"] = tuple(set(icons))
+            if it:
+                #this would add our bundled icon directory
+                #to the search path, but I don't think we have
+                #any extra icons that matter in there:
+                #from xpra.platform.paths import get_icon_dir
+                #d = get_icon_dir()
+                #if d not in it.get_search_path():
+                #    it.append_search_path(d)
+                #    it.rescan_if_needed()
+                log("default icon theme: %s", it)
+                log("icon search path: %s", it.get_search_path())
+                log("contexts: %s", it.list_contexts())
+                icons = []
+                for context in it.list_contexts():
+                    icons += it.list_icons(context)
+                log("icons: %s", icons)
+                capabilities["theme.default.icons"] = tuple(set(icons))
         if METADATA_SUPPORTED:
             ms = [x.strip() for x in METADATA_SUPPORTED.split(",")]
         else:
@@ -765,7 +774,10 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
 
 
     def has_transparency(self):
-        return screen_get_default().get_rgba_visual() is not None
+        screen = screen_get_default()
+        if screen is None:
+            return is_Wayland()
+        return screen.get_rgba_visual() is not None
 
 
     def get_screen_sizes(self, xscale=1, yscale=1):
@@ -975,8 +987,10 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         parts = enable_opengl.split(":", 1)
         enable_option = parts[0]            #ie: "on"
         opengllog("init_opengl: enable_option=%s", enable_option)
-        if enable_option=="probe-failed":
-            msg = "probe failed: %s" % csv(parts[1:])
+        if enable_option in ("probe-failed", "probe-error"):
+            msg = enable_option.replace("-", " ")
+            if len(parts)>1:
+                msg += ": %s" % csv(parts[1:])
             self.opengl_props["info"] = "disabled, %s" % msg
             self.opengl_setup_failure(body=msg)
             return
@@ -1068,7 +1082,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
                 l("Warning: OpenGL windows will be clamped to the maximum texture size %ix%i",
                   self.gl_texture_size_limit, self.gl_texture_size_limit)
                 l(" for OpenGL %s renderer '%s'", pver(self.opengl_props.get("opengl", "")), self.opengl_props.get("renderer", "unknown"))
-            if self.opengl_enabled:
+            if self.opengl_enabled and enable_opengl!="probe-success":
                 draw_result = test_gl_client_window(self.GLClientWindowClass, max_window_size=self.max_window_size, pixel_depth=self.pixel_depth)
                 if not draw_result.get("success", False):
                     err("OpenGL test rendering failed:", draw_result.get("message", "unknown error"))
@@ -1253,12 +1267,12 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
     def process_clipboard_packet(self, packet):
         clipboardlog("process_clipboard_packet(%s) level=%s", packet, gtk.main_level())
         #check for clipboard loops:
-        from xpra.clipboard.clipboard_base import nesting_check
-        if not nesting_check():
+        ch = self.clipboard_helper
+        if not ch.nesting_check():
             self.clipboard_enabled = False
             self.emit("clipboard-toggled")
             return
-        self.idle_add(self.clipboard_helper.process_clipboard_packet, packet)
+        self.idle_add(ch.process_clipboard_packet, packet)
 
 
     def setup_clipboard_helper(self, helperClass):

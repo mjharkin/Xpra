@@ -33,7 +33,7 @@ cdef class rectangle:
         self.y = y
         self.width = w
         self.height = h
-        self.hash = (self.x+self.y)<<16 + (self.width + self.height)
+        self.hash = (self.x&0xffff)<<48+(self.y&0xffff)<<32+(self.width&0xffff)<<16+(self.height&0xffff)
 
     def __hash__(self):
         return self.hash
@@ -158,35 +158,39 @@ def contains_rect(object regions, rectangle region):            #@DuplicatedSign
 
 
 def add_rectangle(object regions, rectangle region):
+    #returns the number of pixels actually added
     cdef int x = region.x
     cdef int y = region.y
     cdef int w = region.width
     cdef int h = region.height
-    cdef rectangle r
+    cdef rectangle r, sub
     for r in tuple(regions):
         #unroll contains() call:
         #if r.contains_rect(region):
         if r.x<=x and r.y<=y and r.x+r.width>=x+w and r.y+r.height>=y+h:
-            return False
+            #rectangle is contained in another rectangle,
+            #so no need to add anything
+            return 0
         if r.intersects(x, y, w, h):
-            #only keep the parts
-            #that do not intersect with the new region we add:
-            regions.remove(r)
-            regions += r.substract(x, y, w, h)
+            #only add the parts that are not already in the rectangle
+            #it intersects:
+            return sum(add_rectangle(regions, sub) for sub in region.substract_rect(r))
+    #not found at all, add it all:
     regions.append(region)
-    return True
+    return w*h
 
 def remove_rectangle(object regions, rectangle region):
     copy = regions[:]
-    regions[:] = []
     cdef int x = region.x               #
     cdef int y = region.y               #
     cdef int w = region.width           #
     cdef int h = region.height          #
     cdef int l = len(copy)
     cdef rectangle r
+    new_regions = []
     for r in copy:
-        regions += r.substract(x, y, w, h)
+        new_regions += r.substract(x, y, w, h)
+    regions[:] = new_regions
 
 def merge_all(rectangles):
     cdef rectangle r               #

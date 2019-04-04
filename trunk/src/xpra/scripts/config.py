@@ -742,7 +742,7 @@ del tmp
 
 
 def get_default_key_shortcuts():
-    return [shortcut for e,shortcut in [
+    return [shortcut for e,shortcut in (
                (True,   "Control+Menu:toggle_keyboard_grab"),
                (True,   "Shift+Menu:toggle_pointer_grab"),
                (not OSX,"Shift+F11:toggle_fullscreen"),
@@ -768,7 +768,8 @@ def get_default_key_shortcuts():
                (True,   "#+KP_Multiply:scalereset"),
                (True,   "#+bar:scalereset"),
                (True,   "#+question:scalingoff"),
-               (OSX,    "#+degree:scalereset")]
+               (OSX,    "#+degree:scalereset"),
+               )
                  if e]
 
 def get_default_systemd_run():
@@ -810,8 +811,10 @@ def get_defaults():
     global GLOBAL_DEFAULTS
     if GLOBAL_DEFAULTS is not None:
         return GLOBAL_DEFAULTS
-    from xpra.platform.features import DEFAULT_SSH_COMMAND, OPEN_COMMAND, DEFAULT_PULSEAUDIO_CONFIGURE_COMMANDS, \
-                                        DEFAULT_ENV, CAN_DAEMONIZE, SYSTEM_PROXY_SOCKET
+    from xpra.platform.features import (
+        OPEN_COMMAND, DEFAULT_PULSEAUDIO_CONFIGURE_COMMANDS,
+        DEFAULT_ENV, CAN_DAEMONIZE, SYSTEM_PROXY_SOCKET,
+        )
     from xpra.platform.paths import get_download_dir, get_remote_run_xpra_scripts
     try:
         from xpra.platform.info import get_username
@@ -836,8 +839,8 @@ def get_defaults():
         conf_dirs.append("/etc/xpra")
     else:
         conf_dirs.append(os.path.join(sys.prefix, "etc", "xpra"))
-    for conf_dir in [x for x in conf_dirs if x]:
-        if os.path.exists(conf_dir):
+    for conf_dir in conf_dirs:
+        if conf_dir and os.path.exists(conf_dir):
             break
     xvfb = detect_xvfb_command(conf_dir, bin_dir)
     if WIN32:
@@ -877,7 +880,7 @@ def get_defaults():
                     "encryption-keyfile": "",
                     "tcp-encryption-keyfile": "",
                     "pidfile"           : "",
-                    "ssh"               : DEFAULT_SSH_COMMAND,
+                    "ssh"               : "auto",
                     "systemd-run"       : get_default_systemd_run(),
                     "systemd-run-args"  : "",
                     "system-proxy-socket" : SYSTEM_PROXY_SOCKET,
@@ -907,7 +910,7 @@ def get_defaults():
                     "html"              : "auto",
                     "socket-permissions": "600",
                     "exec-wrapper"      : "",
-                    "dbus-launch"       : "dbus-launch --close-stderr",
+                    "dbus-launch"       : "dbus-launch --sh-syntax --close-stderr",
                     "webcam"            : ["auto", "no"][OSX],
                     "mousewheel"        : "on",
                     "input-devices"     : "auto",

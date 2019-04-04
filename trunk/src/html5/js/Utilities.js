@@ -10,7 +10,7 @@
 'use strict';
 
 var Utilities = {
-	VERSION	: "2.5",
+	VERSION	: "3.0",
 
 	exc : function() {
 		console.error.apply(console, arguments);
@@ -23,6 +23,9 @@ var Utilities = {
 	},
 	log : function() {
 		console.log.apply(console, arguments);
+	},
+	debug : function() {
+		console.debug.apply(console, arguments);
 	},
 
 	//these versions should not be redirected:
@@ -37,6 +40,9 @@ var Utilities = {
 	},
 	clog : function() {
 		console.log.apply(console, arguments);
+	},
+	cdebug : function() {
+		console.debug.apply(console, arguments);
 	},
 
 	getHexUUID: function() {

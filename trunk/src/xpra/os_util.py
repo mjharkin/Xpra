@@ -232,13 +232,13 @@ def get_machine_id():
     """
     v = u""
     if POSIX:
-        for filename in ["/etc/machine-id", "/var/lib/dbus/machine-id"]:
+        for filename in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
             v = load_binary_file(filename)
             if v is not None:
                 break
     elif WIN32:
         v = uuid.getnode()
-    return  str(v).strip("\n\r")
+    return bytestostr(v).strip("\n\r")
 
 def get_user_uuid():
     """
@@ -359,13 +359,13 @@ def getUbuntuVersion():
     return ()
 
 def is_unity():
-    return os.environ.get("XDG_CURRENT_DESKTOP", "").lower().startswith("unity")
+    return os.environ.get("XDG_CURRENT_DESKTOP", "").lower().find("unity")>=0
 
 def is_gnome():
-    return os.environ.get("XDG_CURRENT_DESKTOP", "").lower().startswith("gnome")
+    return os.environ.get("XDG_CURRENT_DESKTOP", "").lower().find("gnome")>=0
 
 def is_kde():
-    return os.environ.get("XDG_CURRENT_DESKTOP", "").lower().startswith("kde")
+    return os.environ.get("XDG_CURRENT_DESKTOP", "").lower().find("kde")>=0
 
 
 def is_WSL():
@@ -486,9 +486,10 @@ def close_all_fds(exceptions=()):
 
 def use_tty():
     from xpra.util import envbool
-    NOTTY = envbool("XPRA_NOTTY", False)
-    stdin = sys.stdin
-    return not os.environ.get("MSYSCON") and not NOTTY and stdin and stdin.isatty()
+    if envbool("XPRA_NOTTY", False):
+        return False
+    from xpra.platform.gui import use_stdin
+    return use_stdin()
 
 
 def shellsub(s, subs=None):

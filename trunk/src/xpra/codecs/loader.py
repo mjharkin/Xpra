@@ -132,17 +132,17 @@ def add_codec_version(name, top_module, version="get_version()", alt_version="__
 def xpra_codec_import(name, description, top_module, class_module, classname):
     xpra_top_module = "xpra.codecs.%s" % top_module
     xpra_class_module = "%s.%s" % (xpra_top_module, class_module)
-    codec_import_check(name, description, xpra_top_module, xpra_class_module, classname)
-    version_name = name
-    if name.startswith("enc_") or name.startswith("dec_") or name.startswith("csc_"):
-        version_name = name[4:]
-    add_codec_version(version_name, xpra_class_module)
+    if codec_import_check(name, description, xpra_top_module, xpra_class_module, classname):
+        version_name = name
+        if name.startswith("enc_") or name.startswith("dec_") or name.startswith("csc_"):
+            version_name = name[4:]
+        add_codec_version(version_name, xpra_class_module)
 
 
 CODEC_OPTIONS = {
     #encoders:
-    "enc_pillow"    : ("Pillow encoder",    "pillow",       "encode", "encode"),
-    "enc_webp"      : ("webp encoder",      "webp",         "encode", "compress"),
+    "enc_pillow"    : ("Pillow encoder",    "pillow",       "encoder", "encode"),
+    "enc_webp"      : ("webp encoder",      "webp",         "encoder", "encode"),
     "enc_jpeg"      : ("JPEG encoder",      "jpeg",         "encoder", "encode"),
     #video encoders:
     "enc_vpx"       : ("vpx encoder",       "vpx",          "encoder", "Encoder"),
@@ -154,8 +154,8 @@ CODEC_OPTIONS = {
     "csc_swscale"   : ("swscale colorspace conversion", "csc_swscale", "colorspace_converter", "ColorspaceConverter"),
     "csc_libyuv"    : ("libyuv colorspace conversion", "csc_libyuv", "colorspace_converter", "ColorspaceConverter"),
     #decoders:
-    "dec_pillow"    : ("Pillow decoder",    "pillow",       "decode",  "get_encodings"),
-    "dec_webp"      : ("webp decoder",      "webp",         "decode",  "decompress"),
+    "dec_pillow"    : ("Pillow decoder",    "pillow",       "decoder", "decompress"),
+    "dec_webp"      : ("webp decoder",      "webp",         "decoder", "decompress"),
     "dec_jpeg"      : ("JPEG decoder",      "jpeg",         "decoder", "decompress_to_rgb", "decompress_to_yuv"),
     #video decoders:
     "dec_vpx"       : ("vpx decoder",       "vpx",          "decoder", "Decoder"),
@@ -192,15 +192,17 @@ def load_codecs(encoders=True, decoders=True, csc=True, video=True):
         show += list(ENCODER_CODECS)
         load(*ENCODER_CODECS)
         if video:
-            load("enc_vpx", "enc_x264", "enc_x265", "nvenc", "enc_ffmpeg")
+            show += list(ENCODER_VIDEO_CODECS)
+            load(*ENCODER_VIDEO_CODECS)
     if csc and video:
         show += list(CSC_CODECS)
-        load("csc_swscale", "csc_libyuv")
+        load(*CSC_CODECS)
     if decoders:
         show += list(DECODER_CODECS)
-        load("dec_pillow", "dec_webp", "dec_jpeg")
-    if decoders and video:
-        load("dec_vpx", "dec_avcodec2")
+        load(*DECODER_CODECS)
+        if video:
+            show += list(DECODER_VIDEO_CODECS)
+            load(*DECODER_VIDEO_CODECS)
 
     log("done loading codecs")
     log("found:")
@@ -233,10 +235,12 @@ def has_codec(name):
 
 
 CSC_CODECS = "csc_swscale", "csc_libyuv"
-ENCODER_CODECS = "enc_pillow", "enc_vpx", "enc_webp", "enc_x264", "enc_x265", "nvenc", "enc_ffmpeg", "enc_jpeg"
-DECODER_CODECS = "dec_pillow", "dec_vpx", "dec_webp", "dec_avcodec2", "dec_jpeg"
+ENCODER_CODECS = "enc_pillow", "enc_webp", "enc_jpeg"
+ENCODER_VIDEO_CODECS = "enc_vpx", "enc_x264", "enc_x265", "nvenc", "enc_ffmpeg"
+DECODER_CODECS = "dec_pillow", "dec_webp", "dec_jpeg"
+DECODER_VIDEO_CODECS = "dec_vpx", "dec_avcodec2"
 
-ALL_CODECS = tuple(set(CSC_CODECS + ENCODER_CODECS + DECODER_CODECS))
+ALL_CODECS = tuple(set(CSC_CODECS + ENCODER_CODECS + ENCODER_VIDEO_CODECS + DECODER_CODECS + DECODER_VIDEO_CODECS))
 
 
 def get_rgb_compression_options():

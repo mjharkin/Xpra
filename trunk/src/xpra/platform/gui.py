@@ -1,12 +1,18 @@
 #!/usr/bin/env python
 # This file is part of Xpra.
 # Copyright (C) 2010 Nathaniel Smith <njs@pobox.com>
-# Copyright (C) 2012-2017 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2012-2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import os
 import sys
+import binascii
+
+from xpra.platform import platform_import
+from xpra.os_util import bytestostr
+from xpra.log import Logger
+
 
 _init_done = False
 def init():
@@ -30,6 +36,10 @@ def ready():
 def do_ready():
     pass
 
+
+def use_stdin():
+    stdin = sys.stdin
+    return stdin and stdin.isatty()
 
 #defaults:
 def get_native_tray_menu_helper_class():
@@ -91,13 +101,13 @@ def get_icc_info():
 def default_get_icc_info():
     ENV_ICC_DATA = os.environ.get("XPRA_ICC_DATA")
     if ENV_ICC_DATA:
-        import binascii
         return {
             "source"    : "environment-override",
             "data"      : binascii.unhexlify(ENV_ICC_DATA),
             }
-    from xpra.os_util import bytestostr
-    from xpra.log import Logger
+    return get_pillow_icc_info()
+
+def get_pillow_icc_info():
     screenlog = Logger("screen")
     info = {}
     try:
@@ -225,7 +235,7 @@ def get_info_base():
     def fname(v):
         try:
             return v.__name__
-        except:
+        except AttributeError:
             return str(v)
     def fnames(l):
         return [fname(x) for x in l]
@@ -263,11 +273,11 @@ def get_info_base():
 get_info = get_info_base
 
 
-from xpra.platform import platform_import
 platform_import(globals(), "gui", False,
                 "do_ready",
                 "do_init",
                 "gl_check",
+                "use_stdin",
                 "get_wm_name",
                 "show_desktop", "set_fullscreen_monitors", "set_shaded",
                 "ClientExtras",
@@ -307,11 +317,8 @@ def main():
 
         #naughty, but how else can I hook this up?
         if POSIX and not OSX:
-            try:
-                from xpra.x11.bindings.posix_display_source import init_posix_display_source    #@UnresolvedImport
-                init_posix_display_source()
-            except:
-                pass    #maybe running on OSX? hope for the best..
+            from xpra.x11.bindings.posix_display_source import init_posix_display_source    #@UnresolvedImport
+            init_posix_display_source()
         i = get_info()
         print_nested_dict(i, hex_keys=("data", "icc-data", "icc-profile"))
 

@@ -58,8 +58,8 @@ class EncodingServer(StubServerMixin):
 
     def parse_hello(self, _ss, _caps, _send_ui):
         self.wait_for_threaded_init()
- 
- 
+
+
     def get_server_features(self, _source=None):
         return {
             "auto-video-encoding"   : True,
@@ -217,10 +217,8 @@ class EncodingServer(StubServerMixin):
 
 
     def init_packet_handlers(self):
-        self._authenticated_ui_packet_handlers.update({
-            "quality":                              self._process_quality,
-            "min-quality":                          self._process_min_quality,
-            "speed":                                self._process_speed,
-            "min-speed":                            self._process_min_speed,
-            "encoding":                             self._process_encoding,
-            })
+        self.add_packet_handler("quality",      self._process_quality)
+        self.add_packet_handler("min-quality",  self._process_min_quality)
+        self.add_packet_handler("speed",        self._process_speed)
+        self.add_packet_handler("min-speed",    self._process_min_speed)
+        self.add_packet_handler("encoding",     self._process_encoding)

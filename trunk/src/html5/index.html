@@ -154,7 +154,7 @@
 
 		<div id="about">
 			<h2>Xpra HTML5 Client</h2>
-			<h3>Version 2.5</h3>
+			<h3>Version 3.0</h3>
 			<span>
 				Copyright (c) 2013-2019 Antoine Martin &lt;antoine@xpra.org&gt;
 				<br />
@@ -165,7 +165,7 @@
 			<span class="info">
 			This code is available under the <a href="./LICENSE">Mozilla Public License Version 2.0</a>
 			<br />
-			For more information, see <a href="https://xpra.org/trac/wiki/HTML5">xpra HTML5 wiki</a>.
+			For more information, see <a href="https://xpra.org/trac/wiki/Clients/HTML5">xpra HTML5 wiki</a>.
 			</span>
 		</div>
 
@@ -513,7 +513,7 @@
 				}
 
 				var debug_categories = [];
-				var categories = ["main", "keyboard", "mouse", "clipboard", "draw", "audio", "network"];
+				var categories = ["main", "keyboard", "geometry", "mouse", "clipboard", "draw", "audio", "network"];
 				for(var i=0, len=categories.length; i < len; i++) {
 					var category = categories[i];
 					var debug = getboolparam("debug_"+category, false);

@@ -32,7 +32,7 @@ $PACMAN --noconfirm -S ${XPKG}python2 ${XPKG}python2-pygtk ${XPKG}gtkglext ${XPK
 #media libraries (more than we actually need):
 $PACMAN --noconfirm -S ${XPKG}ffmpeg ${XPKG}libyuv-git ${XPKG}gst-plugins-good ${XPKG}gst-plugins-bad ${XPKG}gst-plugins-ugly
 #network layer libraries:
-$PACMAN --noconfirm -S ${XPKG}lz4 ${XPKG}lzo2 ${XPKG}xxhash openssh sshpass
+$PACMAN --noconfirm -S ${XPKG}lz4 ${XPKG}lzo2 openssh sshpass
 #python3 GStreamer bindings:
 $PACMAN --noconfirm -S ${XPKG}gst-python
 #Git:
@@ -41,7 +41,7 @@ $PACMAN --noconfirm -S git
 $PACMAN --noconfirm -S base-devel ${XPKG}yasm ${XPKG}nasm subversion rsync zip gtk-doc ${XPKG}cmake ${XPKG}gcc ${XPKG}pkg-config ${XPKG}libffi
 #python libraries and packaging tools:
 $PACMAN --noconfirm -S ${XPKG}python2-enum34
-for x in cryptography cffi pycparser numpy pillow cx_Freeze appdirs paramiko comtypes netifaces rencode setproctitle pyu2f ldap ldap3 bcrypt pynacl lz4 PyOpenGL nvidia-ml zeroconf; do
+for x in cryptography cffi pycparser numpy pillow cx_Freeze appdirs paramiko comtypes netifaces rencode setproctitle pyu2f ldap ldap3 bcrypt pynacl lz4 PyOpenGL nvidia-ml zeroconf certifi; do
 	$PACMAN --noconfirm -S ${XPKG}python2-${x}
 	$PACMAN --noconfirm -S ${XPKG}python3-${x}
 done

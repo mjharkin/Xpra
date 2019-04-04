@@ -1,6 +1,6 @@
 # This file is part of Xpra.
 # Copyright (C) 2010 Nathaniel Smith <njs@pobox.com>
-# Copyright (C) 2011-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2011-2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -9,9 +9,9 @@ import sys
 import struct
 
 from xpra.os_util import bytestostr, hexstr
-from xpra.util import iround, envbool, envint, csv
+from xpra.util import iround, envbool, envint, csv, repr_ellipsized
 from xpra.gtk_common.gtk_util import get_xwindow
-from xpra.os_util import is_unity, is_gnome, is_kde, is_X11, is_Wayland
+from xpra.os_util import is_unity, is_gnome, is_kde, is_Fedora, is_X11, is_Wayland
 from xpra.log import Logger
 
 log = Logger("posix")
@@ -37,7 +37,7 @@ device_bell = None
 GTK_MENUS = envbool("XPRA_GTK_MENUS", False)
 RANDR_DPI = envbool("XPRA_RANDR_DPI", True)
 XSETTINGS_DPI = envbool("XPRA_XSETTINGS_DPI", True)
-USE_NATIVE_TRAY = envbool("XPRA_USE_NATIVE_TRAY", is_unity() or is_gnome() or is_kde())
+USE_NATIVE_TRAY = envbool("XPRA_USE_NATIVE_TRAY", is_unity() or (is_gnome() and not is_Fedora()) or is_kde())
 XINPUT_WHEEL_DIV = envint("XPRA_XINPUT_WHEEL_DIV", 15)
 DBUS_SCREENSAVER = envbool("XPRA_DBUS_SCREENSAVER", False)
 
@@ -49,14 +49,7 @@ def gl_check():
 
 
 def get_native_system_tray_classes():
-    c = []
-    if USE_NATIVE_TRAY:
-        try:
-            from xpra.platform.xposix.appindicator_tray import AppindicatorTray
-            c.append(AppindicatorTray)
-        except ImportError:
-            traylog("cannot load appindicator tray: %s", exc_info=True)
-    return c
+    return []
 
 def get_wm_name():
     wm_name = os.environ.get("XDG_CURRENT_DESKTOP", "")
@@ -64,7 +57,7 @@ def get_wm_name():
         try:
             wm_check = _get_X11_root_property("_NET_SUPPORTING_WM_CHECK", "WINDOW")
             if wm_check:
-                xid = struct.unpack(b"=I", wm_check)[0]
+                xid = struct.unpack(b"@L", wm_check)[0]
                 traylog("_NET_SUPPORTING_WM_CHECK window=%#x", xid)
                 wm_name = _get_X11_window_property(xid, "_NET_WM_NAME", "UTF8_STRING")
                 traylog("_NET_WM_NAME=%s", wm_name)
@@ -78,14 +71,21 @@ def get_wm_name():
 
 def get_native_tray_classes():
     #could restrict to only DEs that have a broken system tray like "GNOME Shell"?
+    c = []
+    if USE_NATIVE_TRAY:
+        try:
+            from xpra.platform.xposix.appindicator_tray import AppindicatorTray
+            c.append(AppindicatorTray)
+        except (ImportError, ValueError):
+            traylog("cannot load appindicator tray", exc_info=True)
     if has_gtk_menu_support():  #and wm_name=="GNOME Shell":
         try:
             from xpra.platform.xposix.gtkmenu_tray import GTKMenuTray
             traylog("using GTKMenuTray for '%s' window manager", get_wm_name() or "unknown")
-            return [GTKMenuTray]
+            c.append(GTKMenuTray)
         except Exception as e:
             traylog("cannot load gtk menu tray: %s", e)
-    return get_native_system_tray_classes()
+    return c
 
 
 def get_native_notifier_classes():
@@ -335,7 +335,7 @@ def get_current_desktop():
         try:
             d = _get_X11_root_property("_NET_CURRENT_DESKTOP", "CARDINAL")
             if d:
-                v = struct.unpack(b"=I", d)[0]
+                v = struct.unpack(b"@L", d)[0]
         except Exception as e:
             log.warn("failed to get current desktop: %s", e)
         log("get_current_desktop() %s=%s", hexstr(d or ""), v)
@@ -350,17 +350,20 @@ def get_workarea():
             workarea = _get_X11_root_property("_NET_WORKAREA", "CARDINAL")
             if not workarea:
                 return None
-            screenlog("get_workarea()=%s, len=%s", type(workarea), len(workarea))
+            screenlog("get_workarea() _NET_WORKAREA=%s (%s), len=%s",
+                      repr_ellipsized(workarea), type(workarea), len(workarea))
             #workarea comes as a list of 4 CARDINAL dimensions (x,y,w,h), one for each desktop
-            if len(workarea)<(d+1)*4*4:
+            sizeof_long = struct.calcsize(b"@L")
+            if len(workarea)<(d+1)*4*sizeof_long:
                 screenlog.warn("get_workarea() invalid _NET_WORKAREA value")
             else:
-                cur_workarea = workarea[d*4*4:(d+1)*4*4]
-                v = struct.unpack(b"=IIII", cur_workarea)
+                cur_workarea = workarea[d*4*sizeof_long:(d+1)*4*sizeof_long]
+                v = struct.unpack(b"@LLLL", cur_workarea)
                 screenlog("get_workarea() %s=%s", hexstr(cur_workarea), v)
                 return v
         except Exception as e:
-            screenlog.warn("failed to get workarea: %s", e)
+            screenlog("get_workarea()", exc_info=True)
+            screenlog.warn("Warning: failed to query workarea: %s", e)
     return None
 
 
@@ -371,7 +374,7 @@ def get_number_of_desktops():
         try:
             d = _get_X11_root_property("_NET_NUMBER_OF_DESKTOPS", "CARDINAL")
             if d:
-                v = struct.unpack(b"=I", d)[0]
+                v = struct.unpack(b"@L", d)[0]
         except Exception as e:
             screenlog.warn("failed to get number of desktop: %s", e)
         v = max(1, v)
@@ -732,7 +735,7 @@ class XI2_Window(object):
         args = [event.device]
         for x in ("x", "y", "x_root", "y_root"):
             args.append(intscaled(getattr(event, x)))
-        for v in [event.valuators, raw_valuators]:
+        for v in (event.valuators, raw_valuators):
             args.append(dictscaled(v))
         return args
 

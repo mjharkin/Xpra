@@ -1,12 +1,13 @@
 # This file is part of Xpra.
 # Copyright (C) 2010 Nathaniel Smith <njs@pobox.com>
-# Copyright (C) 2011-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2011-2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 # A tray implemented using gtk.StatusIcon
 
 import os
+from time import time
 
 from xpra.os_util import WIN32, OSX, POSIX, PYTHON3, monotonic_time
 from xpra.util import envbool
@@ -28,6 +29,7 @@ ORIENTATION = {
 GUESS_GEOMETRY = WIN32 or OSX
 GUESS_GEOMETRY = envbool("XPRA_GUESS_ICON_GEOMETRY", GUESS_GEOMETRY)
 log("tray GUESS_GEOMETRY=%s", GUESS_GEOMETRY)
+SAVE = envbool("XPRA_SAVE_SYSTRAY", False)
 
 
 class GTKStatusIconTray(TrayBase):
@@ -75,12 +77,12 @@ class GTKStatusIconTray(TrayBase):
             self.click_cb(button, 0, time)
 
 
-    def hide(self, *_args):
+    def hide(self):
         log("%s.set_visible(False)", self.tray_widget)
         if self.tray_widget:
             self.tray_widget.set_visible(False)
 
-    def show(self, *_args):
+    def show(self):
         log("%s.set_visible(True)", self.tray_widget)
         if self.tray_widget:
             self.tray_widget.set_visible(True)
@@ -92,7 +94,7 @@ class GTKStatusIconTray(TrayBase):
         ag = self.tray_widget.get_geometry()
         if ag is None:
             return -1
-        screen, _, _ = ag[-3:]
+        screen = ag[-3]
         if not screen:
             return -1
         return screen.get_number()
@@ -103,7 +105,7 @@ class GTKStatusIconTray(TrayBase):
         ag = self.tray_widget.get_geometry()
         if ag is None:
             return None
-        _, _, gtk_orientation = ag[-3:]
+        gtk_orientation = ag[-1]
         return ORIENTATION.get(gtk_orientation)
 
     def get_geometry(self):
@@ -119,18 +121,20 @@ class GTKStatusIconTray(TrayBase):
             if not self.geometry_guess:
                 self.may_guess()
             #probably win32 or OSX, gnome-shell or KDE5..
-            log("GTKStatusIconTray.get_geometry() no geometry value available, returning guess: %s", self.geometry_guess)
+            log("GTKStatusIconTray.get_geometry() no geometry value available, returning guess: %s",
+                self.geometry_guess)
             return self.geometry_guess or (0, 0, 0, 0)
-        #gtk3 adds an extra argument.. at the beginning!
-        _, geom, _ = ag[-3:]
+        #gtk3 adds an extra argument.. at the beginning
+        #so we index from the end of the array:
+        geom = ag[-2]
         x, y, w, h = geom.x, geom.y, geom.width, geom.height
         log("GTKStatusIconTray.get_geometry() geometry area rectangle=%s", (x, y, w, h))
         if x==0 and y==0 and w==0 and h==0 and self.geometry_guess:
             return self.geometry_guess
         if x==0 and y==0 and w==200 and h==200:
             #this isn't right, take a better guess, at least for the size:
-            w = 24
-            h = 64
+            w = 48
+            h = 48
         return x, y, w, h
 
     def get_size(self):
@@ -138,16 +142,16 @@ class GTKStatusIconTray(TrayBase):
         return [s, s]
 
 
-    def set_tooltip(self, text=None):
+    def set_tooltip(self, tooltip=None):
         if self.tray_widget:
-            self.tray_widget.set_tooltip_text(text or "Xpra")
+            self.tray_widget.set_tooltip_text(tooltip or "Xpra")
 
     def set_blinking(self, on):
         if self.tray_widget and hasattr(self.tray_widget, "set_blinking"):
             self.tray_widget.set_blinking(on)
 
 
-    def set_icon_from_data(self, pixels, has_alpha, w, h, rowstride, _options={}):
+    def set_icon_from_data(self, pixels, has_alpha, w, h, rowstride, _options=None):
         tray_icon = get_pixbuf_from_data(pixels, has_alpha, w, h, rowstride)
         self.set_icon_from_pixbuf(tray_icon)
 
@@ -176,9 +180,16 @@ class GTKStatusIconTray(TrayBase):
                     scaled_w, scaled_h = 24, 48
                 tray_icon = tray_icon.scale_simple(scaled_w, scaled_h, INTERP_HYPER)
                 tray_icon.copy_area(0, 0, scaled_w, scaled_h, new_icon, (tw-scaled_w)//2, (th-scaled_h)//2)
+                log("tray icon scaled to %ix%i and pasted into the middle of %ix%i blank icon",
+                    scaled_w, scaled_h, tw, th)
                 tray_icon = new_icon
             else:
                 tray_icon = tray_icon.scale_simple(tw, th, INTERP_HYPER)
+                log("tray icon scaled to %ix%i", tw, th)
+        if SAVE:
+            filename = "./statusicon-%s.png" % time()
+            tray_icon.save(filename, "png")
+            log.info("statusicon tray saved to %s", filename)
         self.tray_widget.set_from_pixbuf(tray_icon)
         self.icon_timestamp = monotonic_time()
 

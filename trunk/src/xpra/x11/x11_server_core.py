@@ -7,6 +7,7 @@
 # later version. See the file COPYING for details.
 
 import os
+import threading
 
 from xpra.gtk_common.gobject_compat import import_gdk
 from xpra.x11.bindings.core_bindings import set_context_check, X11CoreBindings     #@UnresolvedImport
@@ -198,7 +199,7 @@ class X11ServerCore(GTKServerBase):
             try:
                 from subprocess import Popen, PIPE
                 from xpra.platform.paths import get_xpra_command
-                cmd = self.get_full_child_command(get_xpra_command()+["opengl"])
+                cmd = self.get_full_child_command(get_xpra_command()+["opengl", "--opengl=yes"])
                 env = self.get_child_env()
                 proc = Popen(cmd, stdin=PIPE, stdout=PIPE, stderr=PIPE, env=env, shell=False, close_fds=True)
                 out,err = proc.communicate()
@@ -284,8 +285,8 @@ class X11ServerCore(GTKServerBase):
 
     def init_packet_handlers(self):
         GTKServerBase.init_packet_handlers(self)
-        self._authenticated_ui_packet_handlers["force-ungrab"] = self._process_force_ungrab
-        self._authenticated_ui_packet_handlers["wheel-motion"] = self._process_wheel_motion
+        self.add_packet_handler("force-ungrab", self._process_force_ungrab)
+        self.add_packet_handler("wheel-motion", self._process_wheel_motion)
 
 
     def init_virtual_devices(self, _devices):
@@ -363,7 +364,6 @@ class X11ServerCore(GTKServerBase):
         return info
 
     def get_ui_info(self, proto, wids=None, *args):
-        import threading
         log("do_get_info thread=%s", threading.current_thread())
         info = GTKServerBase.get_ui_info(self, proto, wids, *args)
         #this is added here because the server keyboard config doesn't know about "keys_pressed"..
@@ -533,10 +533,12 @@ class X11ServerCore(GTKServerBase):
         root_w, root_h = self.root_window.get_geometry()[2:4]
         if not self.randr:
             return root_w, root_h
-        max_w, max_h = 0, 0
         sss = self._server_sources.values()
         if len(sss)>1:
             screenlog.info("screen used by %i clients:", len(sss))
+        bigger = True
+        max_w, max_h = 0, 0
+        min_w, min_h = 16384, 16384
         for ss in sss:
             client_size = ss.desktop_size
             if not client_size:
@@ -546,14 +548,25 @@ class X11ServerCore(GTKServerBase):
                 size = "%ix%i" % (w, h)
                 max_w = max(max_w, w)
                 max_h = max(max_h, h)
+                if w>0:
+                    min_w = min(min_w, w)
+                if h>0:
+                    min_h = min(min_h, h)
+                bigger = bigger and ss.screen_resize_bigger
             if len(sss)>1:
                 screenlog.info("* %s: %s", ss.uuid, size)
-        screenlog("maximum client resolution is %sx%s (current server resolution is %sx%s)",
-                  max_w, max_h, root_w, root_h)
-        if max_w<=0 or max_h<=0:
+        if bigger:
+            w, h = max_w, max_h
+        else:
+            w, h = min_w, min_h
+        screenlog("current server resolution is %ix%i", root_w, root_h)
+        screenlog("maximum client resolution is %ix%i",  max_w, max_h)
+        screenlog("minimum client resolution is %ix%i",  min_w, min_h)
+        screenlog("want: %s, so using %ix%i", "bigger" if bigger else "smaller", w, h)
+        if w<=0 or h<=0:
             #invalid - use fallback
             return root_w, root_h
-        return self.set_screen_size(max_w, max_h)
+        return self.set_screen_size(w, h, bigger)
 
     def get_best_screen_size(self, desired_w, desired_h, bigger=True):
         return self.do_get_best_screen_size(desired_w, desired_h, bigger)
@@ -583,7 +596,7 @@ class X11ServerCore(GTKServerBase):
         closest = {}
         for w,h in screen_sizes:
             if (w<desired_w)==bigger or (h<desired_h)==bigger:
-                distance = abs(w-desired_w)*abs(h-desired_h)
+                distance = abs(desired_w*desired_h - w*h)
                 closest[distance] = (w, h)
                 continue            #size is too small/big for client
             if new_size:
@@ -615,7 +628,8 @@ class X11ServerCore(GTKServerBase):
         #clients may supply "xdpi" and "ydpi" (v0.15 onwards), or just "dpi", or nothing...
         xdpi = self.xdpi or self.dpi
         ydpi = self.ydpi or self.dpi
-        screenlog("set_screen_size(%s, %s) xdpi=%s, ydpi=%s", desired_w, desired_h, xdpi, ydpi)
+        screenlog("set_screen_size(%s, %s, %s) xdpi=%s, ydpi=%s",
+                  desired_w, desired_h, bigger, xdpi, ydpi)
         if xdpi<=0 or ydpi<=0:
             #use some sane defaults: either the command line option, or fallback to 96
             #(96 is better than nothing, because we do want to set the dpi

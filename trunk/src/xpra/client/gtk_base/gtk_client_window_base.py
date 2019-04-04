@@ -30,6 +30,7 @@ from xpra.gtk_common.gtk_util import (
     is_realized, display_get_default, drag_status,
     newTargetEntry, drag_context_targets, drag_context_actions,
     drag_dest_window, drag_widget_get_data,
+    enable_alpha,
     gio_File, query_info_async, load_contents_async, load_contents_finish,
     WINDOW_POPUP, WINDOW_TOPLEVEL, GRAB_STATUS_STRING, GRAB_SUCCESS,
     SCROLL_UP, SCROLL_DOWN, SCROLL_LEFT, SCROLL_RIGHT,
@@ -117,19 +118,20 @@ SAVE_WINDOW_ICONS = envbool("XPRA_SAVE_WINDOW_ICONS", False)
 UNDECORATED_TRANSIENT_IS_OR = envint("XPRA_UNDECORATED_TRANSIENT_IS_OR", 1)
 XSHAPE = envbool("XPRA_XSHAPE", True)
 LAZY_SHAPE = envbool("XPRA_LAZY_SHAPE", True)
-PADDING_COLORS = 0, 0, 0
-PADDING_COLORS_STR = os.environ.get("XPRA_PADDING_COLORS")
-if PADDING_COLORS_STR:
-    try:
-        PADDING_COLORS = tuple(float(x.strip()) for x in PADDING_COLORS_STR.split(","))
-        assert len(PADDING_COLORS)==3, "you must specify 3 components"
-        log("PADDING_COLORS=%s", PADDING_COLORS)
-    except Exception as e:
-        log.warn("Warning: invalid padding colors specified,")
-        log.warn(" %s", e)
-        log.warn(" using black")
-        PADDING_COLORS = 0, 0, 0
-del PADDING_COLORS_STR
+def parse_padding_colors(colors_str):
+    padding_colors = 0, 0, 0
+    if colors_str:
+        try:
+            padding_colors = tuple(float(x.strip()) for x in colors_str.split(","))
+            assert len(PADDING_COLORS)==3, "you must specify 3 components"
+        except Exception as e:
+            log.warn("Warning: invalid padding colors specified,")
+            log.warn(" %s", e)
+            log.warn(" using black")
+            padding_colors = 0, 0, 0
+    log("parse_padding_colors(%s)=%s", colors_str, padding_colors)
+    return padding_colors
+PADDING_COLORS = parse_padding_colors(os.environ.get("XPRA_PADDING_COLORS"))
 
 
 #window types we map to POPUP rather than TOPLEVEL
@@ -725,7 +727,7 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
             self._client_properties["encoding.transparency"] = False
             return
         if self._has_alpha and not self.is_realized():
-            if self.enable_alpha():
+            if enable_alpha(self):
                 self._client_properties["encodings.rgb_formats"] = ["RGBA", "RGB", "RGBX"]
                 self._window_alpha = True
             else:
@@ -836,9 +838,9 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
     def schedule_send_iconify(self):
         #calculate a good delay to prevent races causing minimize/unminimize loops:
         delay = 150
-        spl = tuple(x for _, x in self._client.server_ping_latency)
+        spl = tuple(self._client.server_ping_latency)
         if spl:
-            worst = max(spl)
+            worst = max(x[1] for x in self._client.server_ping_latency)
             delay += int(1000*worst)
             delay = min(1000, delay)
         statelog("telling server about iconification with %sms delay", delay)

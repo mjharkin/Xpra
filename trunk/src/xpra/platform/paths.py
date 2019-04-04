@@ -6,14 +6,17 @@
 # later version. See the file COPYING for details.
 
 import inspect
-import os
+import os.path
 import sys
+
+from xpra.platform import platform_import
+
 
 
 def valid_dir(path):
     try:
-        return path and os.path.exists(path) and os.path.isdir(path)
-    except:
+        return bool(path) and os.path.exists(path) and os.path.isdir(path)
+    except TypeError:
         return False
 
 
@@ -119,7 +122,6 @@ def do_get_remote_run_xpra_scripts():
 def get_sshpass_command():
     return env_or_delegate("XPRA_SSHPASS", do_get_sshpass_command)
 def do_get_sshpass_command():
-    import os.path
     def is_exe(fpath):
         return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
     SSHPASS = "sshpass"
@@ -143,11 +145,13 @@ def do_get_app_dir():
 
 def default_get_app_dir():
     if os.name=="posix":
-        for prefix in [os.environ.get("RPM_BUILD_ROOT"),
-                       get_install_prefix(),
-                       sys.exec_prefix,
-                       "/usr",
-                       "/usr/local"]:
+        for prefix in (
+            os.environ.get("RPM_BUILD_ROOT"),
+            get_install_prefix(),
+            sys.exec_prefix,
+            "/usr",
+            "/usr/local",
+            ):
             if not prefix:
                 continue
             adir = os.path.join(prefix, "share", "xpra")
@@ -182,7 +186,7 @@ def do_get_icon_dir():
     idir = os.path.join(adir, "icons")
     if valid_dir(idir):
         return idir
-    for prefix in [sys.exec_prefix, "/usr", "/usr/local"]:
+    for prefix in (sys.exec_prefix, "/usr", "/usr/local"):
         idir = os.path.join(prefix, "icons")
         if os.path.exists(idir):
             return idir
@@ -208,27 +212,6 @@ def get_icon_filename(basename=None, ext="png"):
     if not os.path.exists(filename):
         return None
     return os.path.abspath(filename)
-
-
-LICENSE_TEXT = None
-def get_license_text(self):
-    global LICENSE_TEXT
-    if LICENSE_TEXT:
-        return  LICENSE_TEXT
-    filename = os.path.join(get_resources_dir(), 'COPYING')
-    if os.path.exists(filename):
-        try:
-            from xpra.os_util import PYTHON2
-            if PYTHON2:
-                license_file = open(filename, mode='rb')
-            else:
-                license_file = open(filename, mode='r', encoding='ascii')
-            LICENSE_TEXT = license_file.read()
-        finally:
-            license_file.close()
-    if not LICENSE_TEXT:
-        LICENSE_TEXT = "GPL version 2"
-    return LICENSE_TEXT
 
 
 def get_desktop_background_paths():
@@ -272,7 +255,6 @@ def do_get_sound_command():
     return get_xpra_command()
 
 
-from xpra.platform import platform_import
 platform_import(globals(), "paths", True,
                 "do_get_resources_dir",
                 "do_get_app_dir",

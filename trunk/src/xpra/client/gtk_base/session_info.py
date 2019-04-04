@@ -11,15 +11,17 @@ from collections import deque
 
 from xpra.version_util import XPRA_VERSION
 from xpra.os_util import bytestostr, strtobytes, get_linux_distribution, monotonic_time
-from xpra.util import prettify_plug_name, typedict, csv, engs
-from xpra.gtk_common.graph import make_graph_pixmap
+from xpra.util import prettify_plug_name, typedict, csv, engs, iround
+from xpra.gtk_common.graph import make_graph_imagesurface
 from xpra.simple_stats import values_to_scaled_values, values_to_diff_scaled_values, to_std_unit, std_unit_dec, std_unit
 from xpra.scripts.config import python_platform
 from xpra.client import mixin_features
 from xpra.gtk_common.gtk_util import (
-    add_close_accel, label, title_box, \
-    TableBuilder, imagebutton, scaled_image, get_preferred_size, get_gtk_version_info, \
+    add_close_accel, label, title_box,
+    TableBuilder, imagebutton, get_preferred_size, get_gtk_version_info,
     RELIEF_NONE, RELIEF_NORMAL, EXPAND, FILL, WIN_POS_CENTER,
+    RESPONSE_CANCEL, RESPONSE_OK, RESPONSE_CLOSE, RESPONSE_DELETE_EVENT,
+    FILE_CHOOSER_ACTION_SAVE,
     )
 from xpra.net.net_util import get_network_caps
 from xpra.gtk_common.gobject_compat import import_gtk, import_gdk, import_glib, is_gtk3
@@ -141,7 +143,7 @@ class SessionInfo(gtk.Window):
         self.tab_box.pack_start(self.tab_button_box, expand=False, fill=True, padding=0)
 
         #Package Table:
-        tb, _ = self.table_tab("package.png", "Software", self.populate_package)
+        tb = self.table_tab("package.png", "Software", self.populate_package)[0]
         #title row:
         tb.attach(title_box(""), 0, xoptions=EXPAND|FILL, xpadding=0)
         tb.attach(title_box("Client"), 1, xoptions=EXPAND|FILL, xpadding=0)
@@ -169,8 +171,8 @@ class SessionInfo(gtk.Window):
         except:
             pass
         def make_version_str(version):
-            if version and type(version) in (tuple, list):
-                version = ".".join([bytestostr(x) for x in version])
+            if version and isinstance(version, (tuple, list)):
+                version = ".".join(bytestostr(x) for x in version)
             return bytestostr(version or "unknown")
         def server_info(*prop_names):
             for x in prop_names:
@@ -188,7 +190,7 @@ class SessionInfo(gtk.Window):
         def make_revision_str(rev, changes):
             try:
                 cint = int(changes)
-            except:
+            except (TypeError, ValueError):
                 return rev
             else:
                 return "%s (%s change%s)" % (rev, cint, engs(cint))
@@ -227,9 +229,11 @@ class SessionInfo(gtk.Window):
         pygst_version = props.strlistget("pygst.version")
         tb.new_row("GStreamer", slabel(make_version_str(gst_version)), slabel(server_version_info("sound.gst.version")))
         tb.new_row("pygst", slabel(make_version_str(pygst_version)), slabel(server_version_info("sound.pygst.version")))
-        tb.new_row("OpenGL", slabel(make_version_str(self.client.opengl_props.get("opengl", "n/a"))), slabel(server_version_info("opengl.opengl")))
-        tb.new_row("OpenGL Vendor", slabel(make_version_str(self.client.opengl_props.get("vendor", ""))), slabel(server_version_info("opengl.vendor")))
-        tb.new_row("PyOpenGL", slabel(make_version_str(self.client.opengl_props.get("pyopengl", "n/a"))), slabel(server_version_info("opengl.pyopengl")))
+        def gllabel(prop="opengl", default_value="n/a"):
+            return slabel(make_version_str(self.client.opengl_props.get(prop, default_value)))
+        tb.new_row("OpenGL", gllabel("opengl", "n/a"), slabel(server_version_info("opengl.opengl")))
+        tb.new_row("OpenGL Vendor", gllabel("vendor", ""), slabel(server_version_info("opengl.vendor")))
+        tb.new_row("PyOpenGL", gllabel("pyopengl", "n/a"), slabel(server_version_info("opengl.pyopengl")))
 
         # Features Table:
         vbox = self.vbox_tab("features.png", "Features", self.populate_features)
@@ -287,28 +291,38 @@ class SessionInfo(gtk.Window):
         self.client_encodings_label.set_line_wrap(True)
         self.server_encodings_label = slabel()
         self.server_encodings_label.set_line_wrap(True)
-        tb.new_row("Picture Encodings", self.client_encodings_label, self.server_encodings_label, xoptions=FILL|EXPAND, yoptions=FILL|EXPAND)
+        tb.new_row("Picture Encodings",
+                   self.client_encodings_label, self.server_encodings_label,
+                   xoptions=FILL|EXPAND, yoptions=FILL|EXPAND)
         self.client_speaker_codecs_label = slabel()
         self.client_speaker_codecs_label.set_line_wrap(True)
         self.server_speaker_codecs_label = slabel()
         self.server_speaker_codecs_label.set_line_wrap(True)
-        tb.new_row("Speaker Codecs", self.client_speaker_codecs_label, self.server_speaker_codecs_label, xoptions=FILL|EXPAND, yoptions=FILL|EXPAND)
+        tb.new_row("Speaker Codecs",
+                   self.client_speaker_codecs_label, self.server_speaker_codecs_label,
+                   xoptions=FILL|EXPAND, yoptions=FILL|EXPAND)
         self.client_microphone_codecs_label = slabel()
         self.client_microphone_codecs_label.set_line_wrap(True)
         self.server_microphone_codecs_label = slabel()
         self.server_microphone_codecs_label.set_line_wrap(True)
-        tb.new_row("Microphone Codecs", self.client_microphone_codecs_label, self.server_microphone_codecs_label, xoptions=FILL|EXPAND, yoptions=FILL|EXPAND)
+        tb.new_row("Microphone Codecs",
+                   self.client_microphone_codecs_label, self.server_microphone_codecs_label,
+                   xoptions=FILL|EXPAND, yoptions=FILL|EXPAND)
         self.client_packet_encoders_label = slabel()
         self.client_packet_encoders_label.set_line_wrap(True)
         self.server_packet_encoders_label = slabel()
         self.server_packet_encoders_label.set_line_wrap(True)
-        tb.new_row("Packet Encoders", self.client_packet_encoders_label, self.server_packet_encoders_label, xoptions=FILL|EXPAND, yoptions=FILL|EXPAND)
+        tb.new_row("Packet Encoders",
+                   self.client_packet_encoders_label, self.server_packet_encoders_label,
+                   xoptions=FILL|EXPAND, yoptions=FILL|EXPAND)
         self.client_packet_compressors_label = slabel()
         self.server_packet_compressors_label = slabel()
-        tb.new_row("Packet Compressors", self.client_packet_compressors_label, self.server_packet_compressors_label, xoptions=FILL|EXPAND, yoptions=FILL|EXPAND)
+        tb.new_row("Packet Compressors",
+                   self.client_packet_compressors_label, self.server_packet_compressors_label,
+                   xoptions=FILL|EXPAND, yoptions=FILL|EXPAND)
 
         # Connection Table:
-        tb, _ = self.table_tab("connect.png", "Connection", self.populate_connection)
+        tb = self.table_tab("connect.png", "Connection", self.populate_connection)[0]
         if self.connection:
             tb.new_row("Server Endpoint", slabel(self.connection.target))
         if mixin_features.display and self.client.server_display:
@@ -364,24 +378,36 @@ class SessionInfo(gtk.Window):
         tb.add_row(slabel("Server Latency (ms)", "The time it takes for the server to respond to pings"),
                    *self.server_latency_labels)
         self.client_latency_labels = maths_labels()
-        tb.add_row(slabel("Client Latency (ms)", "The time it takes for the client to respond to pings, as measured by the server"),
+        tb.add_row(slabel("Client Latency (ms)",
+                          "The time it takes for the client to respond to pings, as measured by the server"),
                    *self.client_latency_labels)
         if mixin_features.windows and self.client.windows_enabled:
             self.batch_labels = maths_labels()
-            tb.add_row(slabel("Batch Delay (MPixels / ms)", "How long the server waits for new screen updates to accumulate before processing them"),
+            tb.add_row(slabel("Batch Delay (MPixels / ms)",
+                              "How long the server waits for new screen updates to accumulate before processing them"),
                        *self.batch_labels)
             self.damage_labels = maths_labels()
-            tb.add_row(slabel("Damage Latency (ms)", "The time it takes to compress a frame and pass it to the OS network layer"),
+            tb.add_row(slabel("Damage Latency (ms)",
+                              "The time it takes to compress a frame and pass it to the OS network layer"),
                        *self.damage_labels)
             self.quality_labels = maths_labels()
-            tb.add_row(slabel("Encoding Quality (pct)", "Automatic picture quality, average for all the windows"), *self.quality_labels)
+            tb.add_row(slabel("Encoding Quality (pct)",
+                              "Automatic picture quality, average for all the windows"),
+                              *self.quality_labels)
             self.speed_labels = maths_labels()
-            tb.add_row(slabel("Encoding Speed (pct)", "Automatic picture encoding speed (bandwidth vs CPU usage), average for all the windows"), *self.speed_labels)
+            tb.add_row(slabel("Encoding Speed (pct)",
+                              "Automatic picture encoding speed (bandwidth vs CPU usage), average for all the windows"),
+                              *self.speed_labels)
 
             self.decoding_labels = maths_labels()
-            tb.add_row(slabel("Decoding Latency (ms)", "How long it takes the client to decode a screen update"), *self.decoding_labels)
+            tb.add_row(slabel("Decoding Latency (ms)",
+                              "How long it takes the client to decode a screen update"),
+                              *self.decoding_labels)
             self.regions_per_second_labels = maths_labels()
-            tb.add_row(slabel("Regions/s", "The number of screen updates per second (includes both partial and full screen updates)"), *self.regions_per_second_labels)
+            tb.add_row(slabel("Regions/s",
+                              "The number of screen updates per second"
+                              +" (includes both partial and full screen updates)"),
+                              *self.regions_per_second_labels)
             self.regions_sizes_labels = maths_labels()
             tb.add_row(slabel("Pixels/region", "The number of pixels per screen update"), *self.regions_sizes_labels)
             self.pixels_per_second_labels = maths_labels()
@@ -416,20 +442,18 @@ class SessionInfo(gtk.Window):
             self.encoder_info_box = gtk.HBox(spacing=4)
             etb.new_row("Window Encoders", self.encoder_info_box)
 
-        if not is_gtk3():
-            #needs porting to cairo...
-            self.graph_box = gtk.VBox(False, 10)
-            self.add_tab("statistics.png", "Graphs", self.populate_graphs, self.graph_box)
-            bandwidth_label = "Bandwidth used"
-            if SHOW_PIXEL_STATS:
-                bandwidth_label += ",\nand number of pixels rendered"
-            self.bandwidth_graph = self.add_graph_button(bandwidth_label, self.save_graphs)
-            self.latency_graph = self.add_graph_button(None, self.save_graphs)
-            if SHOW_SOUND_STATS:
-                self.sound_queue_graph = self.add_graph_button(None, self.save_graphs)
-            else:
-                self.sound_queue_graph = None
-            self.connect("realize", self.populate_graphs)
+        self.graph_box = gtk.VBox(False, 10)
+        self.add_tab("statistics.png", "Graphs", self.populate_graphs, self.graph_box)
+        bandwidth_label = "Bandwidth used"
+        if SHOW_PIXEL_STATS:
+            bandwidth_label += ",\nand number of pixels rendered"
+        self.bandwidth_graph = self.add_graph_button(bandwidth_label, self.save_graph)
+        self.latency_graph = self.add_graph_button(None, self.save_graph)
+        if SHOW_SOUND_STATS:
+            self.sound_queue_graph = self.add_graph_button(None, self.save_graph)
+        else:
+            self.sound_queue_graph = None
+        self.connect("realize", self.populate_graphs)
         self.pixel_in_data = deque(maxlen=N_SAMPLES+4)
         self.net_in_bytecount = deque(maxlen=N_SAMPLES+4)
         self.net_out_bytecount = deque(maxlen=N_SAMPLES+4)
@@ -509,11 +533,12 @@ class SessionInfo(gtk.Window):
         #this is a generic way for keyboard shortcuts or remote commands
         #to pass parameters to us
         log("set_args%s", args)
-        if len(args)==0:
+        if not args:
             return
         #at the moment, we only handle the tab name as argument:
         tab_name = args[0]
         if tab_name.lower()!="help":
+            title = ""
             for title, _, table, _ in self.tabs:
                 if title.lower()==tab_name.lower():
                     self.show_tab(table)
@@ -522,23 +547,23 @@ class SessionInfo(gtk.Window):
         log.warn("The options for tab names are: %s)", [x[0] for x in self.tabs])
 
     def populate_all(self):
-        for _, _, _, p_cb in self.tabs:
+        for tab in self.tabs:
+            p_cb = tab[3]
             if p_cb:
                 p_cb()
-
-    def scaled_image(self, pixbuf, icon_size=None):
-        if not icon_size:
-            icon_size = self.get_icon_size()
-        return scaled_image(pixbuf, icon_size, icon_size)
 
     def add_graph_button(self, tooltip, click_cb):
         button = gtk.EventBox()
         def set_cursor(widget):
-            widget.window.set_cursor(gdk.Cursor(gdk.BASED_ARROW_DOWN))
+            if is_gtk3():
+                cursor = gdk.Cursor.new(gdk.CursorType.BASED_ARROW_DOWN)
+            else:
+                cursor = gdk.Cursor(gdk.BASED_ARROW_DOWN)
+            widget.get_window().set_cursor(cursor)
         button.connect("realize", set_cursor)
         graph = gtk.Image()
         graph.set_size_request(0, 0)
-        button.connect("button_press_event", click_cb)
+        button.connect("button_press_event", click_cb, graph)
         button.add(graph)
         if tooltip:
             graph.set_tooltip_text(tooltip)
@@ -597,7 +622,7 @@ class SessionInfo(gtk.Window):
             recs = {}
             src_list = list(src)
             now = int(monotonic_time())
-            while len(src_list)>0 and len(recs)<size:
+            while src_list and len(recs)<size:
                 when, value = src_list.pop()
                 if when>=(now-1):           #ignore last second
                     continue
@@ -612,7 +637,7 @@ class SessionInfo(gtk.Window):
                 i = now-2-x
                 if i not in recs:
                     recs[i] = None
-            return [recs.get(x) for x in sorted(recs.keys())]
+            return tuple(recs.get(x) for x in sorted(recs.keys()))
         self.server_latency = get_ping_latency_records(self.client.server_ping_latency)
         self.client_latency = get_ping_latency_records(self.client.client_ping_latency)
         if self.client.server_last_info:
@@ -628,24 +653,29 @@ class SessionInfo(gtk.Window):
                     l.append(v)
             addavg(self.avg_batch_delay, "batch", "delay")
             addavg(self.avg_damage_out_latency, "damage", "out_latency")
-            if len(self.client.server_ping_latency)>0 and len(self.client.client_ping_latency)>0:
-                spl = [1000.0*x for _,x in tuple(self.client.server_ping_latency)]
-                cpl = [1000.0*x for _,x in tuple(self.client.client_ping_latency)]
-                self.avg_ping_latency.append(sum(spl+cpl)/len(spl+cpl))
-            if mixin_features.windows and len(self.client.pixel_counter)>0:
+            spl = tuple(1000.0*x[1] for x in self.client.server_ping_latency)
+            cpl = tuple(1000.0*x[1] for x in self.client.client_ping_latency)
+            if spl and cpl:
+                self.avg_ping_latency.append(iround(sum(spl+cpl)/len(spl+cpl)))
+            pc = tuple(self.client.pixel_counter)
+            if mixin_features.windows and pc:
                 tsize = 0
                 ttime = 0
-                for start_time, end_time, size in self.client.pixel_counter:
+                for start_time, end_time, size in pc:
                     ttime += 1000.0 * (end_time-start_time) * size
                     tsize += size
-                self.avg_decoding_latency.append(int(ttime/tsize))
+                self.avg_decoding_latency.append(iround(ttime/tsize))
         #totals: ping latency is halved since we only care about sending, not sending+receiving
-        els  = [(self.avg_batch_delay, 1), (self.avg_damage_out_latency, 1),
-                (self.avg_ping_latency, 2), (self.avg_decoding_latency, 1)]
-        if len([x for x, _ in els if len(x)>0])==len(els):
-            totals = [x[-1]/r for x, r in els]
+        els  = (
+            (tuple(self.avg_batch_delay), 1),
+            (tuple(self.avg_damage_out_latency), 1),
+            (tuple(self.avg_ping_latency), 2),
+            (tuple(self.avg_decoding_latency), 1),
+            )
+        if all(x[0] for x in els):
+            totals = tuple(x[-1]/r for x, r in els)
             log("frame totals=%s", totals)
-            self.avg_total.append(sum(totals))
+            self.avg_total.append(iround(sum(totals)))
         return not self.is_closed
 
     def init_counters(self):
@@ -670,7 +700,10 @@ class SessionInfo(gtk.Window):
 
     def show_opengl_state(self):
         if self.client.opengl_enabled:
-            glinfo = "%s / %s" % (self.client.opengl_props.get("vendor", ""), self.client.opengl_props.get("renderer", ""))
+            glinfo = "%s / %s" % (
+                self.client.opengl_props.get("vendor", ""),
+                self.client.opengl_props.get("renderer", ""),
+                )
             display_mode = self.client.opengl_props.get("display_mode", [])
             bit_depth = self.client.opengl_props.get("depth", 0)
             info = []
@@ -738,7 +771,7 @@ class SessionInfo(gtk.Window):
 
     def populate_codecs(self):
         #clamp the large labels so they will overflow vertically:
-        w, _ = get_preferred_size(self.tab_box)
+        w = get_preferred_size(self.tab_box)[0]
         lw = max(200, int(w//2.5))
         self.client_encodings_label.set_size_request(lw, -1)
         self.server_encodings_label.set_size_request(lw, -1)
@@ -763,7 +796,7 @@ class SessionInfo(gtk.Window):
             v = list(v)
             try:
                 v.remove("rgb")
-            except:
+            except ValueError:
                 pass
             return csv(sorted(v))
         se = scaps.strlistget("encodings.core", scaps.strlistget("encodings"))
@@ -792,7 +825,7 @@ class SessionInfo(gtk.Window):
             delta = datetime.timedelta(seconds=(int(time.time())-int(from_time)))
             label.set_text(str(delta))
         if self.client.server_load:
-            self.server_load_label.set_text("  ".join([str(x/1000.0) for x in self.client.server_load]))
+            self.server_load_label.set_text("  ".join("%.1f" % (x/1000.0) for x in self.client.server_load))
         if self.client.server_start_time>0:
             settimedeltastr(self.session_started_label, self.client.server_start_time)
         else:
@@ -920,7 +953,7 @@ class SessionInfo(gtk.Window):
                 return ""
             try:
                 return op(values)
-            except:
+            except (TypeError, ValueError):
                 log("%s(%s)", op, values, exc_info=True)
                 return ""
         return getv("cur", avg), getv("min", min), getv("avg", avg), getv("90p", avg), getv("max", max)
@@ -933,7 +966,8 @@ class SessionInfo(gtk.Window):
         self.last_populate_statistics = monotonic_time()
         self.client.send_info_request()
         def setall(labels, values):
-            assert len(labels)==len(values), "%s labels and %s values (%s vs %s)" % (len(labels), len(values), labels, values)
+            assert len(labels)==len(values), "%s labels and %s values (%s vs %s)" % (
+                len(labels), len(values), labels, values)
             for i, l in enumerate(labels):
                 l.set_text(str(values[i]))
         def setlabels(labels, values, rounding=int):
@@ -954,10 +988,10 @@ class SessionInfo(gtk.Window):
             setall(labels, rounded_values)
 
         if self.client.server_ping_latency:
-            spl = [1000.0*x for _,x in tuple(self.client.server_ping_latency)]
+            spl = tuple(int(1000*x[1]) for x in tuple(self.client.server_ping_latency))
             setlabels(self.server_latency_labels, spl)
         if self.client.client_ping_latency:
-            cpl = [1000.0*x for _,x in tuple(self.client.client_ping_latency)]
+            cpl = tuple(int(1000*x[1]) for x in tuple(self.client.client_ping_latency))
             setlabels(self.client_latency_labels, cpl)
         if mixin_features.windows and self.client.windows_enabled:
             setall(self.batch_labels, self.values_from_info("batch_delay", "batch.delay"))
@@ -1038,42 +1072,30 @@ class SessionInfo(gtk.Window):
                         window_encoder_stats[wid] = encoder_stats
                 except:
                     log.error("Error: cannot lookup window dict", exc_info=True)
-            return window_encoder_stats
-        #fallback code, we are interested in string data like:
-        #window[1].encoder=x264
-        #window[1].encoder.frames=1
-        #window[1].encoder.fps=25
-        for k,v in self.client.server_last_info.items():
-            k = bytestostr(k)
-            if not k.startswith("window["):
-                continue
-            pos = k.find("].encoder")
-            if pos<=0:
-                continue
-            try:
-                wid_str = k[len("window["):pos]     #ie: "1"
-                wid = int(wid_str)
-            except:
-                #wid_str may be invalid, ie:
-                #window[1].pipeline_option[1].encoder=video_spec(xpra.codecs.enc_x264.encoder.Encoder)
-                # -> wid_str= "1].pipeline_option[1"
-                continue
-            ekey = k[(pos+len("].encoder")):]   #ie: "" or ".frames"
-            if ekey.startswith("."):
-                ekey = ekey[1:]
-            if ekey=="build_config":
-                continue
-            window_encoder_stats.setdefault(wid, {})[ekey] = v
         return window_encoder_stats
 
+
+    def set_graph_surface(self, graph, surface):
+        w = surface.get_width()
+        h = surface.get_height()
+        graph.set_size_request(w, h)
+        graph.surface = surface
+        if is_gtk3():
+            graph.set_from_surface(surface)
+        else:
+            pixmap = gdk.Pixmap(None, w, h, 24)
+            context = pixmap.cairo_create()
+            context.set_source_surface(surface)
+            context.paint()
+            graph.set_from_pixmap(pixmap, None)
 
     def populate_graphs(self, *_args):
         #older servers have 'batch' at top level,
         #newer servers store it under client
         self.client.send_info_request("network", "damage", "state", "batch", "client")
         box = self.tab_box
-        _, h = get_preferred_size(box)
-        _, bh = get_preferred_size(self.tab_button_box)
+        h = get_preferred_size(box)[1]
+        bh = get_preferred_size(self.tab_button_box)[1]
         if h<=0:
             return True
         start_x_offset = min(1.0, (monotonic_time()-self.last_populate_time)*0.95)
@@ -1091,11 +1113,10 @@ class SessionInfo(gtk.Window):
             def unit(scale):
                 if scale==1:
                     return ""
-                else:
-                    unit, value = to_std_unit(scale)
-                    if value==1:
-                        return str(unit)
-                    return "x%s%s" % (int(value), unit)
+                unit, value = to_std_unit(scale)
+                if value==1:
+                    return str(unit)
+                return "x%s%s" % (int(value), unit)
             net_in_scale, net_in_data = values_to_diff_scaled_values(tuple(self.net_in_bytecount)[1:N_SAMPLES+3], scale_unit=1000, min_scaled_value=50)
             net_out_scale, net_out_data = values_to_diff_scaled_values(tuple(self.net_out_bytecount)[1:N_SAMPLES+3], scale_unit=1000, min_scaled_value=50)
             if SHOW_RECV:
@@ -1118,12 +1139,11 @@ class SessionInfo(gtk.Window):
             labels.append("Mic %sb/s" % unit(sound_out_scale))
 
         if labels and datasets:
-            pixmap = make_graph_pixmap(datasets, labels=labels,
-                                       width=w, height=h,
-                                       title="Bandwidth", min_y_scale=10, rounding=10,
-                                       start_x_offset=start_x_offset)
-            self.bandwidth_graph.set_size_request(W, H)
-            self.bandwidth_graph.set_from_pixmap(pixmap, None)
+            surface = make_graph_imagesurface(datasets, labels=labels,
+                                              width=w, height=h,
+                                              title="Bandwidth", min_y_scale=10, rounding=10,
+                                              start_x_offset=start_x_offset)
+            self.set_graph_surface(self.bandwidth_graph, surface)
 
         def norm_lists(items, size=N_SAMPLES):
             #ensures we always have exactly 20 values,
@@ -1143,42 +1163,45 @@ class SessionInfo(gtk.Window):
             return values, labels
 
         #latency graph:
-        latency_values, latency_labels = norm_lists((
-                                (self.avg_ping_latency, "network"),
-                                (self.avg_batch_delay, "batch delay"),
-                                (self.avg_damage_out_latency, "encode&send"),
-                                (self.avg_decoding_latency, "decoding"),
-                                (self.avg_total, "frame total"),
-                                ))
-        pixmap = make_graph_pixmap(latency_values, labels=latency_labels,
-                                    width=w, height=h,
-                                    title="Latency (ms)", min_y_scale=10, rounding=25,
-                                    start_x_offset=start_x_offset)
-        self.latency_graph.set_size_request(W, H)
-        self.latency_graph.set_from_pixmap(pixmap, None)
+        latency_values, latency_labels = norm_lists(
+            (
+                (self.avg_ping_latency,         "network"),
+                (self.avg_batch_delay,          "batch delay"),
+                (self.avg_damage_out_latency,   "encode&send"),
+                (self.avg_decoding_latency,     "decoding"),
+                (self.avg_total,                "frame total"),
+            ))
+        #debug:
+        #for i, v in enumerate(latency_values):
+        #    log.warn("%20s = %s", latency_labels[i], v)
+        surface = make_graph_imagesurface(latency_values, labels=latency_labels,
+                                          width=w, height=h,
+                                          title="Latency (ms)", min_y_scale=10, rounding=25,
+                                          start_x_offset=start_x_offset)
+        self.set_graph_surface(self.latency_graph, surface)
 
         if mixin_features.audio and SHOW_SOUND_STATS and self.client.sound_sink:
             #sound queue graph:
-            queue_values, queue_labels = norm_lists((
-                                 (self.sound_out_queue_max, "Max"),
-                                 (self.sound_out_queue_cur, "Level"),
-                                 (self.sound_out_queue_min, "Min"),
-                                 ), N_SAMPLES*10)
-            pixmap = make_graph_pixmap(queue_values, labels=queue_labels,
-                                        width=w, height=h,
-                                        title="Sound Buffer (ms)", min_y_scale=10, rounding=25,
-                                        start_x_offset=start_x_offset)
-            self.sound_queue_graph.set_size_request(W, H)
-            self.sound_queue_graph.set_from_pixmap(pixmap, None)
+            queue_values, queue_labels = norm_lists(
+                (
+                    (self.sound_out_queue_max, "Max"),
+                    (self.sound_out_queue_cur, "Level"),
+                    (self.sound_out_queue_min, "Min"),
+                    ), N_SAMPLES*10)
+            surface = make_graph_imagesurface(queue_values, labels=queue_labels,
+                                              width=w, height=h,
+                                              title="Sound Buffer (ms)", min_y_scale=10, rounding=25,
+                                              start_x_offset=start_x_offset)
+            self.set_graph_surface(self.sound_queue_graph, surface)
         return True
 
-    def save_graphs(self, *args):
-        log("save_graph(%s)", args)
-        chooser = gtk.FileChooserDialog("Save graphs as a PNG image",
-                                    parent=self, action=gtk.FILE_CHOOSER_ACTION_SAVE,
-                                    buttons=(gtk.STOCK_CANCEL, gtk.RESPONSE_CANCEL, gtk.STOCK_SAVE, gtk.RESPONSE_OK))
+    def save_graph(self, _ebox, btn, graph):
+        log("save_graph%s", (btn, graph))
+        chooser = gtk.FileChooserDialog("Save graph as a PNG image",
+                                    parent=self, action=FILE_CHOOSER_ACTION_SAVE,
+                                    buttons=(gtk.STOCK_CANCEL, RESPONSE_CANCEL, gtk.STOCK_SAVE, RESPONSE_OK))
         chooser.set_select_multiple(False)
-        chooser.set_default_response(gtk.RESPONSE_OK)
+        chooser.set_default_response(RESPONSE_OK)
         file_filter = gtk.FileFilter()
         file_filter.set_name("PNG")
         file_filter.add_pattern("*.png")
@@ -1187,28 +1210,14 @@ class SessionInfo(gtk.Window):
         filenames = chooser.get_filenames()
         chooser.hide()
         chooser.destroy()
-        if response == gtk.RESPONSE_OK:
+        if response == RESPONSE_OK:
             if len(filenames)==1:
                 filename = filenames[0]
-                pixmaps = tuple(image.get_pixmap()[0] for image in
-                                (self.bandwidth_graph, self.latency_graph, self.sound_queue_graph))
-                log("saving pixmaps %s and %s to %s", pixmaps, filename)
-                w, h = 0, 0
-                for pixmap in pixmaps:
-                    if pixmap:
-                        pw, ph = pixmap.get_size()
-                        w = max(w, pw)
-                        h += ph
-                pixbuf = gdk.Pixbuf(gdk.COLORSPACE_RGB, False, 8, w, h)
-                pixbuf.fill(0x00000000)
-                x, y = 0, 0
-                for pixmap in pixmaps:
-                    if pixmap:
-                        pw, ph = pixmap.get_size()
-                        pixbuf = gdk.Pixbuf.get_from_drawable(pixbuf, pixmap, pixmap.get_colormap(), 0, 0, x, y, pw, ph)
-                        y += ph
-                pixbuf.save(filename, "png")
-        elif response in (gtk.RESPONSE_CANCEL, gtk.RESPONSE_CLOSE, gtk.RESPONSE_DELETE_EVENT):
+                surface = graph.surface
+                log("saving surface %s to %s", surface, filename)
+                with open(filename, "wb") as f:
+                    surface.write_to_png(f)
+        elif response in (RESPONSE_CANCEL, RESPONSE_CLOSE, RESPONSE_DELETE_EVENT):
             log("closed/cancelled")
         else:
             log.warn("unknown chooser response: %d" % response)

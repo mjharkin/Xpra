@@ -638,9 +638,15 @@ class WindowClient(StubClientMixin):
                 self, width, height, coding, len(data), ICON_SHRINKAGE, ICON_OVERLAY)
         if coding=="default":
             img = self.overlay_image
-        elif coding == "premult_argb32":            #we usually cannot do in-place and this is not performance critical
-            from xpra.codecs.argb.argb import unpremultiply_argb    #@UnresolvedImport
-            data = unpremultiply_argb(data)
+        elif coding == "BGRA":
+            rowstride = width*4
+            img = Image.frombytes("RGBA", (width,height), memoryview_to_bytes(data), "raw", "BGRA", rowstride, 1)
+            has_alpha = True
+        elif coding in ("BGRA", "premult_argb32"):
+            if coding == "premult_argb32":
+                #we usually cannot do in-place and this is not performance critical
+                from xpra.codecs.argb.argb import unpremultiply_argb    #@UnresolvedImport
+                data = unpremultiply_argb(data)
             rowstride = width*4
             img = Image.frombytes("RGBA", (width,height), memoryview_to_bytes(data), "raw", "BGRA", rowstride, 1)
             has_alpha = True
@@ -651,6 +657,11 @@ class WindowClient(StubClientMixin):
             has_alpha = img.mode=="RGBA"
             rowstride = width * (3+int(has_alpha))
         icon = img
+        save_time = int(time())
+        if SAVE_WINDOW_ICONS:
+            filename = "client-window-%i-icon-%i.png" % (wid, save_time)
+            icon.save(filename, "png")
+            iconlog("client window icon saved to %s", filename)
         if self.overlay_image and self.overlay_image!=img:
             if 0<ICON_SHRINKAGE<100:
                 #paste the application icon in the top-left corner,
@@ -660,18 +671,26 @@ class WindowClient(StubClientMixin):
                 icon_resized = icon.resize((shrunk_width, shrunk_height), Image.ANTIALIAS)
                 icon = Image.new("RGBA", (width, height))
                 icon.paste(icon_resized, (0, 0, shrunk_width, shrunk_height))
+                if SAVE_WINDOW_ICONS:
+                    filename = "client-window-%i-icon-shrunk-%i.png" % (wid, save_time)
+                    icon.save(filename, "png")
+                    iconlog("client shrunk window icon saved to %s", filename)
             assert 0<ICON_OVERLAY<=100
             overlay_width = max(1, width*ICON_OVERLAY//100)
             overlay_height = max(1, height*ICON_OVERLAY//100)
             xpra_resized = self.overlay_image.resize((overlay_width, overlay_height), Image.ANTIALIAS)
             xpra_corner = Image.new("RGBA", (width, height))
             xpra_corner.paste(xpra_resized, (width-overlay_width, height-overlay_height, width, height))
+            if SAVE_WINDOW_ICONS:
+                filename = "client-window-%i-icon-xpracorner-%i.png" % (wid, save_time)
+                xpra_corner.save(filename, "png")
+                iconlog("client xpracorner window icon saved to %s", filename)
             composite = Image.alpha_composite(icon, xpra_corner)
             icon = composite
-        if SAVE_WINDOW_ICONS:
-            filename = "client-window-%i-icon-%i.png" % (wid, int(time()))
-            icon.save(filename, "png")
-            iconlog("client window icon saved to %s", filename)
+            if SAVE_WINDOW_ICONS:
+                filename = "client-window-%i-icon-composited-%i.png" % (wid, save_time)
+                icon.save(filename, "png")
+                iconlog("client composited window icon saved to %s", filename)
         return icon
 
 
@@ -813,7 +832,7 @@ class WindowClient(StubClientMixin):
             return False
         if cb_condition==glib.IO_IN:
             try:
-                signame = proc.stdout.readline().strip("\n\r")
+                signame = bytestostr(proc.stdout.readline()).strip("\n\r")
                 log("signal_watcher_event: %s", signame)
                 if not signame:
                     pass
@@ -822,7 +841,7 @@ class WindowClient(StubClientMixin):
                 else:
                     self.send("window-signal", wid, signame)
             except Exception as e:
-                log("signal_watcher_event%s", (fd, cb_condition, proc, pid, wid), exc_info=True)
+                log.error("signal_watcher_event%s", (fd, cb_condition, proc, pid, wid), exc_info=True)
                 log.error("Error: processing signal watcher output for pid %i of window %i", pid, wid)
                 log.error(" %s", e)
         if proc.poll():
@@ -847,6 +866,15 @@ class WindowClient(StubClientMixin):
         log("deiconify_windows()")
         for window in self._id_to_window.values():
             window.deiconify()
+
+
+    def resize_windows(self, new_size_fn):
+        for window in self._id_to_window.values():
+            if window:
+                ww, wh = window._size
+                nw, nh = new_size_fn(ww, wh)
+                window.resize(nw, nh)
+        self.send_refresh_all()
 
 
     def reinit_window_icons(self):
@@ -916,11 +944,11 @@ class WindowClient(StubClientMixin):
                 self.send("unmap-window", wid)
             try:
                 del self._id_to_window[wid]
-            except:
+            except KeyError:
                 pass
             try:
                 del self._window_to_id[window]
-            except:
+            except KeyError:
                 pass
             #create the new window,
             #which should honour the new state of the opengl_enabled flag if that's what we changed,
@@ -1395,6 +1423,12 @@ class WindowClient(StubClientMixin):
 
     ######################################################################
     # screen scaling:
+    def fsx(self, v):
+        """ convert X coordinate from server to client """
+        return v
+    def fsy(self, v):
+        """ convert Y coordinate from server to client """
+        return v
     def sx(self, v):
         """ convert X coordinate from server to client """
         return iround(v)

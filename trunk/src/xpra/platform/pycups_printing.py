@@ -1,20 +1,20 @@
 #!/usr/bin/env python
 # This file is part of Xpra.
-# Copyright (C) 2014-2016 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2014-2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 #default implementation using pycups
 import sys
 import os
-import cups
 import time
-import subprocess
+from subprocess import PIPE, Popen
 import shlex
 from threading import Lock
+import cups
 
 from xpra.os_util import OSX, PYTHON3
-from xpra.util import engs, envint, envbool
+from xpra.util import engs, envint, envbool, parse_simple_dict
 from xpra.log import Logger
 
 log = Logger("printing")
@@ -48,30 +48,26 @@ PRINTER_PREFIX = os.environ.get("XPRA_PRINTER_PREFIX", PRINTER_PREFIX)
 DEFAULT_CUPS_DBUS = int(not OSX)
 CUPS_DBUS = envint("XPRA_CUPS_DBUS", DEFAULT_CUPS_DBUS)
 POLLING_DELAY = envint("XPRA_CUPS_POLLING_DELAY", 60)
-log("pycups settings: DEFAULT_CUPS_DBUS=%s, CUPS_DBUS=%s, POLLING_DELAY=%s", DEFAULT_CUPS_DBUS, CUPS_DBUS, POLLING_DELAY)
-log("pycups settings: PRINTER_PREFIX=%s, ADD_LOCAL_PRINTERS=%s", PRINTER_PREFIX, ADD_LOCAL_PRINTERS)
+log("pycups settings: DEFAULT_CUPS_DBUS=%s, CUPS_DBUS=%s, POLLING_DELAY=%s",
+    DEFAULT_CUPS_DBUS, CUPS_DBUS, POLLING_DELAY)
+log("pycups settings: PRINTER_PREFIX=%s, ADD_LOCAL_PRINTERS=%s",
+    PRINTER_PREFIX, ADD_LOCAL_PRINTERS)
 log("pycups settings: FORWARDER_TMPDIR=%s", FORWARDER_TMPDIR)
 log("pycups settings: SKIPPED_PRINTERS=%s", SKIPPED_PRINTERS)
 
-MIMETYPE_TO_PRINTER = {"application/postscript" : "Generic PostScript Printer",
-                       "application/pdf"        : "Generic PDF Printer"}
-MIMETYPE_TO_PPD = {"application/postscript"     : "CUPS-PDF.ppd",
-                   "application/pdf"            : "Generic-PDF_Printer-PDF.ppd"}
+MIMETYPE_TO_PRINTER = {
+    "application/postscript"    : "Generic PostScript Printer",
+    "application/pdf"           : "Generic PDF Printer",
+    }
+MIMETYPE_TO_PPD = {
+    "application/postscript"    : "CUPS-PDF.ppd",
+    "application/pdf"           : "Generic-PDF_Printer-PDF.ppd",
+    }
 
 
-DEFAULT_CUPS_OPTIONS = {}
 dco = os.environ.get("XPRA_DEFAULT_CUPS_OPTIONS", "fit-to-page=True")
-if dco:
-    for opt in dco.split(","):
-        opt = opt.strip(" ")
-        parts = opt.split("=", 1)
-        if len(parts)!=2:
-            log.warn("Warning: invalid cups option: '%s'", opt)
-            continue
-        #is it a boolean?
-        k,v = parts
-        DEFAULT_CUPS_OPTIONS[k] = v
-    log("DEFAULT_CUPS_OPTIONS=%s", DEFAULT_CUPS_OPTIONS)
+DEFAULT_CUPS_OPTIONS = parse_simple_dict(dco)
+log("DEFAULT_CUPS_OPTIONS=%s", DEFAULT_CUPS_OPTIONS)
 
 
 #allows us to inject the lpadmin and lpinfo commands from the config file
@@ -114,7 +110,7 @@ def get_lpinfo_drv(make_and_model):
         os.setsid()
     log("get_lpinfo_drv(%s) command=%s", make_and_model, command)
     try:
-        proc = subprocess.Popen(command, stdin=None, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False, close_fds=True, preexec_fn=preexec)
+        proc = Popen(command, stdout=PIPE, stderr=PIPE, close_fds=True, preexec_fn=preexec)
     except Exception as e:
         log("get_lp_info_drv(%s) lpinfo command %s failed", make_and_model, command, exc_info=True)
         log.error("Error: lpinfo command failed to run")
@@ -246,7 +242,7 @@ def exec_lpadmin(args, success_cb=None):
     def preexec():
         os.setsid()
     log("exec_lpadmin(%s) command=%s", args, command)
-    proc = subprocess.Popen(command, stdin=None, stdout=None, stderr=None, shell=False, close_fds=True, preexec_fn=preexec)
+    proc = Popen(command, close_fds=True, preexec_fn=preexec)
     #use the global child reaper to make sure this doesn't end up as a zombie
     from xpra.child_reaper import getChildReaper
     cr = getChildReaper()
@@ -276,7 +272,11 @@ def add_printer(name, options, info, location, attributes={}, success_cb=None):
     log("add_printer%s", (name, options, info, location, attributes, success_cb))
     mimetypes = options.get("mimetypes", [DEFAULT_MIMETYPE])
     if not mimetypes:
-        log.error("Error: no mimetypes specified for printer %s", name)
+        log.error("Error: no mimetypes specified for printer '%s'", name)
+        return
+    xpra_printer_name = PRINTER_PREFIX+sanitize_name(name)
+    if xpra_printer_name in get_all_printers():
+        log.warn("Warning: not adding duplicate printer '%s'", name)
         return
     #find a matching definition:
     mimetype, printer_def = None, None
@@ -293,12 +293,12 @@ def add_printer(name, options, info, location, attributes={}, success_cb=None):
         log.error("Error: cannot add printer '%s':", name)
         log.error(" the printing system does not support %s", " or ".join(mimetypes))
         return
-    if PYTHON3:
-        from urrlib.parse import urlencode      #@UnresolvedImport @UnusedImport
-    else:
-        from urllib import urlencode            #@Reimport
+    try:
+        from urllib.parse import urlencode      #@UnresolvedImport @UnusedImport
+    except ImportError:
+        from urllib import urlencode            #@UnresolvedImport @Reimport
     command = [
-               "-p", PRINTER_PREFIX+sanitize_name(name),
+               "-p", xpra_printer_name,
                "-v", FORWARDER_BACKEND+":"+FORWARDER_TMPDIR+"?"+urlencode(attributes),
                "-D", info,
                "-L", location,
@@ -489,18 +489,12 @@ def get_info():
 
 
 def main():
-    if "-v" in sys.argv or "--verbose" in sys.argv:
-        from xpra.log import add_debug_category, enable_debug_for
-        add_debug_category("printing")
-        enable_debug_for("printing")
-        try:
-            sys.argv.remove("-v")
-        except:
-            pass
-        try:
-            sys.argv.remove("--verbose")
-        except:
-            pass
+    for arg in list(sys.argv):
+        if arg in ("-v", "--verbose"):
+            from xpra.log import add_debug_category, enable_debug_for
+            add_debug_category("printing")
+            enable_debug_for("printing")
+            sys.argv.remove(arg)
 
     from xpra.platform import program_context
     from xpra.log import enable_color

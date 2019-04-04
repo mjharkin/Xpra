@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 # This file is part of Xpra.
-# Copyright (C) 2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2018, 2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import sys
 
 from xpra.util import typedict, AdHocStruct
-from xpra.os_util import PYTHON3
+from xpra.os_util import PYTHON3, WIN32
 from xpra.log import Logger
 
 log = Logger("opengl", "paint")
@@ -59,15 +59,15 @@ def test_gl_client_window(gl_client_window_class, max_window_size=(1024, 1024), 
         noclient = AdHocStruct()
         def no_idle_add(fn, *args, **kwargs):
             fn(*args, **kwargs)
-        def no_timeout_add(*args, **kwargs):
+        def no_timeout_add(*_args, **_kwargs):
             raise Exception("timeout_add should not have been called")
-        def no_source_remove(*args, **kwargs):
+        def no_source_remove(*_args, **_kwargs):
             raise Exception("source_remove should not have been called")
         def no_scaling(*args):
             return args
-        def get_None(*args):
+        def get_None(*_args):
             return None
-        def noop(*args):
+        def noop(*_args):
             pass
         #we have to suspend idle_add to make this synchronous
         #we can do this because this method must be running in the UI thread already:
@@ -84,20 +84,25 @@ def test_gl_client_window(gl_client_window_class, max_window_size=(1024, 1024), 
         noclient._set_window_menu = None
         noclient._focused = None
         noclient.request_frame_extents = noop
+        #test with alpha, but not on win32
+        #because we can't do alpha on win32 with opengl
+        metadata = typedict({b"has-alpha" : not WIN32})
         window = gl_client_window_class(noclient, None, None, 2**32-1, -100, -100, w, h, w, h,
-                                        typedict({}), False, typedict({}),
+                                        metadata, False, typedict({}),
                                         border, max_window_size, default_cursor_data, pixel_depth)
-        window._backing.idle_add = no_idle_add
-        window._backing.timeout_add = no_timeout_add
-        window._backing.source_remove = no_source_remove
+        window_backing = window._backing
+        window_backing.idle_add = no_idle_add
+        window_backing.timeout_add = no_timeout_add
+        window_backing.source_remove = no_source_remove
         window.realize()
+        window_backing.paint_screen = True
         pixel_format = "BGRX"
         bpp = len(pixel_format)
         options = typedict({"pixel_format" : pixel_format})
         stride = bpp*w
         img_data = b"\0"*stride*h
         coding = "rgb32"
-        widget = window._backing._backing
+        widget = window_backing._backing
         widget.realize()
         def paint_callback(success, message):
             log("paint_callback(%s, %s)", success, message)
@@ -107,6 +112,13 @@ def test_gl_client_window(gl_client_window_class, max_window_size=(1024, 1024), 
                 })
         log("OpenGL: testing draw on %s widget %s with %s : %s", window, widget, coding, pixel_format)
         window.draw_region(0, 0, w, h, coding, img_data, stride, 1, options, [paint_callback])
+        #the paint code is actually synchronous here,
+        #so we can check the present_fbo() result:
+        if window_backing.last_present_fbo_error:
+            return {
+                "success" : False,
+                "message" : "failed to present FBO on screen: %s" % window_backing.last_present_fbo_error
+                }
     finally:
         if window:
             window.destroy()

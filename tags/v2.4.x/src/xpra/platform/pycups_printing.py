@@ -278,6 +278,10 @@ def add_printer(name, options, info, location, attributes={}, success_cb=None):
     if not mimetypes:
         log.error("Error: no mimetypes specified for printer %s", name)
         return
+    xpra_printer_name = PRINTER_PREFIX+sanitize_name(name)
+    if xpra_printer_name in get_all_printers():
+        log.warn("Warning: not adding duplicate printer '%s'", name)
+        return
     #find a matching definition:
     mimetype, printer_def = None, None
     defs = get_printer_definitions()
@@ -298,7 +302,7 @@ def add_printer(name, options, info, location, attributes={}, success_cb=None):
     else:
         from urllib import urlencode            #@Reimport
     command = [
-               "-p", PRINTER_PREFIX+sanitize_name(name),
+               "-p", xpra_printer_name,
                "-v", FORWARDER_BACKEND+":"+FORWARDER_TMPDIR+"?"+urlencode(attributes),
                "-D", info,
                "-L", location,

@@ -1,11 +1,11 @@
 # This file is part of Xpra.
 # Copyright (C) 2010 Nathaniel Smith <njs@pobox.com>
-# Copyright (C) 2011-2017 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2011-2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 #don't bother trying to forward system tray with Ubuntu's "unity":
-from xpra.os_util import is_unity
+from xpra.os_util import is_unity, is_Wayland
 
 SYSTEM_TRAY_SUPPORTED = not is_unity()
 
@@ -31,7 +31,15 @@ DEFAULT_ENV = [
              ]
 
 DEFAULT_SSH_CMD = "ssh"
-CLIPBOARDS=["CLIPBOARD", "PRIMARY", "SECONDARY"]
+
+if is_Wayland():
+    CLIPBOARD_NATIVE_CLASS = None
+else:
+    CLIPBOARD_NATIVE_CLASS = "xpra.x11.gtk_x11.clipboard.X11Clipboard"
+
+CLIPBOARDS=["CLIPBOARD", "PRIMARY"]
+if not is_Wayland():
+    CLIPBOARDS.append("SECONDARY")
 
 OPEN_COMMAND = ["/usr/bin/xdg-open"]
 

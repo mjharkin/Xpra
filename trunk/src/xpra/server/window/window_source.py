@@ -12,7 +12,7 @@ import threading
 from math import sqrt
 from collections import deque
 
-from xpra.os_util import memoryview_to_bytes, strtobytes, monotonic_time
+from xpra.os_util import memoryview_to_bytes, strtobytes, bytestostr, monotonic_time
 from xpra.util import envint, envbool, csv, typedict, first_time
 from xpra.server.window.windowicon_source import WindowIconSource
 from xpra.server.window.content_guesser import guess_content_type, get_content_type_properties
@@ -80,9 +80,17 @@ DAMAGE_STATISTICS = envbool("XPRA_DAMAGE_STATISTICS", False)
 HARDCODED_ENCODING = os.environ.get("XPRA_HARDCODED_ENCODING")
 
 INFINITY = float("inf")
-TRANSPARENCY_ENCODINGS = ("webp", "png", "rgb32")
-LOSSLESS_ENCODINGS = ("rgb", "png", "png/P", "png/L")
-REFRESH_ENCODINGS = ("webp", "png", "rgb24", "rgb32", "jpeg2000")
+def get_env_encodings(etype, valid_options=()):
+    v = os.environ.get("XPRA_%s_ENCODINGS" % etype)
+    encodings = valid_options
+    if v:
+        options = v.split(",")
+        encodings = tuple(x for x in options if x in valid_options)
+    log("%s encodings: %s", etype, encodings)
+    return encodings
+TRANSPARENCY_ENCODINGS = get_env_encodings("TRANSPARENCY", ("webp", "png", "rgb32"))
+LOSSLESS_ENCODINGS = get_env_encodings("LOSSLESS", ("rgb", "png", "png/P", "png/L"))
+REFRESH_ENCODINGS = get_env_encodings("REFRESH", ("webp", "png", "rgb24", "rgb32", "jpeg2000"))
 
 
 class DelayedRegions(object):
@@ -1798,10 +1806,14 @@ class WindowSource(WindowIconSource):
         if not self.can_refresh():
             self.cancel_refresh_timer()
             return
-        encoding = strtobytes(packet[6])
+        encoding = bytestostr(packet[6])
+        data = packet[7]
         region = rectangle(*packet[2:6])    #x,y,w,h
         client_options = packet[10]     #info about this packet from the encoder
-        if (encoding.startswith(b"png") and (self.image_depth<=24 or self.image_depth==32)) or encoding.startswith(b"rgb"):
+        self.do_schedule_auto_refresh(encoding, data, region, client_options, options)
+
+    def do_schedule_auto_refresh(self, encoding, data, region, client_options, options):
+        if (encoding.startswith("png") and (self.image_depth<=24 or self.image_depth==32)) or encoding.startswith("rgb"):
             actual_quality = 100
             lossy = False
         else:
@@ -1873,8 +1885,7 @@ class WindowSource(WindowIconSource):
         #returns the number of pixels in the region update
         #(overriden in window video source to exclude the video region)
         #Note: this does not run in the UI thread!
-        add_rectangle(self.refresh_regions, region)
-        return region.width*region.height
+        return add_rectangle(self.refresh_regions, region)
 
     def can_refresh(self):
         if not AUTO_REFRESH:
@@ -2280,7 +2291,7 @@ class WindowSource(WindowIconSource):
             return  None
 
         coding, data, client_options, outw, outh, outstride, bpp = ret
-        coding = strtobytes(coding)
+        coding = bytestostr(coding)
         #check cancellation list again since the code above may take some time:
         #but always send mmap data so we can reclaim the space!
         if coding!="mmap" and (self.is_cancelled(sequence) or self.suspended):

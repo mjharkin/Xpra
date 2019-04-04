@@ -23,8 +23,10 @@ class GTKKeyboardHelper(KeyboardHelper):
         #(as we may be getting dozens of such events at a time)
         self._keymap_changing = False
         self._keymap_change_handler_id = None
+        self._keymap = None
         display = display_get_default()
-        self._keymap = keymap_get_for_display(display)
+        if display:
+            self._keymap = keymap_get_for_display(display)
         self.update()
         if self._keymap:
             self._keymap_change_handler_id = self._keymap.connect("keys-changed", self.keymap_changed)
@@ -48,8 +50,9 @@ class GTKKeyboardHelper(KeyboardHelper):
                 #automatic changes not allowed!
                 log.info("ignoring keymap change: layout is locked to '%s'", self.layout_str())
                 return
-            if self.update():
-                log.info("keymap has been changed to '%s', sending updated mappings to the server", self.layout_str())
+            if self.update() and self.xkbmap_layout:
+                log.info("keymap has been changed to '%s'", self.layout_str())
+                log.info(" sending updated mappings to the server")
                 if self.xkbmap_layout:
                     self.send_layout()
                 self.send_keymap()
@@ -67,7 +70,7 @@ class GTKKeyboardHelper(KeyboardHelper):
         return old_hash!=self.hash
 
     def get_full_keymap(self):
-        return  get_gtk_keymap()
+        return get_gtk_keymap()
 
     def cleanup(self):
         KeyboardHelper.cleanup(self)

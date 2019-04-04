@@ -32,7 +32,7 @@ from xpra.gtk_common.gtk2.gdk_bindings import get_display_for
 
 from xpra.x11.common import REPR_FUNCTIONS
 def get_window_xid(window):
-    return "%#x" % window.xid
+    return hex(window.xid)
 REPR_FUNCTIONS[gdk.Window] = get_window_xid
 def get_display_name(display):
     return display.get_name()
@@ -150,6 +150,24 @@ cdef extern from "X11/Xlib.h":
         Window above
         int detail
         unsigned long value_mask
+    ctypedef struct XSelectionRequestEvent:
+        Window owner
+        Window requestor
+        Atom selection
+        Atom target
+        Atom property
+        Time time
+    ctypedef struct XSelectionClearEvent:
+        Window window
+        Atom selection
+        Time time
+    ctypedef struct XSelectionEvent:
+        int subtype
+        Window requestor
+        Atom selection
+        Atom target
+        Atom property
+        Time time
     ctypedef struct XResizeRequestEvent:
         Window window
         int width, height
@@ -213,6 +231,7 @@ cdef extern from "X11/Xlib.h":
         Window window
     ctypedef struct XPropertyEvent:
         Atom atom
+        Time time
     ctypedef struct XKeyEvent:
         unsigned int keycode, state
     ctypedef struct XButtonEvent:
@@ -240,6 +259,8 @@ cdef extern from "X11/Xlib.h":
         XButtonEvent xbutton
         XMapRequestEvent xmaprequest
         XConfigureRequestEvent xconfigurerequest
+        XSelectionRequestEvent xselectionrequest
+        XSelectionClearEvent xselectionclear
         XResizeRequestEvent xresizerequest
         XCirculateRequestEvent xcirculaterequest
         XConfigureEvent xconfigure
@@ -266,6 +287,7 @@ cdef extern from "X11/Xlib.h":
 cdef extern from "X11/extensions/xfixeswire.h":
     unsigned int XFixesCursorNotify
     unsigned long XFixesDisplayCursorNotifyMask
+    unsigned int XFixesSelectionNotify
 
 cdef extern from "X11/extensions/shape.h":
     Bool XShapeQueryExtension(Display *display, int *event_base, int *error_base)
@@ -300,15 +322,20 @@ cdef extern from "X11/extensions/Xfixes.h":
         Atom atom
         char* name
     ctypedef struct XFixesCursorNotifyEvent:
-        int type
-        unsigned long serial
-        Bool send_event
-        Display *display
         Window window
         int subtype
         unsigned long cursor_serial
         Time timestamp
         Atom cursor_name
+
+    ctypedef struct XFixesSelectionNotifyEvent:
+        int subtype
+        Window window
+        Window owner
+        Atom selection
+        Time timestamp
+        Time selection_timestamp
+
 
 cdef extern from "X11/extensions/XKB.h":
     unsigned int XkbUseCoreKbd
@@ -579,6 +606,7 @@ def cleanup_all_event_receivers():
 cdef int CursorNotify = -1
 cdef int XKBNotify = -1
 cdef int ShapeNotify = -1
+cdef int XFSelectionNotify = -1
 x_event_signals = {}
 x_event_type_names = {}
 names_to_event_type = {}
@@ -650,6 +678,8 @@ cdef init_x11_events():
     add_x_event_signals({
         MapRequest          : (None, "child-map-request-event"),
         ConfigureRequest    : (None, "child-configure-request-event"),
+        SelectionRequest    : ("xpra-selection-request", None),
+        SelectionClear      : ("xpra-selection-clear", None),
         FocusIn             : ("xpra-focus-in-event", None),
         FocusOut            : ("xpra-focus-out-event", None),
         ClientMessage       : ("xpra-client-message-event", None),
@@ -720,6 +750,10 @@ cdef init_x11_events():
         CursorNotify = XFixesCursorNotify+event_base
         add_x_event_signal(CursorNotify, ("xpra-cursor-event", None))
         add_x_event_type_name(CursorNotify, "CursorNotify")
+        global XFSelectionNotify
+        XFSelectionNotify = XFixesSelectionNotify+event_base
+        add_x_event_signal(XFSelectionNotify, ("xpra-xfixes-selection-notify-event", None))
+        add_x_event_type_name(XFSelectionNotify, "XFSelectionNotify")
     event_base = get_XDamage_event_base()
     if event_base>0:
         global DamageNotify
@@ -967,6 +1001,10 @@ cdef parse_xevent(GdkXEvent * e_gdk) with gil:
     cdef XkbAnyEvent * xkb_e
     cdef XkbBellNotifyEvent * bell_e
     cdef XShapeEvent * shape_e
+    cdef XSelectionRequestEvent * selectionrequest_e
+    cdef XSelectionClearEvent * selectionclear_e
+    cdef XSelectionEvent * selection_e
+    cdef XFixesSelectionNotifyEvent * selectionnotify_e
     cdef object event_args
     cdef object d
     cdef object pyev
@@ -1033,6 +1071,34 @@ cdef parse_xevent(GdkXEvent * e_gdk) with gil:
             pyev.above = e.xconfigurerequest.above
             pyev.detail = e.xconfigurerequest.detail
             pyev.value_mask = e.xconfigurerequest.value_mask
+        elif etype == SelectionRequest:
+            selectionrequest_e = <XSelectionRequestEvent*> e
+            pyev.window = _gw(d, selectionrequest_e.owner)
+            pyev.requestor = _gw(d, selectionrequest_e.requestor)
+            pyev.selection = get_pyatom(d, selectionrequest_e.selection)
+            pyev.target = get_pyatom(d, selectionrequest_e.target)
+            pyev.property = get_pyatom(d, selectionrequest_e.property)
+            pyev.time = int(selectionrequest_e.time)
+        elif etype == SelectionClear:
+            selectionclear_e = <XSelectionClearEvent*> e
+            pyev.window = _gw(d, selectionclear_e.window)
+            pyev.selection = get_pyatom(d, selectionclear_e.selection)
+            pyev.time = int(selectionclear_e.time)
+        elif etype == SelectionNotify:
+            selection_e = <XSelectionEvent*> e
+            pyev.requestor = _gw(d, selection_e.requestor)
+            pyev.selection = get_pyatom(d, selection_e.selection)
+            pyev.target = get_pyatom(d, selection_e.target)
+            pyev.property = get_pyatom(d, selection_e.property)
+            pyev.time = int(selection_e.time)
+        elif etype == XFSelectionNotify:
+            selectionnotify_e = <XFixesSelectionNotifyEvent*> e
+            pyev.window = _gw(d, selectionnotify_e.window)
+            pyev.subtype = selectionnotify_e.subtype
+            pyev.owner = _gw(d, selectionnotify_e.owner)
+            pyev.selection = get_pyatom(d, selectionnotify_e.selection)
+            pyev.timestamp = int(selectionnotify_e.timestamp)
+            pyev.selection_timestamp = int(selectionnotify_e.selection_timestamp)
         elif etype == ResizeRequest:
             pyev.window = _gw(d, e.xresizerequest.window)
             pyev.width = e.xresizerequest.width
@@ -1083,6 +1149,7 @@ cdef parse_xevent(GdkXEvent * e_gdk) with gil:
         elif etype == PropertyNotify:
             pyev.window = _gw(d, e.xany.window)
             pyev.atom = trap.call_synced(get_pyatom, d, e.xproperty.atom)
+            pyev.time = e.xproperty.time
         elif etype == ConfigureNotify:
             pyev.window = _gw(d, e.xconfigure.window)
             pyev.x = e.xconfigure.x

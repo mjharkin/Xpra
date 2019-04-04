@@ -330,7 +330,7 @@ class ClientWindowBase(ClientWidgetBase):
             skip_pager = metadata.boolget("skip-pager")
             if self._skip_pager!=skip_pager:
                 self._skip_pager = skip_pager
-                self.set_skip_taskbar_hint(skip_pager)
+                self.set_skip_pager_hint(skip_pager)
 
         if b"workspace" in metadata:
             self.set_workspace(metadata.intget("workspace"))
@@ -577,7 +577,7 @@ class ClientWindowBase(ClientWidgetBase):
         #with normal windows, we just queue a draw request
         #and let the expose event paint the spinner
         w, h = self.get_size()
-        self.queue_draw(self, 0, 0, w, h)
+        self.queue_draw(0, 0, w, h)
 
     def can_have_spinner(self):
         if self._backing is None:

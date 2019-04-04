@@ -378,7 +378,11 @@ class CoreX11WindowModel(WindowModelStub):
                 handlers.add(handler)
                 try:
                     handler(self)
+                except XError:
+                    #these will be caught in call_setup()
+                    raise
                 except:
+                    #try to continue:
                     log.error("Error parsing initial property '%s':", mutable, exc_info=True)
 
     def _scrub_x11(self):
@@ -709,14 +713,15 @@ class CoreX11WindowModel(WindowModelStub):
     ################################
 
     def request_close(self):
-        if "WM_DELETE_WINDOW" in self.get_property("protocols"):
+        if b"WM_DELETE_WINDOW" in self.get_property("protocols"):
             with xswallow:
                 send_wm_delete_window(self.client_window)
         else:
             title = self.get_property("title")
             xid = self.get_property("xid")
             if FORCE_QUIT:
-                log.warn("window %#x ('%s') does not support WM_DELETE_WINDOW... using force_quit", xid, title)
+                log.info("window %#x ('%s') does not support WM_DELETE_WINDOW", xid, title)
+                log.info(" using force_quit")
                 # You don't wanna play ball?  Then no more Mr. Nice Guy!
                 self.force_quit()
             else:

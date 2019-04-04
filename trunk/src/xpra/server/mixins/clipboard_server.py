@@ -102,14 +102,15 @@ class ClipboardServer(StubServerMixin):
                           self.clipboard_filter_file, exc_info=True)
                 return
         try:
-            from xpra.clipboard.gdk_clipboard import GDKClipboardProtocolHelper
+            #from xpra.clipboard.gdk_clipboard import GDKClipboardProtocolHelper as X11Clipboard
+            from xpra.x11.gtk_x11.clipboard import X11Clipboard
             kwargs = {
                       "filters"     : clipboard_filter_res,
                       "can-send"    : self.clipboard_direction in ("to-client", "both"),
                       "can-receive" : self.clipboard_direction in ("to-server", "both"),
                       }
-            self._clipboard_helper = GDKClipboardProtocolHelper(self.send_clipboard_packet,
-                                                                self.clipboard_progress, **kwargs)
+            self._clipboard_helper = X11Clipboard(self.send_clipboard_packet,
+                                                  self.clipboard_progress, **kwargs)
             self._clipboard_helper.init_proxies_uuid()
             self._clipboards = CLIPBOARDS
         except Exception:
@@ -203,8 +204,8 @@ class ClipboardServer(StubServerMixin):
         if not cc.clipboard_enabled:
             log("not %s clipboard packet '%s': client %s has clipboard disabled", action, packet_type, cc)
             return False
-        from xpra.clipboard.clipboard_base import nesting_check
-        if not nesting_check():
+        ch = self._clipboard_helper
+        if ch and not ch.nesting_check():
             #turn off clipboard at our end:
             self.set_clipboard_enabled_status(ss, False)
             #if we can, tell the client to do the same:
@@ -254,11 +255,9 @@ class ClipboardServer(StubServerMixin):
 
     def init_packet_handlers(self):
         if self.clipboard:
-            self._authenticated_packet_handlers.update({
-                "set-clipboard-enabled":                self._process_clipboard_enabled_status,
-              })
+            self.add_packet_handler("set-clipboard-enabled", self._process_clipboard_enabled_status)
             for x in (
                 "token", "request", "contents", "contents-none",
                 "pending-requests", "enable-selections", "loop-uuids",
                 ):
-                self._authenticated_ui_packet_handlers["clipboard-%s" % x] = self._process_clipboard_packet
+                self.add_packet_handler("clipboard-%s" % x, self._process_clipboard_packet)

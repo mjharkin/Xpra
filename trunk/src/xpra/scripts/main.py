@@ -21,7 +21,8 @@ from xpra.platform.dotxpra import DotXpra
 from xpra.util import csv, envbool, envint, repr_ellipsized, nonl, pver, DEFAULT_PORT
 from xpra.exit_codes import EXIT_SSL_FAILURE, EXIT_STR, EXIT_UNSUPPORTED
 from xpra.os_util import (
-    get_util_logger, getuid, getgid, monotonic_time, setsid, bytestostr, use_tty,
+    get_util_logger, getuid, getgid,
+    monotonic_time, setsid, bytestostr, use_tty,
     WIN32, OSX, POSIX, PYTHON3, SIGNAMES, is_Ubuntu, getUbuntuVersion,
     )
 from xpra.scripts.parsing import (
@@ -65,6 +66,13 @@ def main(script_file, cmdline):
     if ml>0:
         from xpra.util import start_mem_watcher
         start_mem_watcher(ml)
+
+    if sys.flags.optimize>0:
+        sys.stderr.write("************************************************************\n")
+        sys.stderr.write("Warning: the python optimize flag is set to %i\n" % sys.flags.optimize)
+        sys.stderr.write(" xpra is very likely to crash\n")
+        sys.stderr.write("************************************************************\n")
+        sleep(5)
 
     from xpra.platform import clean as platform_clean, command_error, command_info
     if len(cmdline)==1:
@@ -510,20 +518,20 @@ def find_session_by_name(opts, session_name):
         raise InitException("more than one session found matching '%s'" % session_name)
     return "socket://%s" % tuple(session_uuid_to_path.values())[0]
 
-def parse_ssh_string(ssh):
-    if ssh=="auto":
+def parse_ssh_string(ssh_setting):
+    ssh_cmd = ssh_setting
+    from xpra.platform.features import DEFAULT_SSH_COMMAND
+    if ssh_setting=="auto":
+        #try paramiko:
         try:
             from xpra.net.ssh import nogssapi_context
             with nogssapi_context():
                 import paramiko
             assert paramiko
-            ssh = "paramiko"
+            ssh_cmd = "paramiko"
         except ImportError:
-            if WIN32:
-                ssh = "plink -ssh -agent"
-            else:
-                ssh = "ssh -x"
-    return shlex.split(ssh)
+            ssh_cmd = DEFAULT_SSH_COMMAND
+    return shlex.split(ssh_cmd)
 
 def add_ssh_args(username, password, host, ssh_port, is_putty=False, is_paramiko=False):
     args = []
@@ -1391,16 +1399,23 @@ def get_client_app(error_cb, opts, extra_args, mode):
             os.environ["GDK_BACKEND"] = "x11"
         if opts.opengl=="probe":
             from xpra.os_util import pollwait
-            from xpra.platform.paths import get_xpra_command
+            from xpra.platform.paths import get_nodock_command
             log = Logger("opengl")
-            cmd = get_xpra_command()+["opengl-probe"]
+            cmd = get_nodock_command()+["opengl-probe"]
             env = os.environ.copy()
             if is_debug_enabled("opengl"):
                 cmd += ["-d", "opengl"]
             else:
                 env["NOTTY"] = "1"
             try:
-                proc = Popen(cmd, shell=False, close_fds=True, env=env)
+                kwargs = {}
+                if POSIX:
+                    kwargs["close_fds"] = True
+                try:
+                    from subprocess import DEVNULL
+                except ImportError:
+                    DEVNULL = open(os.devnull, 'wb')
+                proc = Popen(cmd, shell=False, stderr=DEVNULL, env=env, **kwargs)
             except Exception as e:
                 log.warn("Warning: failed to execute OpenGL probe command")
                 log.warn(" %s", e)
@@ -1754,7 +1769,7 @@ def do_run_glcheck(opts):
         log("run_glprobe() backends=%s", backends)
         opengl_props, gl_client_window_module = get_gl_client_window_module(backends, force_enable)
         log("run_glprobe() opengl_props=%s, gl_client_window_module=%s", opengl_props, gl_client_window_module)
-        if gl_client_window_module and opengl_props.get("safe", False):
+        if gl_client_window_module and (opengl_props.get("safe", False) or force_enable):
             gl_client_window_class = gl_client_window_module.GLClientWindow
             pixel_depth = int(opts.pixel_depth)
             log("run_glprobe() gl_client_window_class=%s, pixel_depth=%s", gl_client_window_class, pixel_depth)
@@ -2036,7 +2051,7 @@ def run_proxy(error_cb, opts, script_file, args, mode, defaults):
                        "_proxy_start"           : "start",
                        "_proxy_start_desktop"   : "start-desktop",
                        "_proxy_shadow_start"    : "shadow",
-                       }.get(mode)
+                       }[mode]
         #strip defaults, only keep extra ones:
         for x in ("start", "start-child",
                   "start-after-connect", "start-child-after-connect",
@@ -2064,7 +2079,7 @@ def run_proxy(error_cb, opts, script_file, args, mode, defaults):
     from xpra.net.bytestreams import TwoFileConnection
     app = XpraProxy("xpra-pipe-proxy", TwoFileConnection(sys.stdout, sys.stdin, socktype="stdin/stdout"), server_conn)
     app.run()
-    return  0
+    return 0
 
 def run_stopexit(mode, error_cb, opts, extra_args):
     assert mode in ("stop", "exit")

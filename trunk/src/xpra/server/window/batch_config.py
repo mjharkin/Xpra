@@ -88,10 +88,10 @@ class DamageBatchConfig(object):
         if self.locked:
             info["delay"] = self.delay
         else:
-            ld = tuple(x for _,x in self.last_delays)
+            ld = tuple(x[1] for x in self.last_delays)
             if ld:
                 info["delay"] = get_list_stats(ld)
-            lad = tuple(x for _,x in self.last_actual_delays)
+            lad = tuple(x[1] for x in self.last_actual_delays)
             if lad:
                 info["actual_delays"] = get_list_stats(lad, show_percentile=(9,))
             for name, details, factor, weight in self.factors:
@@ -103,10 +103,10 @@ class DamageBatchConfig(object):
 
     def clone(self):
         c = DamageBatchConfig()
-        for x in [
+        for x in (
             "always", "max_events", "max_pixels", "time_unit",
             "min_delay", "max_delay", "timeout_delay", "delay", "expire_delay",
-            ]:
+            ):
             setattr(c, x, getattr(self, x))
         return c
 

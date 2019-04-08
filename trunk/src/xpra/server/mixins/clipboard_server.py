@@ -8,6 +8,7 @@
 import os.path
 
 from xpra.platform.features import CLIPBOARDS
+from xpra.os_util import OSX, POSIX
 from xpra.util import csv, nonl, XPRA_CLIPBOARD_NOTIFICATION_ID
 from xpra.scripts.config import FALSE_OPTIONS
 from xpra.server.mixins.stub_server_mixin import StubServerMixin
@@ -97,20 +98,22 @@ class ClipboardServer(StubServerMixin):
                         clipboard_filter_res.append(line.strip())
                     log("loaded %s regular expressions from clipboard filter file %s",
                         len(clipboard_filter_res), self.clipboard_filter_file)
-            except:
+            except (IOError, OSError):
                 log.error("Error: reading clipboard filter file %s - clipboard disabled!",
                           self.clipboard_filter_file, exc_info=True)
                 return
         try:
-            #from xpra.clipboard.gdk_clipboard import GDKClipboardProtocolHelper as X11Clipboard
-            from xpra.x11.gtk_x11.clipboard import X11Clipboard
+            if POSIX and not OSX:
+                from xpra.x11.gtk_x11.clipboard import X11Clipboard as ClipboardClass   #@UnusedImport
+            else:
+                from xpra.clipboard.gdk_clipboard import GDKClipboardProtocolHelper as ClipboardClass   #@Reimport
             kwargs = {
                       "filters"     : clipboard_filter_res,
                       "can-send"    : self.clipboard_direction in ("to-client", "both"),
                       "can-receive" : self.clipboard_direction in ("to-server", "both"),
                       }
-            self._clipboard_helper = X11Clipboard(self.send_clipboard_packet,
-                                                  self.clipboard_progress, **kwargs)
+            self._clipboard_helper = ClipboardClass(self.send_clipboard_packet,
+                                                    self.clipboard_progress, **kwargs)
             self._clipboard_helper.init_proxies_uuid()
             self._clipboards = CLIPBOARDS
         except Exception:
@@ -196,7 +199,6 @@ class ClipboardServer(StubServerMixin):
         self.idle_add(do_check)
 
     def clipboard_nesting_check(self, action, packet_type, ss):
-        log("clipboard_nesting_check(%s, %s, %s)", action, packet_type, ss)
         cc = self._clipboard_client
         if cc is None:
             log("not %s clipboard packet '%s': no clipboard client", action, packet_type)

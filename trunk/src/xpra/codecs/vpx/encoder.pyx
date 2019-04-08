@@ -262,7 +262,7 @@ def get_info():
         "version"       : get_version(),
         "encodings"     : CODECS,
         "abi_version"   : get_abi_version(),
-        "generation"    : generation.get(),
+        "counter"       : generation.get(),
         "build_config"  : bytestostr(vpx_codec_build_config()),
         }
     for e, maxsize in MAX_SIZE.items():
@@ -338,6 +338,7 @@ cdef class Encoder:
     cdef int width
     cdef int height
     cdef int max_threads
+    cdef unsigned int generation
     cdef unsigned long bandwidth_limit
     cdef double initial_bitrate_per_pixel
     cdef object encoding
@@ -439,9 +440,9 @@ cdef class Encoder:
             self.codec_control("periodic Q boost", VP9E_SET_FRAME_PERIODIC_BOOST, 0)
         self.do_set_encoding_speed(speed)
         self.do_set_encoding_quality(quality)
-        gen = generation.increase()
+        self.generation = generation.increase()
         if SAVE_TO_FILE is not None:
-            filename = SAVE_TO_FILE+"vpx-"+str(gen)+".%s" % encoding
+            filename = SAVE_TO_FILE+"vpx-"+str(self.generation)+".%s" % encoding
             self.file = open(filename, 'wb')
             log.info("saving %s stream to %s", encoding, filename)
 
@@ -489,6 +490,7 @@ cdef class Encoder:
             "speed"     : self.speed,
             "quality"   : self.quality,
             "lossless"  : bool(self.lossless),
+            "generation" : self.generation,
             "encoding"  : self.encoding,
             "src_format": self.src_format,
             "max_threads": self.max_threads,
@@ -713,11 +715,8 @@ def selftest(full=False):
         if full and POSIX and not OSX:
             #but first, try to figure out if we have enough memory to do this
             try:
-                import subprocess
-                p = subprocess.Popen("free -b | grep ^Mem:", shell=True, stdout=subprocess.PIPE)
-                stdout = p.communicate()[0]
-                out = stdout.decode('utf-8')
-                freemem_MB = int(out.split(" ")[-1])//1024//1024
+                import psutil
+                freemem_MB = psutil.virtual_memory().available//1024//1024
                 if freemem_MB<=4096:
                     log.info("system has only %iMB of memory available, skipping vpx max-size tests", freemem_MB)
                     full = False

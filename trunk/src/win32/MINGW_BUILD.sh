@@ -18,7 +18,7 @@ RUN_INSTALLER=${RUN_INSTALLER:-1}
 DO_MSI=${DO_MSI:-0}
 DO_SIGN=${DO_SIGN:-1}
 BUNDLE_PUTTY=${BUNDLE_PUTTY:-1}
-BUNDLE_OPENSSH=${BUNDLE_OPENSSH:-1}
+BUNDLE_OPENSSH=${BUNDLE_OPENSSH:-0}
 BUNDLE_OPENSSL=${BUNDLE_OPENSSL:-1}
 ZIP_MODULES=${ZIP_MODULES:-1}
 
@@ -400,7 +400,7 @@ if [ "${DO_INSTALLER}" == "1" ]; then
 	if [ "$?" != "0" ]; then
 		echo "InnoSetup error - see ${INNOSETUP_LOG}:"
 		tail -n 20 "${INNOSETUP_LOG}"
-		rm "xpra.iss"
+		#rm "xpra.iss"
 		exit 1
 	fi
 	rm "xpra.iss"

@@ -1592,7 +1592,7 @@ class ServerCore(object):
                 return
             #challenge has been sent already for this module
             if not challenge_response:
-                auth_failed("invalid state, challenge already sent - no response!")
+                auth_failed("invalid state, challenge already sent - no response found!")
                 return
             if not authenticator.authenticate(challenge_response, client_salt):
                 auth_failed("authentication failed")
@@ -1642,6 +1642,7 @@ class ServerCore(object):
                 raise Exception("Simulating a server error")
             self.hello_oked(proto, packet, c, auth_caps)
         except ClientException as e:
+            log("call_hello_oked(%s, %s, %s, %s)", proto, packet, repr_ellipsized(str(c)), auth_caps, exc_info=True)
             log.error("Error setting up new connection for")
             log.error(" %s:", proto)
             log.error(" %s", e)

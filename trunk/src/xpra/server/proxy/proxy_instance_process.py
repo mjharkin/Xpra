@@ -1,5 +1,5 @@
 # This file is part of Xpra.
-# Copyright (C) 2013-2017 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2013-2019 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -47,10 +47,14 @@ enclog = Logger("encoding")
 
 PROXY_QUEUE_SIZE = envint("XPRA_PROXY_QUEUE_SIZE", 10)
 #for testing only: passthrough as RGB:
-PASSTHROUGH = envbool("XPRA_PROXY_PASSTHROUGH", False)
+PASSTHROUGH_RGB = envbool("XPRA_PROXY_PASSTHROUGH_RGB", False)
 MAX_CONCURRENT_CONNECTIONS = 20
 VIDEO_TIMEOUT = 5                  #destroy video encoder after N seconds of idle state
 LEGACY_SALT_DIGEST = envbool("XPRA_LEGACY_SALT_DIGEST", True)
+PASSTHROUGH_AUTH = envbool("XPRA_PASSTHROUGH_AUTH", True)
+
+CLIENT_REMOVE_CAPS = ("cipher", "challenge", "digest", "aliases", "compression", "lz4", "lz0", "zlib")
+CLIENT_REMOVE_CAPS_CHALLENGE = ("cipher", "digest", "aliases", "compression", "lz4", "lz0", "zlib")
 
 
 def set_blocking(conn):
@@ -92,6 +96,7 @@ class ProxyInstanceProcess(Process):
                                "%s: %s.." % (type(caps), repr_ellipsized(str(caps))), message_queue))
         self.client_protocol = None
         self.server_protocol = None
+        self.client_challenge_packet = None
         self.exit = False
         self.main_queue = None
         self.message_queue = message_queue
@@ -120,7 +125,7 @@ class ProxyInstanceProcess(Process):
             m = self.message_queue.get()
             log("received proxy server message: %s", m)
             if m=="stop":
-                self.stop("proxy server request")
+                self.stop(None, "proxy server request")
                 return
             if m=="socket-handover-complete":
                 log("setting sockets to blocking mode: %s", (self.client_conn, self.server_conn))
@@ -136,7 +141,7 @@ class ProxyInstanceProcess(Process):
         self.exit = True
         signal.signal(signal.SIGINT, deadly_signal)
         signal.signal(signal.SIGTERM, deadly_signal)
-        self.stop(SIGNAMES.get(signum, signum))
+        self.stop(None, SIGNAMES.get(signum, signum))
 
 
     def source_remove(self, tid):
@@ -283,7 +288,7 @@ class ProxyInstanceProcess(Process):
         try:
             self.run_queue()
         except KeyboardInterrupt as e:
-            self.stop(str(e))
+            self.stop(None, str(e))
         finally:
             log("ProxyProcess.run() ending %s", os.getpid())
 
@@ -314,16 +319,19 @@ class ProxyInstanceProcess(Process):
                 for spec in especs:                             #ie: video_spec("x264")
                     spec_props = spec.to_dict()
                     del spec_props["codec_class"]               #not serializable!
-                    spec_props["score_boost"] = 50              #we want to win scoring so we get used ahead of other encoders
-                    spec_props["max_instances"] = 3             #limit to 3 video streams we proxy for (we really want 2,
-                                                                # but because of races with garbage collection, we need to allow more)
+                    #we want to win scoring so we get used ahead of other encoders:
+                    spec_props["score_boost"] = 50
+                    #limit to 3 video streams we proxy for (we really want 2,
+                    # but because of races with garbage collection, we need to allow more)
+                    spec_props["max_instances"] = 3
+
                     #store it in encoding defs:
                     self.video_encoding_defs.setdefault(encoding, {}).setdefault(colorspace, []).append(spec_props)
                     encoder_types.add(spec.codec_type)
 
         enclog("encoder types found: %s", tuple(encoder_types))
         #remove duplicates and use preferred order:
-        order = PREFERRED_ENCODER_ORDER[:]
+        order = list(PREFERRED_ENCODER_ORDER)
         for x in tuple(encoder_types):
             if x not in order:
                 order.append(x)
@@ -426,7 +434,7 @@ class ProxyInstanceProcess(Process):
                 self.timeout_add(5*1000, self.send_disconnect, proto, CLIENT_EXIT_TIMEOUT, "info sent")
                 return
             if is_req("stop"):
-                self.stop("socket request", None)
+                self.stop(None, "socket request")
                 return
             if is_req("version"):
                 version = XPRA_VERSION
@@ -464,9 +472,9 @@ class ProxyInstanceProcess(Process):
         hello = self.filter_client_caps(self.caps)
         if challenge_response:
             hello.update({
-                          "challenge_response"      : challenge_response,
-                          "challenge_client_salt"   : client_salt,
-                          })
+                "challenge_response"      : challenge_response,
+                "challenge_client_salt"   : client_salt,
+                })
         self.queue_server_packet(("hello", hello))
 
 
@@ -474,13 +482,15 @@ class ProxyInstanceProcess(Process):
         d = {}
         def number(k, v):
             return parse_number(int, k, v)
-        OPTION_WHITELIST = {"compression_level" : number,
-                            "lz4"               : parse_bool,
-                            "lzo"               : parse_bool,
-                            "zlib"              : parse_bool,
-                            "rencode"           : parse_bool,
-                            "bencode"           : parse_bool,
-                            "yaml"              : parse_bool}
+        OPTION_WHITELIST = {
+            "compression_level" : number,
+            "lz4"               : parse_bool,
+            "lzo"               : parse_bool,
+            "zlib"              : parse_bool,
+            "rencode"           : parse_bool,
+            "bencode"           : parse_bool,
+            "yaml"              : parse_bool,
+            }
         for k,v in options.items():
             parser = OPTION_WHITELIST.get(k)
             if parser:
@@ -491,8 +501,8 @@ class ProxyInstanceProcess(Process):
                     log.warn("failed to parse value %s for %s using %s: %s", v, k, parser, e)
         return d
 
-    def filter_client_caps(self, caps):
-        fc = self.filter_caps(caps, (b"cipher", b"challenge", b"digest", b"aliases", b"compression", b"lz4", b"lz0", b"zlib"))
+    def filter_client_caps(self, caps, remove=CLIENT_REMOVE_CAPS):
+        fc = self.filter_caps(caps, remove)
         #the display string may override the username:
         username = self.disp_desc.get("username")
         if username:
@@ -507,19 +517,17 @@ class ProxyInstanceProcess(Process):
 
     def filter_server_caps(self, caps):
         self.server_protocol.enable_encoder_from_caps(caps)
-        return self.filter_caps(caps, (b"aliases", ))
+        return self.filter_caps(caps, ("aliases", ))
 
     def filter_caps(self, caps, prefixes):
         #removes caps that the proxy overrides / does not use:
-        #(not very pythonic!)
         pcaps = {}
         removed = []
         for k in caps.keys():
-            skip = len([e for e in prefixes if k.startswith(e)])
-            if skip==0:
-                pcaps[k] = caps[k]
-            else:
+            if any(e for e in prefixes if bytestostr(k).startswith(e)):
                 removed.append(k)
+            else:
+                pcaps[k] = caps[k]
         log("filtered out %s matching %s", removed, prefixes)
         #replace the network caps with the proxy's own:
         pcaps.update(flatten_dict(get_network_caps()))
@@ -561,10 +569,13 @@ class ProxyInstanceProcess(Process):
             sleep(0.1)
         log.info("proxy instance %s stopped", os.getpid())
 
-    def stop(self, reason="terminating", skip_proto=None):
-        log("stop(%s, %s)", reason, skip_proto)
-        log.info("stopping proxy instance: %s", reason)
-        self.exit = True
+    def stop(self, skip_proto=None, *reasons):
+        log("stop(%s, %s)", skip_proto, reasons)
+        if not self.exit:
+            log.info("stopping proxy instance pid %i:", os.getpid())
+            for x in reasons:
+                log.info(" %s", x)
+            self.exit = True
         try:
             self.control_socket.close()
         except:
@@ -585,7 +596,7 @@ class ProxyInstanceProcess(Process):
         for proto in (self.client_protocol, self.server_protocol):
             if proto and proto!=skip_proto:
                 log("sending disconnect to %s", proto)
-                proto.send_disconnect([SERVER_SHUTDOWN, reason])
+                proto.send_disconnect([SERVER_SHUTDOWN]+list(reasons))
 
 
     def queue_client_packet(self, packet):
@@ -601,10 +612,10 @@ class ProxyInstanceProcess(Process):
         return p, None, None, None, True, s>0
 
     def process_client_packet(self, proto, packet):
-        packet_type = packet[0]
+        packet_type = bytestostr(packet[0])
         log("process_client_packet: %s", packet_type)
         if packet_type==Protocol.CONNECTION_LOST:
-            self.stop("client connection lost", proto)
+            self.stop(proto, "client connection lost")
             return
         if packet_type=="set_deflate":
             #echo it back to the client:
@@ -612,19 +623,30 @@ class ProxyInstanceProcess(Process):
             self.client_protocol.source_has_more()
             return
         if packet_type=="hello":
-            log.warn("Warning: invalid hello packet received after initial authentication (dropped)")
+            if not self.client_challenge_packet:
+                log.warn("Warning: invalid hello packet from client")
+                log.warn(" received after initial authentication (dropped)")
+                return
+            log("forwarding client hello")
+            log(" for challenge packet %s", self.client_challenge_packet)
+            #update caps with latest hello caps from client:
+            self.caps = typedict(packet[1])
+            #keep challenge data in the hello response:
+            hello = self.filter_client_caps(self.caps, CLIENT_REMOVE_CAPS_CHALLENGE)
+            self.queue_server_packet(("hello", hello))
             return
         #the packet types below are forwarded:
         if packet_type=="disconnect":
-            log("got disconnect from client: %s", packet[1])
+            reason = bytestostr(packet[1])
+            log("got disconnect from client: %s", reason)
             if self.exit:
                 self.client_protocol.close()
             else:
-                self.stop("disconnect from client: %s" % packet[1])
-        elif packet_type==b"send-file":
+                self.stop(None, "disconnect from client", reason)
+        elif packet_type=="send-file":
             if packet[6]:
                 packet[6] = Compressed("file-data", packet[6])
-        elif packet_type==b"send-file-chunk":
+        elif packet_type=="send-file-chunk":
             if packet[3]:
                 packet[3] = Compressed("file-chunk-data", packet[3])
         self.queue_server_packet(packet)
@@ -660,18 +682,19 @@ class ProxyInstanceProcess(Process):
                 packet[index] = Compressed("raw %s" % name, data, can_inline=True)
 
     def process_server_packet(self, proto, packet):
-        packet_type = packet[0]
+        packet_type = bytestostr(packet[0])
         log("process_server_packet: %s", packet_type)
         if packet_type==Protocol.CONNECTION_LOST:
-            self.stop("server connection lost", proto)
+            self.stop(proto, "server connection lost")
             return
-        elif packet_type==b"disconnect":
-            log("got disconnect from server: %s", packet[1])
+        if packet_type=="disconnect":
+            reason = bytestostr(packet[1])
+            log("got disconnect from server: %s", reason)
             if self.exit:
                 self.server_protocol.close()
             else:
-                self.stop("disconnect from server: %s" % packet[1])
-        elif packet_type==b"hello":
+                self.stop(None, "disconnect from server", reason)
+        elif packet_type=="hello":
             c = typedict(packet[1])
             maxw, maxh = c.intpair("max_desktop_size", (4096, 4096))
             caps = self.filter_server_caps(c)
@@ -690,27 +713,27 @@ class ProxyInstanceProcess(Process):
             self.client_protocol.max_packet_size = max(self.client_protocol.max_packet_size, file_max_packet_size)
             self.server_protocol.max_packet_size = max(self.server_protocol.max_packet_size, file_max_packet_size)
             packet = ("hello", caps)
-        elif packet_type==b"info-response":
+        elif packet_type=="info-response":
             #adds proxy info:
             #note: this is only seen by the client application
             #"xpra info" is a new connection, which talks to the proxy server...
             info = packet[1]
             info.update(self.get_proxy_info(proto))
-        elif packet_type==b"lost-window":
+        elif packet_type=="lost-window":
             wid = packet[1]
             #mark it as lost so we can drop any current/pending frames
             self.lost_windows.add(wid)
             #queue it so it gets cleaned safely (for video encoders mostly):
             self.encode_queue.put(packet)
             #and fall through so tell the client immediately
-        elif packet_type==b"draw":
+        elif packet_type=="draw":
             #use encoder thread:
             self.encode_queue.put(packet)
             #which will queue the packet itself when done:
             return
         #we do want to reformat cursor packets...
         #as they will have been uncompressed by the network layer already:
-        elif packet_type==b"cursor":
+        elif packet_type=="cursor":
             #packet = ["cursor", x, y, width, height, xhot, yhot, serial, pixels, name]
             #or:
             #packet = ["cursor", "png", x, y, width, height, xhot, yhot, serial, pixels, name]
@@ -723,51 +746,55 @@ class ProxyInstanceProcess(Process):
                     self._packet_recompress(packet, 8, "cursor")
                 except:
                     self._packet_recompress(packet, 9, "cursor")
-        elif packet_type==b"window-icon":
+        elif packet_type=="window-icon":
             self._packet_recompress(packet, 5, "icon")
-        elif packet_type==b"send-file":
+        elif packet_type=="send-file":
             if packet[6]:
                 packet[6] = Compressed("file-data", packet[6])
-        elif packet_type==b"send-file-chunk":
+        elif packet_type=="send-file-chunk":
             if packet[3]:
                 packet[3] = Compressed("file-chunk-data", packet[3])
-        elif packet_type==b"challenge":
+        elif packet_type=="challenge":
             password = self.disp_desc.get("password", self.session_options.get("password"))
             log("password from %s / %s = %s", self.disp_desc, self.session_options, password)
             if not password:
-                self.stop("authentication requested by the server, but no password available for this session")
-                return
-            from xpra.net.digest import get_salt, gendigest
-            #client may have already responded to the challenge,
-            #so we have to handle authentication from this end
-            server_salt = bytestostr(packet[1])
-            l = len(server_salt)
-            digest = bytestostr(packet[3])
-            salt_digest = "xor"
-            if len(packet)>=5:
-                salt_digest = bytestostr(packet[4])
-            if salt_digest in ("xor", "des"):
-                if not LEGACY_SALT_DIGEST:
-                    self.stop("server uses legacy salt digest '%s'" % salt_digest)
-                    return
-                log.warn("Warning: server using legacy support for '%s' salt digest", salt_digest)
-            if salt_digest=="xor":
-                #with xor, we have to match the size
-                assert l>=16, "server salt is too short: only %i bytes, minimum is 16" % l
-                assert l<=256, "server salt is too long: %i bytes, maximum is 256" % l
+                if not PASSTHROUGH_AUTH:
+                    self.stop(None, "authentication requested by the server,",
+                              "but no password is available for this session")
+                #otherwise, just forward it to the client
+                self.client_challenge_packet = packet
             else:
-                #other digest, 32 random bytes is enough:
-                l = 32
-            client_salt = get_salt(l)
-            salt = gendigest(salt_digest, client_salt, server_salt)
-            challenge_response = gendigest(digest, password, salt)
-            if not challenge_response:
-                log("invalid digest module '%s': %s", digest)
-                self.stop("server requested '%s' digest but it is not supported" % digest)
+                from xpra.net.digest import get_salt, gendigest
+                #client may have already responded to the challenge,
+                #so we have to handle authentication from this end
+                server_salt = bytestostr(packet[1])
+                l = len(server_salt)
+                digest = bytestostr(packet[3])
+                salt_digest = "xor"
+                if len(packet)>=5:
+                    salt_digest = bytestostr(packet[4])
+                if salt_digest in ("xor", "des"):
+                    if not LEGACY_SALT_DIGEST:
+                        self.stop(None, "server uses legacy salt digest '%s'" % salt_digest)
+                        return
+                    log.warn("Warning: server using legacy support for '%s' salt digest", salt_digest)
+                if salt_digest=="xor":
+                    #with xor, we have to match the size
+                    assert l>=16, "server salt is too short: only %i bytes, minimum is 16" % l
+                    assert l<=256, "server salt is too long: %i bytes, maximum is 256" % l
+                else:
+                    #other digest, 32 random bytes is enough:
+                    l = 32
+                client_salt = get_salt(l)
+                salt = gendigest(salt_digest, client_salt, server_salt)
+                challenge_response = gendigest(digest, password, salt)
+                if not challenge_response:
+                    log("invalid digest module '%s': %s", digest)
+                    self.stop(None, "server requested '%s' digest but it is not supported" % digest)
+                    return
+                log.info("sending %s challenge response", digest)
+                self.send_hello(challenge_response, client_salt)
                 return
-            log.info("sending %s challenge response", digest)
-            self.send_hello(challenge_response, client_salt)
-            return
         self.queue_client_packet(packet)
 
 
@@ -856,7 +883,7 @@ class ProxyInstanceProcess(Process):
             return send_updated("rgb32", wrapped, new_client_options)
 
         proxy_video = client_options.boolget("proxy", False)
-        if PASSTHROUGH and (encoding in ("rgb32", "rgb24") or proxy_video):
+        if PASSTHROUGH_RGB and (encoding in ("rgb32", "rgb24") or proxy_video):
             #we are dealing with rgb data, so we can pass it through:
             return passthrough(proxy_video)
         if not self.video_encoder_types or not client_options or not proxy_video:
@@ -910,7 +937,7 @@ class ProxyInstanceProcess(Process):
                         enclog.warn(" sending as plain RGB")
                     return passthrough(True)
                 enclog("no video encoder available: sending as jpeg")
-                coding, compressed_data, client_options, _, _, _, _ = enc_pillow.encode("jpeg", image, quality, speed, False)
+                coding, compressed_data, client_options = enc_pillow.encode("jpeg", image, quality, speed, False)[:3]
                 return send_updated(coding, compressed_data, client_options)
 
             enclog("creating new video encoder %s for window %s", spec, wid)
@@ -952,9 +979,9 @@ class ProxyInstanceProcess(Process):
                 self.encode_queue.put(["check-video-timeout", wid])
         return True     #run again
 
-    def _find_video_encoder(self, encoding, rgb_format):
+    def _find_video_encoder(self, video_encoding, rgb_format):
         #try the one specified first, then all the others:
-        try_encodings = [encoding] + [x for x in self.video_helper.get_encodings() if x!=encoding]
+        try_encodings = [video_encoding] + [x for x in self.video_helper.get_encodings() if x!=video_encoding]
         for encoding in try_encodings:
             colorspace_specs = self.video_helper.get_encoder_specs(encoding)
             especs = colorspace_specs.get(rgb_format)
@@ -965,7 +992,7 @@ class ProxyInstanceProcess(Process):
                     if etype==spec.codec_type:
                         enclog("_find_video_encoder(%s, %s)=%s", encoding, rgb_format, spec)
                         return spec
-        enclog("_find_video_encoder(%s, %s) not found", encoding, rgb_format)
+        enclog("_find_video_encoder(%s, %s) not found", video_encoding, rgb_format)
         return None
 
     def get_window_info(self):
@@ -975,10 +1002,10 @@ class ProxyInstanceProcess(Process):
             einfo = encoder.get_info()
             einfo["idle_time"] = int(now-self.video_encoders_last_used_time.get(wid, 0))
             info[wid] = {
-                         "proxy"    : {
-                                       ""           : encoder.get_type(),
-                                       "encoder"    : einfo
-                                       },
-                         }
+                "proxy"    : {
+                    ""           : encoder.get_type(),
+                    "encoder"    : einfo
+                    },
+                }
         enclog("get_window_info()=%s", info)
         return info

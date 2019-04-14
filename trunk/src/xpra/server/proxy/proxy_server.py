@@ -93,6 +93,11 @@ class ProxyServer(ServerCore):
                                                            self.handle_stop_command, min_args=1, max_args=1)
 
 
+    def install_signal_handlers(self, callback):
+        from xpra.gtk_common.gobject_compat import register_os_signals
+        register_os_signals(callback)
+
+
     def make_dbus_server(self):
         from xpra.server.proxy.proxy_dbus_server import Proxy_DBUS_Server
         return Proxy_DBUS_Server(self)
@@ -312,7 +317,8 @@ class ProxyServer(ServerCore):
                     return
             else:
                 if len(displays)!=1:
-                    disconnect(SESSION_NOT_FOUND, "please specify a display, more than one is available: %s" % csv(displays))
+                    disconnect(SESSION_NOT_FOUND,
+                               "please specify a display, more than one is available: %s" % csv(displays))
                     return
                 display = displays[0]
 
@@ -369,8 +375,10 @@ class ProxyServer(ServerCore):
         #no other packets should be arriving until the proxy instance responds to the initial hello packet
         def unexpected_packet(packet):
             if packet:
-                log.warn("Warning: received an unexpected packet on the proxy connection %s:", client_proto)
+                log.warn("Warning: received an unexpected packet")
+                log.warn(" from the proxy connection %s:", client_proto)
                 log.warn(" %s", repr_ellipsized(packet))
+                client_proto.close()
         client_conn = client_proto.steal_connection(unexpected_packet)
         client_state = client_proto.save_state()
         cipher = None

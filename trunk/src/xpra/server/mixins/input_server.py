@@ -312,7 +312,7 @@ class InputServer(StubServerMixin):
         #the window may not be mapped at the same location by the client:
         ss = self._server_sources.get(proto)
         window = self._id_to_window.get(wid)
-        if ss and window:
+        if ss and window and False:
             ws = ss.get_window_source(wid)
             if ws:
                 mapped_at = ws.mapped_at

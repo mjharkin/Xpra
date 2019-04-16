@@ -1264,7 +1264,7 @@ XpraClient.prototype._window_mouse_move = function(ctx, e, window) {
 }
 XpraClient.prototype.do_window_mouse_move = function(e, window) {
 	
-	if(window==null || (!window.focused && !window.override_redirect)){
+	if(window==null || (!window.focused && !window.override_redirect && !window.tray)){
 		return;
 	}
 	
@@ -1316,7 +1316,7 @@ XpraClient.prototype.do_window_mouse_click = function(e, window, pressed) {
 	//}
 	
 	
-	if(window==null || (!window.focused && !window.override_redirect)){
+	if(window==null || (!window.focused && !window.override_redirect && !window.tray)){
 		return;
 	}
 	

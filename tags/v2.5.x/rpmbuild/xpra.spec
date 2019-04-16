@@ -11,7 +11,7 @@
 %{!?python3_sitearch: %global python3_sitearch %(%{__python3} -c "from distutils.sysconfig import get_python_lib; print(get_python_lib(1))")}
 
 %define CFLAGS -O2
-%define DEFAULT_BUILD_ARGS --with-Xdummy --without-enc_x2.5.1	--pkg-config-path=%{_libdir}/xpra/pkgconfig --rpath=%{_libdir}/xpra --without-cuda_rebuild
+%define DEFAULT_BUILD_ARGS --with-Xdummy --without-enc_x265 --pkg-config-path=%{_libdir}/xpra/pkgconfig --rpath=%{_libdir}/xpra --without-cuda_rebuild
 
 %define update_firewall 1
 %define run_tests 1
@@ -1287,7 +1287,7 @@ fi
 - fix painting of forwarded tray
 - fix initial window workspace
 - fix launcher with debug option in config file
-- fix compilation of x2.5.1 encoder
+- fix compilation of x265 encoder
 - fix infinite recursion in cython csc module
 - don't include sound utilities when building without sound
 

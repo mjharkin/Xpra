@@ -226,6 +226,7 @@ KEYSYM_TO_UNICODE = {
 	"Otilde" : 0x00D5,
 	"Odiaeresis" : 0x00D6,
 	"multiply" : 0x00D7,
+	"Ooblique" : 0x00D8,
 	"Oslash" : 0x00D8,
 	"Ugrave" : 0x00D9,
 	"Uacute" : 0x00DA,

@@ -72,7 +72,6 @@ canvas {
 .window {
 	border: 1px;
 	position: absolute;
-
 	padding: 0;
 	overflow: hidden; /* required for radius clip */
 }
@@ -83,12 +82,10 @@ canvas {
 	float: left;
 }
 .window.desktop {
-	border-radius: 0;
 	box-shadow: none;
 }
 
 .window-NORMAL {
-	border-radius: 0px;
 }
 .windowhead {
 	height: 30px;
@@ -370,7 +367,10 @@ table#sessiondata td {
 	float: left;
 	padding-left: 100px;
 }
-
+#clock_text {
+	font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+	color: #fff;
+}
 
 .audio {
 	float: right;

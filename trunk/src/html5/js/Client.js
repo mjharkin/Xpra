@@ -72,7 +72,7 @@ XpraClient.prototype.init_settings = function(container) {
 	this.reconnect_delay = 1000;	//wait 1 second before retrying
 	this.reconnect_attempt = 0;
 	this.swap_keys = Utilities.isMacOS();
-	this.HELLO_TIMEOUT = 30000;
+	this.HELLO_TIMEOUT = 10000;
 	this.PING_TIMEOUT = 15000;
 	this.PING_GRACE = 2000;
 	this.PING_FREQUENCY = 5000;
@@ -157,7 +157,7 @@ XpraClient.prototype.init_state = function(container) {
     this.server_readonly = false;
 
     this.server_connection_data = false;
-    
+
 	this.xdg_menu = null;
 	// a list of our windows
 	this.id_to_window = {};
@@ -2050,7 +2050,6 @@ XpraClient.prototype._process_new_tray = function(packet, ctx) {
 		var float_tray = document.getElementById("float_tray");
 		var float_menu = document.getElementById("float_menu");
 		$('#float_menu').children().show();
-		//float_menu_width=$('#float_menu').width() + 10;
 		//increase size for tray icon and -10 for paddding
 		var new_width = float_menu_width + 30 -10;
 		float_menu.style.width = new_width + "px";

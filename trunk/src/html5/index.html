@@ -68,7 +68,7 @@
 		</div>
 
 		<div id="screen" style="width: 100%; height:100%;">
-			<div id="float_menu">
+			<div id="float_menu" onmouseOver="document.getElementById('float_menu').style.width=float_menu_width-10+'px'; $('#float_menu').children().show();" onmouseOut="  document.getElementById('float_menu').style.width ='0px'; $('#float_menu').children().hide();"> 
 				<ul class="Menu -horizontal">
 					<li class="-hasSubmenu -noChevron">
 						<a href="#" title="Xpra" class="noDrag" data-icon="menu"></a>
@@ -81,19 +81,19 @@
 							<li class="-hasSubmenu">
 								<a href="#" data-icon="kitchen">Server</a>
 								<ul>
-									<li><a href="#" data-icon="access_time" onclick="return false" id="clock_text"></a></li>
+									<li><a href="#" data-icon="access_time" onclick="return false" id="clock_menu_text"></a></li>
 									<li><a href="#" data-icon="cloud_upload" onclick="upload_file(event); return false">Upload file</a></li>
 									<li><a href="#" data-icon="exit_to_app" onclick="confirm_shutdown_server(event); return false">Shutdown Server</a></li>
 								</ul>
 							</li>
+							<!--
 							<li class="-hasSubmenu">
 								<a href="#" data-icon="list">Features</a>
 								<ul>
-									<li><a id="fullscreen" href="#" data-icon="fullscreen">Fullscreen</a></li>
-									<li><a href="#" data-icon="volume_off">Sound</a></li>
 									<li><a href="#" data-icon="message">Notifications</a></li>
 								</ul>
 							</li>
+							-->
 							<li class="-hasSubmenu">
 								<a href="#" data-icon="info">Information</a>
 								<ul>
@@ -110,6 +110,14 @@
 						<ul id="open_windows_list">
 						</ul>
 					</li>
+					<li class="-hasSubmenu -noChevron">
+						<a href="#"   id="fullscreen_button" title="Fullscreen" data-icon="fullscreen"></a>
+					</li>
+					<li class="-hasSubmenu -noChevron">
+						<a href="#" id="sound_button"  title="Sound" data-icon="volume_off"></a>
+						</ul>
+					</li>
+					<div id = "float_tray"  class="menu-divright"></div>
 				</ul>
 			</div>
 			<div id="top_bar">
@@ -234,6 +242,7 @@
 		<script>
 			var getparam = Utilities.getparam;
 			var getboolparam = Utilities.getboolparam;
+			var float_menu_width = 130;
 
 			// disable right click menu:
 			window.oncontextmenu = function(e) {
@@ -250,6 +259,10 @@
 
 			if (!getboolparam("top_bar", true)) {
 				$("#top_bar").hide();
+			}
+			
+			if (!getboolparam("floating_menu", true)) {
+				$("#float_menu").hide();
 			}
 
 			function show_menu(menu_id, event) {
@@ -608,6 +621,7 @@
 			    	client.audio_mediasource_enabled = getboolparam("mediasource", true);
 			    	client.audio_aurora_enabled = getboolparam("aurora", true);
 			    	client.audio_httpstream_enabled = getboolparam("http-stream", true);
+			    	$('#sound_button').attr('data-icon', 'volume_up');
 			    }
 
 			    if(keyboard_layout) {
@@ -837,6 +851,8 @@
 					var clock_text = $("#clock_text");
 					var width = clock_text.width();
 					clock_text.text(date.toLocaleDateString()+" "+date.toLocaleTimeString());
+					var clock_menu_text = $("#clock_menu_text");
+					clock_menu_text.text(date.toLocaleDateString()+" "+date.toLocaleTimeString());
 					if (width != clock_text.width()) {
 						//trays have been shifted left or right:
 						client.reconfigure_all_trays();
@@ -932,8 +948,33 @@
 						if (req) {
 							req.call(document.body);
 						}
-						//change icon to unfullscreen:
+
 						$('#fullscreen').attr('src', './icons/unfullscreen.png');
+
+					} else {
+						if (document.exitFullscreen) {
+				            document.exitFullscreen();
+				        } else if (document.webkitExitFullscreen) {
+				            document.webkitExitFullscreen();
+				        } else if (document.mozCancelFullScreen) {
+				            document.mozCancelFullScreen();
+				        } else if (document.msExitFullscreen) {
+				            document.msExitFullscreen();
+				        }
+					}
+				});
+				
+				$('#fullscreen_button').on('click', function (e) {
+					var f_el = document.fullscreenElement || document.mozFullScreen || document.webkitIsFullScreen || document.msFullscreenElement;
+					if (!f_el) {
+						var elem = document.getElementById("fullscreen");
+				        var req = elem.requestFullScreen || elem.webkitRequestFullScreen || elem.mozRequestFullScreen || elem.msRequestFullscreen;
+						if (req) {
+							req.call(document.body);
+						}
+						//change icon to unfullscreen:
+						$('#fullscreen_button').attr('data-icon', 'fullscreen_exit');
+						
 					} else {
 						if (document.exitFullscreen) {
 				            document.exitFullscreen();
@@ -952,7 +993,11 @@
 					clog("fullscreenchange:", f_el);
 				    if (f_el == null) {
 				    	//we're not in fullscreen mode now, so show fullscreen icon again:
-						$('#fullscreen').attr('src', './icons/fullscreen.png');
+						if (getboolparam("top_bar", true)) {
+							$('#fullscreen').attr('src', './icons/fullscreen.png');
+						}else{	
+							$('#fullscreen').attr('data-icon', 'fullscreen');
+						}
 				    }
 				});
 			});

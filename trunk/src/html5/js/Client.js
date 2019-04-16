@@ -1264,6 +1264,10 @@ XpraClient.prototype._window_mouse_move = function(ctx, e, window) {
 }
 XpraClient.prototype.do_window_mouse_move = function(e, window) {
 	
+	if(window==null || (!window.focused && !window.override_redirect)){
+		return;
+	}
+	
 	this._check_browser_language();
 	if (this.server_readonly) {
 		return;
@@ -1295,6 +1299,7 @@ XpraClient.prototype.do_window_mouse_click = function(e, window, pressed) {
 	if (this.server_readonly) {
 		return;
 	}
+
 	var mouse = this.getMouse(e, window),
 		x = Math.round(mouse.x),
 		y = Math.round(mouse.y);
@@ -1309,6 +1314,7 @@ XpraClient.prototype.do_window_mouse_click = function(e, window, pressed) {
 	//if (wid>0 && this.focus != wid && pressed) {
 		this._window_set_focus(window);
 	//}
+	
 	
 	if(window==null || (!window.focused && !window.override_redirect)){
 		return;
@@ -1407,7 +1413,7 @@ XpraClient.prototype.do_window_mouse_scroll = function(e, window) {
  * Focus
  */
 XpraClient.prototype._window_set_focus = function(win) {
-	if (win.client.server_readonly) {
+	if (win==null || win.client.server_readonly) {
 		return;
 	}
 	// don't send focus packet for override_redirect windows!
@@ -1704,12 +1710,37 @@ XpraClient.prototype._process_hello = function(packet, ctx) {
 	if(ctx.xdg_menu != null)
 	{
 		for(key in ctx.xdg_menu){
+			var xdg_menu_cats = ctx.xdg_menu[key].Entries;
 			var li = document.createElement("li");
 			li.className = "-hasSubmenu";
+			
+			var cat_icon_data = ctx.xdg_menu[key].IconData;
+				if (typeof cat_icon_data === 'string') {
+					var uint = new Uint8Array(cat_icon_data.length);
+					for(var i=0;i<cat_icon_data.length;++i) {
+						uint[i] = cat_icon_data.charCodeAt(i);
+					}
+					cat_icon_data = uint;
+			}
+			
+			
+			
+			var catDivLeft = document.createElement("div");
+				catDivLeft.className="menu-divleft";
+				var img = new Image();
+				if (typeof cat_icon_data !== 'undefined'){
+					img.src = "data:image/png;base64," + Utilities.ArrayBufferToBase64(cat_icon_data);
+				}
+				img.height=24;
+				img.width=24;
+				img.className="menu-content-left";
+				catDivLeft.appendChild(img);
+			
+				
 			var a = document.createElement("a");
+			a.appendChild(catDivLeft);
 			a.appendChild(document.createTextNode(ctx.xdg_menu[key].Name));
 			a.href="#";
-			a.setAttribute("data-icon", "apps")
 			li.appendChild(a);
 			
 			var ul = document.createElement("ul");
@@ -1725,13 +1756,17 @@ XpraClient.prototype._process_hello = function(packet, ctx) {
 			
 
 			
-			var xdg_menu_cats = ctx.xdg_menu[key].Entries;
+			
 			for(key in xdg_menu_cats){
 				var entry = xdg_menu_cats[key];
 				var li2 = document.createElement("li");
 				var a2 = document.createElement("a");
 				
 				var name = entry.Name;
+				var trimLength = 15;
+        	    name = name.length > trimLength ? 
+                    name.substring(0, trimLength - 3) + "..." : 
+                    name;
 				var command = entry.Exec.replace(/%[uUfF]/g,"");
 				var icon_data = entry.IconData;
 				if (typeof icon_data === 'string') {
@@ -2001,12 +2036,34 @@ XpraClient.prototype._process_new_tray = function(packet, ctx) {
 	mydiv.id = String(wid);
 	var mycanvas = document.createElement("canvas");
 	mydiv.appendChild(mycanvas);
-	var top_bar = document.getElementById("top_bar");
-	top_bar.appendChild(mydiv);
-	var x = 100;
+	
+	var x = 0;
 	var y = 0;
-	w = 48;
-	h = 48;
+	if (getboolparam("top_bar", true)) {
+	    var top_bar = document.getElementById("top_bar");
+	    top_bar.appendChild(mydiv);
+	    x = 100;
+	    y = 0;
+	    w = 48;
+	    h = 48;
+	} else {
+		var float_tray = document.getElementById("float_tray");
+		var float_menu = document.getElementById("float_menu");
+		$('#float_menu').children().show();
+		//float_menu_width=$('#float_menu').width() + 10;
+		//increase size for tray icon and -10 for paddding
+		var new_width = float_menu_width + 30 -10;
+		float_menu.style.width = new_width + "px";
+		float_menu_width=$('#float_menu').width() + 10;
+		mydiv.style.backgroundColor = "white";
+		
+		float_tray.appendChild(mydiv);
+	    x = 0;
+	    y = 0;
+	    w = 30;
+	    h = 30;
+	}
+	
 	mycanvas.width = w;
 	mycanvas.height = h;
 	var win = new XpraWindow(ctx, mycanvas, wid, x, y, w, h,
@@ -2030,6 +2087,9 @@ XpraClient.prototype.send_tray_configure = function(wid) {
 	var x = Math.round(div.offset().left);
 	var y = Math.round(div.offset().top);
 	var w = 48, h = 48;
+	if (getboolparam("floating_menu", true)) {
+		w = 30, h = 30;
+	}
 	this.clog("tray", wid, "position:", x, y);
 	this.send(["configure-window", Number(wid), x, y, w, h, {}]);
 }
@@ -2044,11 +2104,22 @@ XpraClient.prototype._tray_closed = function(win) {
 }
 
 XpraClient.prototype.reconfigure_all_trays = function() {
+	
+	var float_menu = document.getElementById("float_menu");
+	// default width 4x30 (icons) + 10 (padding)
+	float_menu_width = 130;
 	for (var twid in this.id_to_window) {
+		
 		var twin = this.id_to_window[twid];
 		if (twin && twin.tray) {
+		    float_menu_width = float_menu_width + 30;
 			this.send_tray_configure(twid);
 		}
+	}
+	
+	// don't set width if children are hidden
+	if($('#float_menu').width() > 0){
+		float_menu.style.width = float_menu_width;
 	}
 }
 
@@ -3025,6 +3096,13 @@ XpraClient.prototype._process_open_url = function(packet, ctx) {
     	ctx.clog(" but opening of URLs is disabled");
         return
     }
-    window.open(url, '_blank');
-    console.log("opening url:", url);
+
+	console.log("opening url:", url);
+	var new_window = window.open(url, '_blank');
+
+    if(!new_window || new_window.closed || typeof new_window.closed=='undefined') 
+	{ 
+		//Popup blocked, display link in notification
+		window.doNotification("", 0, "Open Url", "<a href=" + url + ">"+url+"</a>", 5, null, null, null, null, null);
+	}
 }

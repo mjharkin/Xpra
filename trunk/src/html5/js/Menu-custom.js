@@ -8,12 +8,18 @@
 				
 				a.id = "windowlistitemlink"+wid;
 				
-				a.onmouseover=function(){client._window_set_focus(client.id_to_window[wid])};
+				a.onmouseover=function(e){
+					if (e.ctrlKey) {
+						client._window_set_focus(client.id_to_window[wid]);
+					}
+				};
 				a.onclick=function(){
 					if(jQuery(client.id_to_window[wid].div).is(":hidden")){
 						jQuery(client.id_to_window[wid].div).show();
 					}
 					this.parentElement.parentElement.className="-hide";
+					
+					client._window_set_focus(client.id_to_window[wid]);
 				};
 				
 				var divLeft = document.createElement("div");

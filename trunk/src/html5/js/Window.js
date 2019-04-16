@@ -174,6 +174,7 @@ function XpraWindow(client, canvas_state, wid, x, y, w, h, metadata, override_re
 		else {
 			jQuery(this.d_closebtn).hide();
 			jQuery(this.d_maximizebtn).hide();
+			jQuery('#windowlistitemmax' + String(wid)).hide();
 			jQuery(this.d_minimizebtn).hide();
 		}
 		// adjust top offset

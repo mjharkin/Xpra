@@ -4,7 +4,7 @@ v2.5.1 (2019-04-15)
 	-- fix compatibility with old versions of python-pillow
 	-- fix scroll encoding code flow (should be impossible to hit)
 	-- fix handling of info requests with Python3 servers
-	-- fix missing option for lock option in man page
+	-- fix missing option for lock argument in man page
 	-- fix ssh errors handling authentication failures
 	-- fix ssh server connections and support 'none' authentication
 	-- fix start new command menu
@@ -13,7 +13,7 @@ v2.5.1 (2019-04-15)
 	-- fix pointer position on multi-monitor shadow servers
 	-- fix system tray forwarding with python3 servers
 	-- fix window icons forwarding (MS Windows and MacOS mostly)
-	-- fix detection of spash window types
+	-- fix detection of splash window types
 	-- fix server startup errors when X11 root properties are invalid
 	-- fix shadow server startup failures on MacOS
 	-- fix system tray errors during shadow server startup on MacOS

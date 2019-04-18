@@ -274,8 +274,6 @@ class Protocol(object):
                 log.error("error collecting connection information on %s", self._conn, exc_info=True)
         #add stats to connection info:
         info.setdefault("input", {}).update({
-                       "buffer-size"            : self.read_buffer_size,
-                       "hangup-delay"           : self.hangup_delay,
                        "packetcount"            : self.input_packetcount,
                        "raw_packetcount"        : self.input_raw_packetcount,
                        "count"                  : self.input_stats,

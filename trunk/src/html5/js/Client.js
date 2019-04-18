@@ -1305,9 +1305,11 @@ XpraClient.prototype.do_window_mouse_click = function(e, window, pressed) {
 		wid = window.wid;
 	}
 	// dont call set focus unless the focus has actually changed
-	if (wid>0 && this.focus != wid) {
+        // TODO some client windows with focus aren't focused on the server
+        // so for now we force focus on every click
+	//if (wid>0 && this.focus != wid) {
 		this._window_set_focus(window);
-	}
+	//}
 
 	if(window==null || (!window.focused && !window.override_redirect && !window.tray)){
 		return;

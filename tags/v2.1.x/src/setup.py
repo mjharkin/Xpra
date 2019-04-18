@@ -2156,6 +2156,8 @@ libav_common = dec_avcodec2_ENABLED or csc_swscale_ENABLED
 toggle_packages(libav_common, "xpra.codecs.libav_common")
 if libav_common:
     avutil_pkgconfig = pkgconfig("avutil")
+    if get_gcc_version()>=[9, 0]:
+        add_to_keywords(avutil_pkgconfig, 'extra_compile_args', "-Wno-error=attributes")
     cython_add(Extension("xpra.codecs.libav_common.av_log",
                 ["xpra/codecs/libav_common/av_log.pyx"],
                 **avutil_pkgconfig))
@@ -2164,6 +2166,8 @@ if libav_common:
 toggle_packages(dec_avcodec2_ENABLED, "xpra.codecs.dec_avcodec2")
 if dec_avcodec2_ENABLED:
     avcodec2_pkgconfig = pkgconfig("avcodec", "avutil")
+    if get_gcc_version()>=[9, 0]:
+        add_to_keywords(avcodec2_pkgconfig, 'extra_compile_args', "-Wno-error=attributes")
     cython_add(Extension("xpra.codecs.dec_avcodec2.decoder",
                 ["xpra/codecs/dec_avcodec2/decoder.pyx"],
                 **avcodec2_pkgconfig))
@@ -2180,6 +2184,8 @@ if csc_libyuv_ENABLED:
 toggle_packages(csc_swscale_ENABLED, "xpra.codecs.csc_swscale")
 if csc_swscale_ENABLED:
     swscale_pkgconfig = pkgconfig("swscale", "avutil")
+    if get_gcc_version()>=[9, 0]:
+        add_to_keywords(swscale_pkgconfig, 'extra_compile_args', "-Wno-error=attributes")
     cython_add(Extension("xpra.codecs.csc_swscale.colorspace_converter",
                 ["xpra/codecs/csc_swscale/colorspace_converter.pyx"],
                 **swscale_pkgconfig))
@@ -2198,6 +2204,8 @@ if vpx_ENABLED:
 toggle_packages(enc_ffmpeg_ENABLED, "xpra.codecs.enc_ffmpeg")
 if enc_ffmpeg_ENABLED:
     ffmpeg_pkgconfig = pkgconfig("libavcodec", "libavformat", "libavutil")
+    if get_gcc_version()>=[9, 0]:
+        add_to_keywords(ffmpeg_pkgconfig, 'extra_compile_args', "-Wno-error=attributes")
     cython_add(Extension("xpra.codecs.enc_ffmpeg.encoder",
                 ["xpra/codecs/enc_ffmpeg/encoder.pyx"],
                 **ffmpeg_pkgconfig))

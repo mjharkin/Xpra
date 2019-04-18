@@ -1260,6 +1260,11 @@ XpraClient.prototype._window_mouse_move = function(ctx, e, window) {
 	ctx.do_window_mouse_move(e, window);
 }
 XpraClient.prototype.do_window_mouse_move = function(e, window) {
+	
+	if(window==null || (!window.focused && !window.override_redirect && !window.tray)){
+		return;
+	}
+	
 	this._check_browser_language();
 	if (this.server_readonly) {
 		return;
@@ -1303,6 +1308,11 @@ XpraClient.prototype.do_window_mouse_click = function(e, window, pressed) {
 	if (wid>0 && this.focus != wid) {
 		this._window_set_focus(window);
 	}
+
+	if(window==null || (!window.focused && !window.override_redirect && !window.tray)){
+		return;
+	}
+
 	var button = mouse.button;
 	this.debug("mouse", "click:", button, pressed, x, y);
 	if (button==4) {
@@ -1394,7 +1404,7 @@ XpraClient.prototype.do_window_mouse_scroll = function(e, window) {
  * Focus
  */
 XpraClient.prototype._window_set_focus = function(win) {
-	if (win.client.server_readonly) {
+	if (win==null || win.client.server_readonly) {
 		return;
 	}
 	// don't send focus packet for override_redirect windows!

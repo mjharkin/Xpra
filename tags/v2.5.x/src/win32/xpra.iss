@@ -1,9 +1,9 @@
 [Setup]
 AppName=Xpra
 AppId=Xpra_is1
-AppVersion=2.5.1
-AppVerName=Xpra 2.5.1
-UninstallDisplayName=Xpra 2.5.1
+AppVersion=2.5.2
+AppVerName=Xpra 2.5.2
+UninstallDisplayName=Xpra 2.5.2
 AppPublisher=xpra.org
 AppPublisherURL=http:;xpra.org/
 DefaultDirName={pf}\Xpra
@@ -16,7 +16,7 @@ OutputBaseFilename=Xpra_Setup
 Compression=lzma2/max
 SolidCompression=yes
 AllowUNCPath=false
-VersionInfoVersion=2.5.1
+VersionInfoVersion=2.5.2
 VersionInfoCompany=xpra.org
 VersionInfoDescription=multi-platform screen and application forwarding system
 WizardImageFile=win32\xpra-logo.bmp

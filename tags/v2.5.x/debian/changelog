@@ -1,3 +1,13 @@
+xpra (2.5.2-1) UNRELEASED; urgency=low
+  * fix errors in avahi error handler
+  * fix tests being run with the wrong python interpreter version
+  * fix systemd-run using the wrong python interpreter version
+  * fix start menu with python3 clients
+  * fix x264 encoder failing to create a compatible stream for the html5 client
+  * fix html5 client compatibility with buggy x264 encoders (as above)
+
+ -- Antoine Martin <antoine@nagafix.co.uk>  Sat, 20 Apr 2019 12:24:16 +0700
+
 xpra (2.5.1-2) UNRELEASED; urgency=low
   * fix h264 decoding in html5 client (workaround for server side bug)
 

@@ -1,3 +1,8 @@
+xpra (2.5.1-2) UNRELEASED; urgency=low
+  * fix h264 decoding in html5 client (workaround for server side bug)
+
+ -- Antoine Martin <antoine@xpra.org>  Sat, 20 Apr 2019 12:16:08 +0700
+
 xpra (2.5.1-1) UNRELEASED; urgency=low
   * fix sending of icons as premultipled ARGB
   * fix compatibility with old versions of python-pillow
@@ -36,7 +41,7 @@ xpra (2.5.1-1) UNRELEASED; urgency=low
   * DEB package still recommends the python2 builds
   * don't bundle openssh on MS Windows
 
- -- Antoine Martin <antoine@nagafix.co.uk>  Mon, 15 Mar 2019 21:02:46 +0700
+ -- Antoine Martin <antoine@nagafix.co.uk>  Mon, 15 Apr 2019 21:02:46 +0700
 
 xpra (2.5-2) UNRELEASED; urgency=low
   * fix compatibility with older versions of python-pillow

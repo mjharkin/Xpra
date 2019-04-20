@@ -822,6 +822,9 @@ fi
 
 
 %changelog
+* Sat Apr 20 2019 Antoine Martin <antoine@xpra.org> 2.5.1-2
+- fix h264 decoding in html5 client (workaround for server side bug)
+
 * Mon Apr 15 2019 Antoine Martin <antoine@xpra.org> 2.5.1-1
 - fix sending of icons as premultipled ARGB
 - fix compatibility with old versions of python-pillow

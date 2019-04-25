@@ -1777,7 +1777,7 @@ XpraClient.prototype._process_hello = function(packet, ctx) {
 				
 				a2.onclick = function(){
 						ctx.start_command(this.innerText, this.title, ignore);
-						this.parentElement.parentElement.parentElement.parentElement.parentElement.parentElement.className="-hide";
+						document.getElementById("menu_list").className="-hide";
 						
 				};
 				

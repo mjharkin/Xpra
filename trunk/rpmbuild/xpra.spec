@@ -3,7 +3,7 @@
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-%define version 2.5
+%define version 3.0
 
 %{!?__python2: %global __python2 python2}
 %{!?__python3: %define __python3 python3}
@@ -195,6 +195,7 @@ Requires:			python2-numpy
 BuildRequires:		python2-numpy
 %endif
 Recommends:			python2-paramiko
+Recommends:			python2-dns
 #Recommends:			python2-lzo
 Recommends:         python2-kerberos
 Recommends:         python2-gssapi
@@ -206,7 +207,6 @@ Recommends:         python2-ldap
 Recommends:         python2-ldap3
 Recommends:			python2-dbus
 %endif
-%{Recommends}:		dbus-x11
 %{Recommends}:		python2-netifaces
 %{Suggests}:		python2-cryptography
 BuildRequires:		pkgconfig
@@ -299,6 +299,7 @@ Requires:			xpra-common-server = %{version}-%{release}
 Requires:			python2-xpra = %{version}-%{release}
 Requires:			pygtk2
 %{Recommends}:		cups-filters
+%{Recommends}:		dbus-x11
 %if %{with_cuda}
 %{Recommends}:		python2-pycuda
 %{Recommends}:		python2-pynvml
@@ -346,6 +347,7 @@ Requires:			python3-gobject
 Recommends:			python3-netifaces
 Recommends:			python3-dbus
 Recommends:			python3-avahi
+Recommends:			python3-dns
 %if 0%{?fedora}
 Recommends:			python3-paramiko
 #Recommends:			python3-lzo
@@ -428,6 +430,7 @@ Requires:			python3-xpra = %{version}-%{release}
 Recommends:			cups-filters
 Recommends:			cups-pdf
 Recommends:			python3-cups
+Recommends:			dbus-x11
 Recommends:			gtk3-immodule-xim
 Recommends:			python3-setproctitle
 %if %{with_cuda}
@@ -690,13 +693,13 @@ export XPRA_TEST_DEBUG=1
 %if 0%{?run_tests}
 pushd xpra-%{version}-python2/unittests
 rm -fr unit/client unit/server/*server*py
-PYTHONPATH="%{buildroot}%{python2_sitearch}:." PATH="`pwd`/../scripts/:$PATH" XPRA_COMMAND="`pwd`/../scripts/xpra" XPRA_CONF_DIR="`pwd`/../etc/xpra" %{__python2} ./unit/run.py
+PYTHONPATH="%{buildroot}%{python2_sitearch}:." PATH="`pwd`/../scripts/:$PATH" XPRA_COMMAND="%{__python2} `pwd`/../scripts/xpra" XPRA_CONF_DIR="`pwd`/../etc/xpra" %{__python2} ./unit/run.py
 popd
 
 %if 0%{?with_python3}
 pushd xpra-%{version}-python3/unittests
 rm -fr unit/client unit/server/*server*py
-PYTHONPATH="%{buildroot}%{python3_sitearch}:." PATH="`pwd`/../scripts/:$PATH" XPRA_COMMAND="`pwd`/../scripts/xpra" XPRA_CONF_DIR="`pwd`/../etc/xpra" %{__python3} ./unit/run.py
+PYTHONPATH="%{buildroot}%{python3_sitearch}:." PATH="%{__python3} `pwd`/../scripts/:$PATH" XPRA_COMMAND="`pwd`/../scripts/xpra" XPRA_CONF_DIR="`pwd`/../etc/xpra" %{__python3} ./unit/run.py
 popd
 %endif
 %endif

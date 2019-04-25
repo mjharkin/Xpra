@@ -130,7 +130,7 @@ del emux
 #these encoders require an "audioconvert" element:
 ENCODER_NEEDS_AUDIOCONVERT = ("flacenc", "wavpackenc")
 #if this is lightweight enough, maybe we should include it unconditionally?
-SOURCE_NEEDS_AUDIOCONVERT = ("directsoundsrc", "osxaudiosrc", "autoaudiosrc")
+SOURCE_NEEDS_AUDIOCONVERT = ("directsoundsrc", "osxaudiosrc", "autoaudiosrc", "wasapisrc")
 
 CUTTER_NEEDS_RESAMPLE = ("opusenc", )
 #those don't work anyway:
@@ -785,7 +785,7 @@ def get_directsound_source_defaults(device_name_match=None, want_monitor_device=
         if devices:
             for guid, name in devices:
                 if guid:
-                    log("* %-32s %s : %s", name, guid)
+                    log("* %-32s %s", name, guid)
                 else:
                     log("* %s", name)
                 names.append(name)

@@ -187,11 +187,22 @@ class ClientWindowBase(ClientWidgetBase):
 
     def update_metadata(self, metadata):
         metalog("update_metadata(%s)", metadata)
+        if self._client.readonly:
+            metadata.update(self._force_size_constraint(*self._size))
         self._metadata.update(metadata)
         try:
             self.set_metadata(metadata)
         except Exception:
             metalog.warn("failed to set window metadata to '%s'", metadata, exc_info=True)
+
+    def _force_size_constraint(self, *size):
+        return {
+            b"size-constraints" : {
+                b"maximum-size" : size,
+                b"minimum-size" : size,
+                b"base-size" : size,
+                }
+            }
 
     def set_metadata(self, metadata):
         metalog("set_metadata(%s)", metadata)
@@ -379,12 +390,6 @@ class ClientWindowBase(ClientWidgetBase):
         if b"command" in metadata:
             self.set_command(metadata.strget("command"))
 
-        if b"menu" in metadata:
-            self.set_menu(metadata.dictget("menu"))
-
-
-    def set_menu(self, menu):
-        pass
 
     def set_command(self, command):
         pass

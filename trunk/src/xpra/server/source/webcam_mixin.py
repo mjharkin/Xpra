@@ -1,17 +1,30 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-from xpra.os_util import BytesIOClass, POSIX, OSX
+from xpra.os_util import POSIX, OSX, bytestostr
 from xpra.util import envint, csv
 from xpra.server.source.stub_source_mixin import StubSourceMixin
+from xpra.codecs.pillow.decoder import HEADERS, open_only
 from xpra.log import Logger
 
 log = Logger("webcam")
 
 MAX_WEBCAM_DEVICES = envint("XPRA_MAX_WEBCAM_DEVICES", 1)
+
+
+def valid_encodings(args):
+    #ensure that the encodings specified can be validated using HEADERS
+    encodings = []
+    for x in args:
+        x = bytestostr(x)
+        if x not in HEADERS.values():
+            log.warn("Warning: %s is not supported for webcam forwarding", x)
+        else:
+            encodings.append(x)
+    return encodings
 
 
 """
@@ -27,7 +40,7 @@ class WebcamMixin(StubSourceMixin):
     def init_from(self, _protocol, server):
         self.webcam_enabled     = server.webcam_enabled
         self.webcam_device      = server.webcam_device
-        self.webcam_encodings   = server.webcam_encodings
+        self.webcam_encodings   = valid_encodings(server.webcam_encodings)
         log("WebcamMixin: enabled=%s, device=%s, encodings=%s",
             self.webcam_enabled, self.webcam_device, self.webcam_encodings)
 
@@ -151,12 +164,9 @@ class WebcamMixin(StubSourceMixin):
             self.send_webcam_stop(device_id, "not started")
             return
         try:
-            from xpra.codecs.pillow.decoder import get_encodings
-            assert encoding in get_encodings(), "invalid encoding specified: %s (must be one of %s)" % (encoding, get_encodings())
+            assert encoding in self.webcam_encodings, "invalid encoding specified: %s (must be one of %s)" % (encoding, self.webcam_encodings)
             rgb_pixel_format = "BGRX"       #BGRX
-            from PIL import Image
-            buf = BytesIOClass(data)
-            img = Image.open(buf)
+            img = open_only(data, (encoding,))
             pixels = img.tobytes('raw', rgb_pixel_format)
             from xpra.codecs.image_wrapper import ImageWrapper
             bgrx_image = ImageWrapper(0, 0, w, h, pixels, rgb_pixel_format, 32, w*4, planes=ImageWrapper.PACKED)

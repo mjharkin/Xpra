@@ -45,7 +45,7 @@ from xpra.client.mixins.window_manager import WindowClient
 from xpra.platform.paths import get_icon_filename
 from xpra.platform.gui import (
     get_window_frame_sizes, get_window_frame_size,
-    system_bell, get_wm_name, get_fixed_cursor_size, get_menu_support_function,
+    system_bell, get_wm_name, get_fixed_cursor_size,
     )
 from xpra.log import Logger
 
@@ -113,7 +113,6 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         #group leader bits:
         self._ref_to_group_leader = {}
         self._group_leader_wids = {}
-        self._set_window_menu = get_menu_support_function()
         try:
             self.connect("scaling-changed", self.reset_windows_cursors)
         except TypeError:
@@ -611,7 +610,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             if v:
                 try:
                     wm_name = get_wm_name()
-                except:
+                except Exception:
                     wm_name = None
                 try:
                     if len(v)==8:
@@ -652,25 +651,6 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
     def supports_system_tray(self):
         #always True: we can always use gtk.StatusIcon as fallback
         return True
-
-
-    def cook_metadata(self, new_window, metadata):
-        metadata = UIXpraClient.cook_metadata(self, new_window, metadata)
-        #ensures we will call set_window_menu for this window when we create it:
-        if new_window and self._set_window_menu:
-            menu = metadata.dictget("menu")
-            if menu is None:
-                metadata["menu"] = {}
-        return metadata
-
-
-    def set_window_menu(self, add, wid, menus, application_action_callback=None, window_action_callback=None):
-        assert self._set_window_menu
-        model = self._id_to_window.get(wid)
-        window = None
-        if model:
-            window = model.get_window()
-        self._set_window_menu(add, wid, window, menus, application_action_callback, window_action_callback)
 
 
     def get_root_window(self):
@@ -737,8 +717,6 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             ms += ["shaded", "bypass-compositor", "strut", "fullscreen-monitors"]
         if HAS_X11_BINDINGS and XSHAPE:
             ms += ["shape"]
-        if self._set_window_menu:
-            ms += ["menu"]
         #figure out if we can handle the "global menu" stuff:
         if POSIX and not OSX:
             try:
@@ -987,7 +965,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         parts = enable_opengl.split(":", 1)
         enable_option = parts[0]            #ie: "on"
         opengllog("init_opengl: enable_option=%s", enable_option)
-        if enable_option in ("probe-failed", "probe-error"):
+        if enable_option in ("probe-failed", "probe-error", "probe-crash"):
             msg = enable_option.replace("-", " ")
             if len(parts)>1:
                 msg += ": %s" % csv(parts[1:])
@@ -1236,8 +1214,6 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         if CLIPBOARD_NATIVE_CLASS:
             clipboard_options.append(CLIPBOARD_NATIVE_CLASS)
         clipboard_options.append("xpra.clipboard.gdk_clipboard.GDKClipboardProtocolHelper")
-        clipboard_options.append("xpra.clipboard.clipboard_base.DefaultClipboardProtocolHelper")
-        clipboard_options.append("xpra.clipboard.translated_clipboard.TranslatedClipboardProtocolHelper")
         clipboardlog("get_clipboard_helper_classes() unfiltered list=%s", clipboard_options)
         if ct and ct.lower()!="auto" and ct.lower() not in TRUE_OPTIONS:
             #try to match the string specified:

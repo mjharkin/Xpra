@@ -72,7 +72,7 @@ XpraClient.prototype.init_settings = function(container) {
 	this.reconnect_delay = 1000;	//wait 1 second before retrying
 	this.reconnect_attempt = 0;
 	this.swap_keys = Utilities.isMacOS();
-	this.HELLO_TIMEOUT = 50000;
+	this.HELLO_TIMEOUT = 30000;
 	this.PING_TIMEOUT = 15000;
 	this.PING_GRACE = 2000;
 	this.PING_FREQUENCY = 5000;
@@ -82,6 +82,7 @@ XpraClient.prototype.init_settings = function(container) {
 
 XpraClient.prototype.init_state = function(container) {
 	// state
+	this.connected = false;
 	this.desktop_width = 0;
 	this.desktop_height = 0;
 	this.server_remote_logging = false;
@@ -118,6 +119,7 @@ XpraClient.prototype.init_state = function(container) {
 	this.last_mouse_y = null;
 	this.wheel_delta_x = 0;
 	this.wheel_delta_y = 0;
+	this.mouse_grabbed = false;
 	// clipboard
 	this.clipboard_buffer = "";
 	this.clipboard_pending = false;
@@ -201,7 +203,7 @@ XpraClient.prototype.send = function() {
 }
 
 XpraClient.prototype.send_log = function(level, args) {
-	if(this.remote_logging && this.server_remote_logging) {
+	if(this.remote_logging && this.server_remote_logging && this.connected) {
 		try {
 			var sargs = [];
 			for(var i = 0; i < args.length; i++) {
@@ -442,6 +444,7 @@ XpraClient.prototype.close_windows = function() {
 }
 
 XpraClient.prototype.close_protocol = function() {
+	this.connected = false;
 	if (this.protocol) {
 		this.protocol.close();
 		this.protocol = null;
@@ -1142,6 +1145,8 @@ XpraClient.prototype._make_hello = function() {
 			"vp8+webm"	: ["YUV420P"],
 			"webp"		: ["BGRX", "BGRA"],
 		},
+		//this is a workaround for server versions between 2.5.0 to 2.5.2 only:
+		"encoding.x264.YUV420P.profile"		: "baseline",
 		"encoding.h264.YUV420P.profile"		: "baseline",
 		"encoding.h264.YUV420P.level"		: "2.1",
 		"encoding.h264.cabac"				: false,
@@ -1269,7 +1274,7 @@ XpraClient.prototype.do_window_mouse_move = function(e, window) {
 	}
 	
 	this._check_browser_language();
-	if (this.server_readonly) {
+	if (this.server_readonly || this.mouse_grabbed) {
 		return;
 	}
 	
@@ -1296,7 +1301,7 @@ XpraClient.prototype._window_mouse_up = function(ctx, e, window) {
 }
 
 XpraClient.prototype.do_window_mouse_click = function(e, window, pressed) {
-	if (this.server_readonly) {
+	if (this.server_readonly || this.mouse_grabbed) {
 		return;
 	}
 
@@ -1863,6 +1868,7 @@ XpraClient.prototype._process_hello = function(packet, ctx) {
 	ctx.reconnect_attempt = 0;
 	ctx.on_connection_progress("Session started", "", 100);
 	ctx.on_connect();
+	ctx.connected = true;
 }
 
 XpraClient.prototype.on_connect = function() {
@@ -3095,13 +3101,10 @@ XpraClient.prototype._process_open_url = function(packet, ctx) {
     	ctx.clog(" but opening of URLs is disabled");
         return
     }
-
-	console.log("opening url:", url);
-	var new_window = window.open(url, '_blank');
-
-    if(!new_window || new_window.closed || typeof new_window.closed=='undefined') 
-	{ 
-		//Popup blocked, display link in notification
-		window.doNotification("", 0, "Open Url", "<a href=" + url + ">"+url+"</a>", 5, null, null, null, null, null);
+    ctx.clog("opening url:", url);
+	if (window.doNotification) {
+		var summary = "Server URL Open Request";
+		var body = "Link: <a href=\""+url+"\" target=\"_blank\">"+url+"</a>";
+		window.doNotification("info", 0, summary, body, 30);
 	}
 }

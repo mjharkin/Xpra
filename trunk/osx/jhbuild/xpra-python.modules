@@ -13,9 +13,9 @@
 
 	<distutils id="python-setuptools">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/3b/17/81a4ab4c94e9c78f98dfaad0208994129213089361dc53a7cd8de177d1e3/setuptools-40.7.1.zip"
-			hash="sha256:5926bbea397d0fcec2f7946f1691f5820ef0234247b2d5fa83d30cc216d613ec"
-			version="40.7.1"/>
+			module="/packages/ed/69/c805067de1feedbb98c53174b0f2df44cc05e0e9ee73bb85eebc59e508c6/setuptools-41.0.0.zip"
+			hash="sha256:79d30254b6fe7a8e672e43cd85f13a9f3f2a50080bc81d851143e2219ef0dcb1"
+			version="41.0.0"/>
 		<dependencies>
 			<dep package="python"/>
 		</dependencies>
@@ -118,7 +118,7 @@
 	</distutils>
 
 	<distutils id="python-parsing">
-		<branch repo="pypi.python.org"
+		<branch repo="files.pythonhosted.org"
 			module="/packages/5d/3a/24d275393f493004aeb15a1beae2b4a3043526e8b692b65b4a9341450ebe/pyparsing-2.4.0.tar.gz"
 			hash="sha256:1873c03321fc118f4e9746baf201ff990ceb915f433f23b395f5580d1840cb2a"
 			version="2.4.0"/>
@@ -193,10 +193,10 @@
 	</distutils>
 
 	<distutils id="python-pillow">
-		<branch repo="github.com"
-			module="/python-pillow/Pillow/archive/6.0.0.tar.gz"
-			hash="sha256:da17ab867ab32a4dc0569271c27c3801461d07009f3a9d41463f1790709f7806"
-			version="6.0"/>
+		<branch repo="files.pythonhosted.org"
+			module="/packages/81/1a/6b2971adc1bca55b9a53ed1efa372acff7e8b9913982a396f3fa046efaf8/Pillow-6.0.0.tar.gz"
+			hash="sha256:809c0a2ce9032cbcd7b5313f71af4bdc5c8c771cb86eb7559afd954cab82ebb5"
+			version="6.0.0"/>
 		<dependencies>
 			<dep package="python"/>
 			<dep package="libwebp"/>
@@ -225,11 +225,10 @@
 	</distutils>
 
 	<distutils id="python-cython">
-		<branch repo="github.com"
-			module="/cython/cython/archive/0.29.6.tar.gz"
-			hash="sha256:35a2c8c5e53dee0f5fcb027673ce31fed157abf367dbd26361cf8a0cd6282ec3"
-			checkoutdir="cython-0.29.6"
-			version="0.29.6"/>
+		<branch repo="files.pythonhosted.org"
+			module="/packages/f8/da/c979464858b257b21a6472a85285548c91f5b4dc773cb049cfdfb3ceeb02/Cython-0.29.7.tar.gz"
+			hash="sha256:55d081162191b7c11c7bfcb7c68e913827dfd5de6ecdbab1b99dab190586c1e8"
+			version="0.29.7"/>
 		<dependencies>
 			<dep package="python"/>
 		</dependencies>
@@ -240,10 +239,10 @@
 
 	<distutils id="python-numpy">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/cf/8d/6345b4f32b37945fedc1e027e83970005fc9c699068d2f566b82826515f2/numpy-1.16.2.zip"
-			checkoutdir="numpy-1.16.2"
-			version="1.16.2"
-			hash="sha256:6c692e3879dde0b67a9dc78f9bfb6f61c666b4562fd8619632d7043fb5b691b0"/>
+			module="/packages/93/48/956b9dcdddfcedb1705839280e02cbfeb2861ed5d7f59241210530867d5b/numpy-1.16.3.zip"
+			checkoutdir="numpy-1.16.3"
+			version="1.16.3"
+			hash="sha256:78a6f89da87eeb48014ec652a65c4ffde370c036d780a995edaeb121d3625621"/>
 		<dependencies>
 			<dep package="python"/>
 		</dependencies>

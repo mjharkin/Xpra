@@ -3,7 +3,7 @@
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-%define version 2.5.1
+%define version 2.5.2
 
 %{!?__python2: %global __python2 python2}
 %{!?__python3: %define __python3 python3}
@@ -11,7 +11,7 @@
 %{!?python3_sitearch: %global python3_sitearch %(%{__python3} -c "from distutils.sysconfig import get_python_lib; print(get_python_lib(1))")}
 
 %define CFLAGS -O2
-%define DEFAULT_BUILD_ARGS --with-Xdummy --without-enc_x2.5.1	--pkg-config-path=%{_libdir}/xpra/pkgconfig --rpath=%{_libdir}/xpra --without-cuda_rebuild
+%define DEFAULT_BUILD_ARGS --with-Xdummy --without-enc_x265 --pkg-config-path=%{_libdir}/xpra/pkgconfig --rpath=%{_libdir}/xpra --without-cuda_rebuild
 
 %define update_firewall 1
 %define run_tests 1
@@ -195,6 +195,7 @@ Requires:			python2-numpy
 BuildRequires:		python2-numpy
 %endif
 Recommends:			python2-paramiko
+Recommends:			python2-dns
 #Recommends:			python2-lzo
 Recommends:         python2-kerberos
 Recommends:         python2-gssapi
@@ -346,6 +347,7 @@ Requires:			python3-gobject
 Recommends:			python3-netifaces
 Recommends:			python3-dbus
 Recommends:			python3-avahi
+Recommends:			python3-dns
 %if 0%{?fedora}
 Recommends:			python3-paramiko
 #Recommends:			python3-lzo
@@ -690,13 +692,13 @@ export XPRA_TEST_DEBUG=1
 %if 0%{?run_tests}
 pushd xpra-%{version}-python2/unittests
 rm -fr unit/client unit/server/*server*py
-PYTHONPATH="%{buildroot}%{python2_sitearch}:." PATH="`pwd`/../scripts/:$PATH" XPRA_COMMAND="`pwd`/../scripts/xpra" XPRA_CONF_DIR="`pwd`/../etc/xpra" %{__python2} ./unit/run.py
+PYTHONPATH="%{buildroot}%{python2_sitearch}:." PATH="`pwd`/../scripts/:$PATH" XPRA_COMMAND="%{__python2} `pwd`/../scripts/xpra" XPRA_CONF_DIR="`pwd`/../etc/xpra" %{__python2} ./unit/run.py
 popd
 
 %if 0%{?with_python3}
 pushd xpra-%{version}-python3/unittests
 rm -fr unit/client unit/server/*server*py
-PYTHONPATH="%{buildroot}%{python3_sitearch}:." PATH="`pwd`/../scripts/:$PATH" XPRA_COMMAND="`pwd`/../scripts/xpra" XPRA_CONF_DIR="`pwd`/../etc/xpra" %{__python3} ./unit/run.py
+PYTHONPATH="%{buildroot}%{python3_sitearch}:." PATH="%{__python3} `pwd`/../scripts/:$PATH" XPRA_COMMAND="`pwd`/../scripts/xpra" XPRA_CONF_DIR="`pwd`/../etc/xpra" %{__python3} ./unit/run.py
 popd
 %endif
 %endif
@@ -822,18 +824,56 @@ fi
 
 
 %changelog
-* Thu Mar 28 2019 Antoine Martin <antoine@xpra.org> 2.5.1-1
+* Sat Apr 20 2019 Antoine Martin <antoine@xpra.org> 2.5.2-2
+- fix errors in avahi error handler
+- fix tests being run with the wrong python interpreter version
+- fix systemd-run using the wrong python interpreter version
+- fix start menu with python3 clients
+- fix x264 encoder failing to create a compatible stream for the html5 client
+- fix html5 client compatibility with buggy x264 encoders (as above)
+
+* Sat Apr 20 2019 Antoine Martin <antoine@xpra.org> 2.5.1-2
+- fix h264 decoding in html5 client (workaround for server side bug)
+
+* Mon Apr 15 2019 Antoine Martin <antoine@xpra.org> 2.5.1-1
 - fix sending of icons as premultipled ARGB
 - fix compatibility with old versions of python-pillow
 - fix scroll encoding code flow (should be impossible to hit)
 - fix handling of info requests with Python3 servers
-- fix missing option for lock option in man page
+- fix missing option for lock argument in man page
+- fix ssh errors handling authentication failures
+- fix ssh server connections and support 'none' authentication
+- fix start new command menu
+- fix appindicator failures when we fail to locate the default icon
+- fix command line tools usage under cygwin and terminal emulators
+- fix pointer position on multi-monitor shadow servers
+- fix system tray forwarding with python3 servers
+- fix window icons forwarding (MS Windows and MacOS mostly)
+- fix detection of splash window types
+- fix server startup errors when X11 root properties are invalid
+- fix shadow server startup failures on MacOS
+- fix system tray errors during shadow server startup on MacOS
+- fix printing errors with python3 builds and rencode packet encoder
+- fix parsing of printer options
+- fix dispatching of printer jobs to clients with python3 servers
+- fix parsing of key symbol definitions with python3 servers
+- fix compatibility with older versions of GTK3
+- fix proxy video encoders initialization
+- fix 'missing encodings' server error with python3
+- fix spurious clipboard warning when clipboard is disabled
+- disable modal windows by default (was enabled by default since v2.3)
+- workaround buggy system trays
 - try harder to prevent hash collisions in scroll encoding
 - skip risky opengl probing when the initial check failed
 - prevent file conflicts with older packages
+- don't use appindicator with Fedora Gnome
 - minor packaging fixes (dates)
+- remove spurious ssh dnssec check logging
+- bump version in cups backend
+- DEB package still recommends the python2 builds
+- don't bundle openssh on MS Windows
 
-* Tue Mar 19 2019 Antoine Martin <antoine@xpra.org> 2.5-1
+* Tue Mar 19 2019 Antoine Martin <antoine@xpra.org> 2.5.2
 - Python 3 port mostly complete, including packaging for Debian
 - pixel compression and bandwidth management:
 - better recovery from network congestion
@@ -1122,7 +1162,7 @@ fi
 -functional HTML5 client
 -add session idle timeout switch
 -add html command line switch for easily setting up an HTML5 xpra server
--dropped support for Python 2.5.1 and older, allowing many code cleanups and improvements
+-dropped support for Python 2.5.2 and older, allowing many code cleanups and improvements
 -include manual in html format with MS Windows and OSX builds
 -add option to control socket permissions (easier setup of containers)
 -client log output forwarding to the server
@@ -1260,7 +1300,7 @@ fi
 - fix painting of forwarded tray
 - fix initial window workspace
 - fix launcher with debug option in config file
-- fix compilation of x2.5.1 encoder
+- fix compilation of x265 encoder
 - fix infinite recursion in cython csc module
 - don't include sound utilities when building without sound
 
@@ -1304,7 +1344,7 @@ fi
 - fix RGB pixel data buffer size (re-stride as needed)
 - avoid buggy swscale 2.1.0 on Ubuntu
 
-* Sat May 03 2014 Antoine Martin <antoine@xpra.org> 0.12.5.1-1
+* Sat May 03 2014 Antoine Martin <antoine@xpra.org> 0.12.5.2-1
 - fix error when clients supply invalid screen dimensions
 - fix MS Windows build without ffmpeg
 - fix cairo backing alternative
@@ -1625,7 +1665,7 @@ fi
 - fix focus problems with old Xvfb display servers
 - fix RPM SELinux labelling of static codec builds (CentOS)
 - fix CentOS 5.x compatibility
-- fix Python 2.4 and 2.5.1 compatibility (many)
+- fix Python 2.4 and 2.5.2 compatibility (many)
 - fix failed server upgrades killing the virtual display
 - fix screenshot command with "OR" windows
 - fix support "OR" windows that move and resize
@@ -1980,7 +2020,7 @@ fi
 - toggle cursors, bell and notifications by telling the server not to bother sending them, saves bandwidth
 - build/deploy: don't modify file in source tree, generate it at build time only
 - add missing GPL2 license file to show in about dialog
-- Python 2.5.1: workarounds to restore support
+- Python 2.5.2: workarounds to restore support
 - turn off compression over local connections (when mmap is enabled)
 - clients can specify maximum refresh rate and screen update batching options
 

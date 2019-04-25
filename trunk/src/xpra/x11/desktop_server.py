@@ -127,18 +127,20 @@ class DesktopModel(WindowModelStub, WindowDamageHandler):
             self.update_icon()
 
     def update_wm_name(self):
-        wm_name = ""
         try:
             wm_name = get_wm_name()
-        except:
-            pass
+        except Exception:
+            wm_name = ""
         iconlog("update_wm_name() wm-name=%s", wm_name)
         return self._updateprop("wm-name", wm_name)
 
     def update_icon(self):
         icons = None
         try:
-            icon_name = get_icon_filename((get_wm_name() or "").lower()+".png")
+            wm_name = get_wm_name()
+            if not wm_name:
+                return
+            icon_name = get_icon_filename(wm_name.lower()+".png")
             from PIL import Image
             img = Image.open(icon_name)
             iconlog("Image(%s)=%s", icon_name, img)
@@ -552,7 +554,7 @@ class XpraDesktopServer(DesktopServerBaseClass):
         damage = False
         if len(packet)>=9:
             damage = bool(self._set_window_state(proto, wid, window, packet[8]))
-        if not skip_geometry:
+        if not skip_geometry and not self.readonly:
             owx, owy, oww, owh = window.get_geometry()
             geomlog("_process_configure_window(%s) old window geometry: %s", packet[1:], (owx, owy, oww, owh))
             if oww!=w or owh!=h:

@@ -159,9 +159,9 @@ var Utilities = {
 		if (v==null) {
 			return "us";
 		}
-
-		if(v=="da"){
-			return "dk";
+		var layout = LANGUAGE_TO_LAYOUT[v];
+		if (layout) {
+			return layout;
 		}
 		//ie: v="en_GB";
 		v = v.split(',')[0];
@@ -173,7 +173,7 @@ var Utilities = {
 			return '';
 		}
 		//ie: "gb"
-		var layout=l[1].toLowerCase();
+		layout=l[1].toLowerCase();
 		console.debug("getKeyboardLayout()=", layout);
 		return layout;
 	},
@@ -561,3 +561,8 @@ var MOVERESIZE_DIRECTION_JS_NAME = {
         6	: "sw",
         7	: "w",
         };
+
+//convert a language code into an X11 keyboard layout code:
+var LANGUAGE_TO_LAYOUT = {
+		"da"	: "dk",
+}

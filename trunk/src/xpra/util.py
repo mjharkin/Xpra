@@ -71,6 +71,7 @@ DEFAULT_PORTS = {
     "wss"   : 443,
     "ssh"   : 22,
     "tcp"   : DEFAULT_PORT,
+    "udp"   : DEFAULT_PORT,
     }
 
 
@@ -308,7 +309,7 @@ class typedict(dict):
     def strget(self, k, default=None):
         v = self.capsget(k, default)
         if v is None:
-            return None
+            return default
         from xpra.os_util import bytestostr
         return bytestostr(v)
 
@@ -545,7 +546,7 @@ def dump_frames(frames, logger=None):
         if fid is not None:
             try:
                 fidstr = hex(fid)
-            except:
+            except TypeError:
                 fidstr = str(fid)
         logger("%i: %s %s:", i, fidstr, frame)
         for x in traceback.format_stack(frame):

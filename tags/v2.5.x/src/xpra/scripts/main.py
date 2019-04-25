@@ -291,7 +291,12 @@ def run_mode(script_file, error_cb, options, args, mode, defaults):
         if systemd_run:
             #check if we have wrapped it already (or if disabled via env var)
             if SYSTEMD_RUN:
-                return systemd_run_wrap(mode, sys.argv, options.systemd_run_args)
+                #make sure we run via the same interpreter,
+                #inject it into the command line if we have to:
+                argv = list(sys.argv)
+                if argv[0].find("python")<0:
+                    argv.insert(0, "python%i" % sys.version_info[0])
+                return systemd_run_wrap(mode, argv, options.systemd_run_args)
 
     configure_env(options.env)
     configure_logging(options, mode)
@@ -1419,8 +1424,10 @@ def get_client_app(error_cb, opts, extra_args, mode):
                 if r==0:
                     opts.opengl = "probe-success"
                 elif r==1:
-                    opts.opengl = "probe-warning"
+                    opts.opengl = "probe-crash"
                 elif r==2:
+                    opts.opengl = "probe-warning"
+                elif r==3:
                     opts.opengl = "probe-error"
                 else:
                     if r is None:
@@ -1738,9 +1745,9 @@ def no_gtk():
 def run_glprobe(opts):
     props = do_run_glcheck(opts)
     if not props.get("safe", False):
-        return 1
-    if not props.get("success", False):
         return 2
+    if not props.get("success", False):
+        return 3
     return 0
 
 def do_run_glcheck(opts):

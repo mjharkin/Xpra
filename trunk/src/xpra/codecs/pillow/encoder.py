@@ -1,14 +1,15 @@
 # This file is part of Xpra.
-# Copyright (C) 2014-2017 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2014-2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import os
 import time
+from io import BytesIO
 from PIL import Image, ImagePalette     #@UnresolvedImport
 
 from xpra.util import envbool
-from xpra.os_util import BytesIOClass, bytestostr
+from xpra.os_util import bytestostr
 from xpra.net.compression import Compressed
 from xpra.log import Logger
 from xpra.codecs.pillow import PIL_VERSION
@@ -16,7 +17,7 @@ from xpra.codecs.pillow import PIL_VERSION
 log = Logger("encoder", "pillow")
 
 SAVE_TO_FILE = envbool("XPRA_SAVE_TO_FILE")
-ENCODE_FORMATS = os.environ.get("XPRA_PILLOW_ENCODE_FORMATS", "png,png/L,png/P,jpeg,webp,jpeg2000").split(",")
+ENCODE_FORMATS = os.environ.get("XPRA_PILLOW_ENCODE_FORMATS", "png,png/L,png/P,jpeg,webp").split(",")
 
 
 def get_version():
@@ -123,7 +124,7 @@ def encode(coding, image, quality, speed, supports_transparency):
                   (w, h, coding, "%s bytes" % image.get_size(), pixel_format, image.get_rowstride()), type(pixels), pixel_format, rgb, exc_info=True)
         raise
     client_options = {}
-    if coding in ("jpeg", "webp", "jpeg2000"):
+    if coding in ("jpeg", "webp"):
         #newer versions of pillow require explicit conversion to non-alpha:
         if pixel_format.find("A")>=0:
             im = im.convert("RGB")
@@ -131,10 +132,7 @@ def encode(coding, image, quality, speed, supports_transparency):
         kwargs = im.info
         kwargs["quality"] = q
         client_options["quality"] = q
-        if coding=="jpeg2000":
-            kwargs["quality_mode"] = "rates"    #other option: "dB"
-            kwargs["quality_layers"] = max(1, (100-q)*5)
-        elif coding=="jpeg" and speed<50:
+        if coding=="jpeg" and speed<50:
             #(optimizing jpeg is pretty cheap and worth doing)
             kwargs["optimize"] = True
             client_options["optimize"] = True
@@ -193,7 +191,7 @@ def encode(coding, image, quality, speed, supports_transparency):
         #DEFAULT_STRATEGY, FILTERED, HUFFMAN_ONLY, RLE, FIXED
         #kwargs["compress_type"] = Image.DEFAULT_STRATEGY
         pil_fmt = "PNG"
-    buf = BytesIOClass()
+    buf = BytesIO()
     im.save(buf, pil_fmt, **kwargs)
     if SAVE_TO_FILE:
         filename = "./%s.%s" % (time.time(), pil_fmt)
@@ -223,10 +221,7 @@ def selftest(full=False):
                         cdata = v[1].data
                         log("encode(%s)=%s", (encoding, img, q, s, alpha), hexstr(cdata))
         except Exception as e:
-            if encoding==u"jpeg2000":
-                l = log.debug
-            else:
-                l = log.warn
+            l = log.warn
             l("Pillow error saving %s with quality=%s, speed=%s, alpha=%s", encoding, q, s, alpha)
             l(" %s", e, exc_info=True)
             ENCODINGS.remove(encoding)

@@ -1,14 +1,51 @@
-v2.5.1 (2019-03-28)
+v2.5.2 (2019-04-20)
+======================
+	-- fix errors in avahi error handler
+	-- fix tests being run with the wrong python interpreter version
+	-- fix systemd-run using the wrong python interpreter version
+	-- fix start menu with python3 clients
+	-- fix x264 encoder failing to create a compatible stream for the html5 client
+	-- fix html5 client compatibility with buggy x264 encoders (as above)
+
+
+v2.5.1 (2019-04-15)
 ======================
 	-- fix sending of icons as premultipled ARGB
 	-- fix compatibility with old versions of python-pillow
 	-- fix scroll encoding code flow (should be impossible to hit)
 	-- fix handling of info requests with Python3 servers
-	-- fix missing option for lock option in man page
+	-- fix missing option for lock argument in man page
+	-- fix ssh errors handling authentication failures
+	-- fix ssh server connections and support 'none' authentication
+	-- fix start new command menu
+	-- fix appindicator failures when we fail to locate the default icon
+	-- fix command line tools usage under cygwin and terminal emulators
+	-- fix pointer position on multi-monitor shadow servers
+	-- fix system tray forwarding with python3 servers
+	-- fix window icons forwarding (MS Windows and MacOS mostly)
+	-- fix detection of splash window types
+	-- fix server startup errors when X11 root properties are invalid
+	-- fix shadow server startup failures on MacOS
+	-- fix system tray errors during shadow server startup on MacOS
+	-- fix printing errors with python3 builds and rencode packet encoder
+	-- fix parsing of printer options
+	-- fix dispatching of printer jobs to clients with python3 servers
+	-- fix parsing of key symbol definitions with python3 servers
+	-- fix compatibility with older versions of GTK3
+	-- fix proxy video encoders initialization
+	-- fix 'missing encodings' server error with python3
+	-- fix spurious clipboard warning when clipboard is disabled
+	-- disable modal windows by default (was enabled by default since v2.3)
+	-- workaround buggy system trays
 	-- try harder to prevent hash collisions in scroll encoding
 	-- skip risky opengl probing when the initial check failed
 	-- prevent file conflicts with older packages
+	-- don't use appindicator with Fedora Gnome
 	-- minor packaging fixes (dates)
+	-- remove spurious ssh dnssec check logging
+	-- bump version in cups backend
+	-- DEB package still recommends the python2 builds
+	-- don't bundle openssh on MS Windows
 
 
 v2.5 (2019-03-19)

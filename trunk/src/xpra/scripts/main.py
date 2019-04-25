@@ -18,7 +18,7 @@ import shlex
 import traceback
 
 from xpra.platform.dotxpra import DotXpra
-from xpra.util import csv, envbool, envint, repr_ellipsized, nonl, pver, DEFAULT_PORT
+from xpra.util import csv, envbool, envint, repr_ellipsized, nonl, pver, DEFAULT_PORT, DEFAULT_PORTS
 from xpra.exit_codes import EXIT_SSL_FAILURE, EXIT_STR, EXIT_UNSUPPORTED
 from xpra.os_util import (
     get_util_logger, getuid, getgid,
@@ -291,7 +291,12 @@ def run_mode(script_file, error_cb, options, args, mode, defaults):
         if systemd_run:
             #check if we have wrapped it already (or if disabled via env var)
             if SYSTEMD_RUN:
-                return systemd_run_wrap(mode, sys.argv, options.systemd_run_args)
+                #make sure we run via the same interpreter,
+                #inject it into the command line if we have to:
+                argv = list(sys.argv)
+                if argv[0].find("python")<0:
+                    argv.insert(0, "python%i" % sys.version_info[0])
+                return systemd_run_wrap(mode, argv, options.systemd_run_args)
 
     configure_env(options.env)
     configure_logging(options, mode)
@@ -320,7 +325,7 @@ def run_mode(script_file, error_cb, options, args, mode, defaults):
 
     try:
         if mode in ("start", "start-desktop", "shadow") and display_is_remote:
-            #ie: "xpra start ssh:HOST:DISPLAY --start-child=xterm"
+            #ie: "xpra start ssh://USER@HOST:SSHPORT/DISPLAY --start-child=xterm"
             return run_remote_server(error_cb, options, args, mode, defaults)
         if (mode in ("start", "start-desktop", "upgrade", "upgrade-desktop") and supports_server) or \
             (mode=="shadow" and supports_shadow) or (mode=="proxy" and supports_proxy):
@@ -519,6 +524,8 @@ def find_session_by_name(opts, session_name):
     return "socket://%s" % tuple(session_uuid_to_path.values())[0]
 
 def parse_ssh_string(ssh_setting):
+    if is_debug_enabled("ssh"):
+        get_util_logger().info("parse_ssh_string(%s)" % ssh_setting)
     ssh_cmd = ssh_setting
     from xpra.platform.features import DEFAULT_SSH_COMMAND
     if ssh_setting=="auto":
@@ -529,7 +536,11 @@ def parse_ssh_string(ssh_setting):
                 import paramiko
             assert paramiko
             ssh_cmd = "paramiko"
-        except ImportError:
+            if is_debug_enabled("ssh"):
+                get_util_logger().info("using paramiko")
+        except ImportError as e:
+            if is_debug_enabled("ssh"):
+                get_util_logger().info("no paramiko: %s" % e)
             ssh_cmd = DEFAULT_SSH_COMMAND
     return shlex.split(ssh_cmd)
 
@@ -815,10 +826,10 @@ def parse_display_name(error_cb, opts, display_name, session_name_lookup=False):
             full_ssh += add_ssh_proxy_args(proxy_username, proxy_password, proxy_host, proxy_port,
                                            proxy_key, ssh, is_putty, is_paramiko)
         desc.update({
-                     "host"     : host,
-                     "full_ssh" : full_ssh
-                     })
-        desc["remote_xpra"] = opts.remote_xpra
+            "host"          : host,
+            "full_ssh"      : full_ssh,
+            "remote_xpra"   : opts.remote_xpra,
+            })
         if opts.socket_dir:
             desc["socket_dir"] = opts.socket_dir
         if password is None and opts.password_file:
@@ -851,7 +862,6 @@ def parse_display_name(error_cb, opts, display_name, session_name_lookup=False):
         desc.update({
                 "type"          : "unix-domain",
                 "local"         : True,
-                "display"       : "socket://%s" % sockfile,
                 "socket_dir"    : os.path.basename(sockfile),
                 "socket_dirs"   : opts.socket_dirs,
                 "socket_path"   : sockfile,
@@ -1026,6 +1036,28 @@ def socket_connect(dtype, host, port):
     raise InitException("failed to connect to %s:%s" % (host, port))
 
 
+def get_host_target_string(display_desc, port_key="port", prefix=""):
+    dtype = display_desc["type"]
+    username = display_desc.get(prefix+"username")
+    host = display_desc[prefix+"host"]
+    port = display_desc.get(prefix+port_key)
+    display = display_desc.get(prefix+"display", "")
+    return host_target_string(dtype, username, host, port, display)
+
+def host_target_string(dtype, username, host, port, display):
+    target = "%s://" % dtype
+    if username:
+        target += "%s@" % username
+    target += host
+    default_port = DEFAULT_PORTS.get(dtype, 0)
+    if port and port!=default_port:
+        target += ":%i" % port
+    if display and display.startswith(":"):
+        display = display[1:]
+    target += "/%s" % (display or "")
+    return target
+
+
 def connect_to(display_desc, opts=None, debug_cb=None, ssh_fail_cb=None):
     from xpra.net.bytestreams import SOCKET_TIMEOUT, VSOCK_TIMEOUT, SocketConnection
     display_name = display_desc["display_name"]
@@ -1053,6 +1085,11 @@ def connect_to(display_desc, opts=None, debug_cb=None, ssh_fail_cb=None):
         sock.settimeout(None)
         conn = SocketConnection(sock, sock.getsockname(), sock.getpeername(), display_name, dtype)
         conn.timeout = SOCKET_TIMEOUT
+        target = "socket://"
+        if display_desc.get("username"):
+            target += "%s@" % display_desc.get("username")
+        target += sockpath
+        conn.target = target
         return conn
 
     if dtype == "named-pipe":
@@ -1078,15 +1115,24 @@ def connect_to(display_desc, opts=None, debug_cb=None, ssh_fail_cb=None):
             raise InitException("failed to connect to the named pipe '%s':\n %s" % (pipe_name, e))
         conn = NamedPipeConnection(pipe_name, pipe_handle)
         conn.timeout = SOCKET_TIMEOUT
+        conn.target = "namedpipe://%s/" % pipe_name
         return conn
 
     if dtype == "vsock":
         cid, iport = display_desc["vsock"]
-        from xpra.net.vsock import connect_vsocket, CID_TYPES       #@UnresolvedImport
+        from xpra.net.vsock import (
+            connect_vsocket,
+            CID_TYPES, CID_ANY, PORT_ANY,    #@UnresolvedImport
+            )
         sock = connect_vsocket(cid=cid, port=iport)
         sock.timeout = VSOCK_TIMEOUT
         sock.settimeout(None)
-        return SocketConnection(sock, "local", "host", (CID_TYPES.get(cid, cid), iport), dtype)
+        conn = SocketConnection(sock, "local", "host", (CID_TYPES.get(cid, cid), iport), dtype)
+        conn.target = "vsock://%s:%s" % (
+            "any" if cid==CID_ANY else cid,
+            "any" if iport==PORT_ANY else iport,
+            )
+        return conn
 
     if dtype in ("tcp", "ssl", "ws", "wss", "udp"):
         host = display_desc["host"]
@@ -1120,6 +1166,7 @@ def connect_to(display_desc, opts=None, debug_cb=None, ssh_fail_cb=None):
                 raise InitExit(EXIT_UNSUPPORTED, "cannot handle websocket connection: %s" % e)
             else:
                 client_upgrade(conn.read, conn.write, host, port)
+        conn.target = get_host_target_string(display_desc)
         return conn
     raise InitException("unsupported display type: %s" % dtype)
 
@@ -1442,8 +1489,10 @@ def get_client_app(error_cb, opts, extra_args, mode):
                 if r==0:
                     opts.opengl = "probe-success"
                 elif r==1:
-                    opts.opengl = "probe-warning"
+                    opts.opengl = "probe-crash"
                 elif r==2:
+                    opts.opengl = "probe-warning"
+                elif r==3:
                     opts.opengl = "probe-error"
                 else:
                     if r is None:
@@ -1478,16 +1527,7 @@ def get_client_app(error_cb, opts, extra_args, mode):
                                (app.client_toolkit(), "\n * ".join(encodings_help(encodings))))
         def handshake_complete(*_args):
             log = get_util_logger()
-            target = conn.target
-            cinfo = conn.get_info()
-            host = cinfo.get("host")
-            if host:
-                target = "%s" % host
-                port = cinfo.get("port")
-                if port:
-                    target += ":%s" % port
-                target += " via %s" % conn.socktype
-            log.info("Attached to %s", target)
+            log.info("Attached to %s", conn.target)
             log.info(" (press Control-C to detach)\n")
         if hasattr(app, "after_handshake"):
             app.after_handshake(handshake_complete)
@@ -1761,9 +1801,9 @@ def no_gtk():
 def run_glprobe(opts):
     props = do_run_glcheck(opts)
     if not props.get("safe", False):
-        return 1
-    if not props.get("success", False):
         return 2
+    if not props.get("success", False):
+        return 3
     return 0
 
 def do_run_glcheck(opts):

@@ -1,6 +1,6 @@
 # This file is part of Xpra.
 # Copyright (C) 2011 Serviware (Arthur Huillet, <ahuillet@serviware.com>)
-# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008, 2010 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -23,7 +23,7 @@ from xpra.platform.paths import get_icon_filename
 from xpra.scripts.config import FALSE_OPTIONS
 from xpra.make_thread import make_thread
 from xpra.os_util import (
-    BytesIOClass, Queue, bytestostr, monotonic_time, memoryview_to_bytes,
+    Queue, bytestostr, monotonic_time, memoryview_to_bytes,
     OSX, POSIX, PYTHON3, is_Ubuntu,
     )
 from xpra.util import iround, envint, envbool, typedict, make_instance, updict
@@ -459,9 +459,8 @@ class WindowClient(StubClientMixin):
                     serial = new_cursor[7]
                     with open("raw-cursor-%#x.png" % serial, 'wb') as f:
                         f.write(pixels)
-                from PIL import Image
-                buf = BytesIOClass(pixels)
-                img = Image.open(buf)
+                from xpra.codecs.pillow.decoder import open_only
+                img = open_only(pixels, ("png",))
                 new_cursor[8] = img.tobytes("raw", "BGRA")
                 cursorlog("used PIL to convert png cursor to raw")
                 new_cursor[0] = b"raw"
@@ -655,8 +654,8 @@ class WindowClient(StubClientMixin):
             img = Image.frombytes("RGBA", (width,height), memoryview_to_bytes(data), "raw", "BGRA", rowstride, 1)
             has_alpha = True
         else:
-            buf = BytesIOClass(data)
-            img = Image.open(buf)
+            from xpra.codecs.pillow.decoder import open_only
+            img = open_only(data, ("png", ))
             assert img.mode in ("RGB", "RGBA"), "invalid image mode: %s" % img.mode
             has_alpha = img.mode=="RGBA"
             rowstride = width * (3+int(has_alpha))

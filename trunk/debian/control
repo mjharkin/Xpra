@@ -78,7 +78,8 @@ Depends: python2-xpra | python3-xpra,
 #stretch:         ,libturbojpeg0
 #buster:         ,libturbojpeg0
 Recommends:
-        xpra-html5
+        python3-xpra
+        ,xpra-html5
 # ffmpeg based codecs:
 #stretch:        ,ffmpeg-xpra
 #xenial:        ,ffmpeg-xpra
@@ -198,6 +199,7 @@ Recommends: python-dbus
         ,python-cups
 #for ssh transport:
         ,python-paramiko
+        ,python-dns
 #the start-session GUI:
         ,python-xdg
 #hope that this will allow our status icon to be shown:
@@ -236,6 +238,7 @@ Architecture: any
 Depends: ${misc:Depends}, ${python3:Depends}, ${shlibs:Depends}
         ,xpra
         ,python3-gi
+        ,gir1.2-gtk-3.0
 # for opengl support:
         ,python3-opengl
 # not *strictly* required, but too important to miss:
@@ -262,6 +265,7 @@ Recommends: python3-dbus
         ,python3-cups
 #for ssh transport:
         ,python3-paramiko
+        ,python3-dns
 #the start-session GUI:
         ,python3-xdg
 #hope that this will allow our status icon to be shown:

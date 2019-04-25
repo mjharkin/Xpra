@@ -1,16 +1,17 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import os
+from io import BytesIO
 
 from xpra.server.source.stub_source_mixin import StubSourceMixin
 from xpra.server.window.metadata import make_window_metadata
 from xpra.net.compression import Compressed
-from xpra.os_util import monotonic_time, BytesIOClass, strtobytes, bytestostr
+from xpra.os_util import monotonic_time, strtobytes, bytestostr
 from xpra.util import typedict, envint, envbool, DEFAULT_METADATA_SUPPORTED, XPRA_BANDWIDTH_NOTIFICATION_ID
 from xpra.log import Logger
 
@@ -44,6 +45,7 @@ class WindowsMixin(StubSourceMixin):
         self.get_cursor_data_cb = None
         self.get_window_id = None
         self.window_filters = []
+        self.readonly = False
 
     def init_from(self, _protocol, server):
         self.get_transient_for  = server.get_transient_for
@@ -51,6 +53,7 @@ class WindowsMixin(StubSourceMixin):
         self.get_cursor_data_cb = server.get_cursor_data
         self.get_window_id      = server.get_window_id
         self.window_filters     = server.window_filters
+        self.readonly           = server.readonly
 
     def init_state(self):
         #WindowSource for each Window ID
@@ -259,7 +262,7 @@ class WindowsMixin(StubSourceMixin):
                 cursorlog("do_send_cursor() loading %i bytes of cursor pixel data for %ix%i cursor named '%s'",
                           len(cpixels), w, h, bytestostr(name))
                 img = Image.frombytes("RGBA", (w, h), cpixels, "raw", "BGRA", w*4, 1)
-                buf = BytesIOClass()
+                buf = BytesIO()
                 img.save(buf, "PNG")
                 pngdata = buf.getvalue()
                 buf.close()
@@ -369,10 +372,19 @@ class WindowsMixin(StubSourceMixin):
         if propname not in self.metadata_supported:
             metalog("make_metadata: client does not support '%s'", propname)
             return {}
-        return make_window_metadata(window, propname,
+        metadata = make_window_metadata(window, propname,
                                         get_transient_for=self.get_transient_for,
                                         get_window_id=self.get_window_id,
                                         skip_defaults=skip_defaults)
+        if self.readonly:
+            metalog("overriding size-constraints for readonly mode")
+            size = window.get_dimensions()
+            metadata["size-constraints"] = {
+                "maximum-size"  : size,
+                "minimum-size"  : size,
+                "base-size" : size,
+                }
+        return metadata
 
     def new_tray(self, wid, window, w, h):
         assert window.is_tray()

@@ -54,7 +54,7 @@
 		<link rel="stylesheet" type="text/css" href="css/icon.css"/>
 	</head>
 
-	<body background="background.png">
+	<body>
 		<div id="dpi" style="width: 1in; height: 1in; left: -100%; top: -100%; position: absolute;">
 		</div>
 
@@ -927,14 +927,16 @@
 		    	};
 				document.addEventListener("visibilitychange", function (e) {
 					window_ids = Object.keys(client.id_to_window).map(Number);
-					clog("visibilitychange hidden=", document.hidden);
-					if (document.hidden) {
-						client.send(["suspend", true, window_ids]);
-					}
-					else {
-						client.send(["resume", true, window_ids]);
-						client.redraw_windows();
-						client.request_refresh(-1);
+					clog("visibilitychange hidden=", document.hidden, "connected=", client.connected);
+					if (client.connected) {
+						if (document.hidden) {
+							client.send(["suspend", true, window_ids]);
+						}
+						else {
+							client.send(["resume", true, window_ids]);
+							client.redraw_windows();
+							client.request_refresh(-1);
+						}
 					}
 				});
 				$('#fullscreen').on('click', function (e) {

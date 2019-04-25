@@ -54,7 +54,6 @@ eventslog = Logger("events")
 shapelog = Logger("shape")
 mouselog = Logger("mouse")
 geomlog = Logger("geometry")
-menulog = Logger("menu")
 grablog = Logger("grab")
 draglog = Logger("dragndrop")
 
@@ -227,7 +226,7 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
         self.connect_after("realize", self.on_realize)
         self.connect('unrealize', self.on_unrealize)
         self.add_events(self.WINDOW_EVENT_MASK)
-        if DRAGNDROP:
+        if DRAGNDROP and not self._client.readonly:
             self.init_dragndrop()
         self.init_focus()
         ClientWindowBase.init_window(self, metadata)
@@ -782,6 +781,9 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
         self.update_window_state(state_updates)
 
     def update_window_state(self, state_updates):
+        if self._client.readonly:
+            log("update_window_state(%s) ignored in readonly mode", state_updates)
+            return
         if state_updates.get("maximized") is False or state_updates.get("fullscreen") is False:
             #if we unfullscreen or unmaximize, re-calculate offsets if we have any:
             w, h = self._backing.render_size
@@ -843,6 +845,8 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
 
     def schedule_send_iconify(self):
         #calculate a good delay to prevent races causing minimize/unminimize loops:
+        if self._client.readonly:
+            return
         delay = 150
         spl = tuple(self._client.server_ping_latency)
         if spl:
@@ -1328,24 +1332,6 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
             self.fullscreen()
 
 
-    def set_menu(self, menu):
-        menulog("set_menu(%s)", menu)
-        def do_set_menu():
-            self._client.set_window_menu(True, self._id, menu, self.application_action_callback, self.window_action_callback)
-        self.when_realized("menu", do_set_menu)
-
-    def application_action_callback(self, action_service, action, state, pdata):
-        self.call_action("application", action, state, pdata)
-
-    def window_action_callback(self, action_service, action, state, pdata):
-        self.call_action("window", action, state, pdata)
-
-    def call_action(self, action_type, action, state, pdata):
-        menulog("call_action%s", (action_type, action, state, pdata))
-        rpc_args = [action_type, self._id, action, state, pdata]
-        self._client.rpc_call("menu", rpc_args)
-
-
     ######################################################################
     # pointer overlay handling
     def cancel_remove_pointer_overlay_timer(self):
@@ -1518,6 +1504,12 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
             x, y = int(move[0]), int(move[1])
         if resize:
             w, h = int(resize[0]), int(resize[1])
+            if self._client.readonly:
+                #change size-constraints first,
+                #so the resize can be honoured:
+                sc = self._force_size_constraint(w, h)
+                self._metadata.update(sc)
+                self.set_metadata(sc)
         if move and resize:
             self.get_window().move_resize(x, y, w, h)
         elif move:
@@ -1922,8 +1914,6 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
         self.cancel_show_pointer_overlay_timer()
         self.cancel_remove_pointer_overlay_timer()
         self.cancel_focus_timer()
-        if self._client._set_window_menu:
-            self._client.set_window_menu(False, self._id, {})
         mrt = self.moveresize_timer
         if mrt:
             self.moveresize_timer = None

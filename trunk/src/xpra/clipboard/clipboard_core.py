@@ -11,7 +11,7 @@ import re
 from xpra.net.compression import Compressible
 from xpra.os_util import POSIX, monotonic_time, strtobytes, bytestostr, hexstr, get_hex_uuid
 from xpra.util import csv, envint, envbool, repr_ellipsized, typedict
-from xpra.platform.features import CLIPBOARD_GREEDY, CLIPBOARDS as PLATFORM_CLIPBOARDS
+from xpra.platform.features import CLIPBOARDS as PLATFORM_CLIPBOARDS
 from xpra.gtk_common.gobject_compat import import_glib
 from xpra.log import Logger
 
@@ -77,14 +77,14 @@ assert sizeof_short == 2, "struct.calcsize('=H')=%s" % sizeof_short
 
 
 def must_discard(target):
-    return any(x for x in DISCARD_TARGETS if x.match(bytestostr(target)))
+    return any(x for x in DISCARD_TARGETS if x.match(target))
 
 def must_discard_extra(target):
-    return any(x for x in DISCARD_EXTRA_TARGETS if x.match(bytestostr(target)))
+    return any(x for x in DISCARD_EXTRA_TARGETS if x.match(target))
 
 
 def _filter_targets(targets):
-    f = tuple(target for target in targets if not must_discard(target))
+    f = tuple(target for target in (bytestostr(x) for x in targets) if not must_discard(target))
     log("_filter_targets(%s)=%s", targets, f)
     return f
 
@@ -117,12 +117,38 @@ class ClipboardProtocolHelperCore(object):
                     log.error(" '%s': %s", x, e)
         self._clipboard_request_counter = 0
         self._clipboard_outstanding_requests = {}
+        self._local_to_remote = {}
+        self._remote_to_local = {}
+        self.init_translation(kwargs)
         self._want_targets = False
         self.init_packet_handlers()
         self.init_proxies(d.strlistget("clipboards.local", CLIPBOARDS))
         remote_loop_uuids = d.dictget("remote-loop-uuids", {})
         self.verify_remote_loop_uuids(remote_loop_uuids)
         self.remote_clipboards = d.strlistget("clipboards.remote", CLIPBOARDS)
+
+    def init_translation(self, kwargs):
+        def getselection(name):
+            v = kwargs.get("clipboard.%s" % name)           #ie: clipboard.remote
+            env_value = os.environ.get("XPRA_TRANSLATEDCLIPBOARD_%s_SELECTION" % name.upper())
+            selections = kwargs.get("clipboards.%s" % name) #ie: clipboards.remote
+            if not selections:
+                return None
+            for x in (env_value, v):
+                if x and x in selections:
+                    return x
+            return selections[0]
+        local = getselection("local")
+        remote = getselection("remote")
+        if local and remote:
+            self._local_to_remote[local] = remote
+            self._remote_to_local[remote] = local
+
+    def local_to_remote(self, selection):
+        return self._local_to_remote.get(selection, selection)
+
+    def remote_to_local(self, selection):
+        return self._remote_to_local.get(selection, selection)
 
     def __repr__(self):
         return "ClipboardProtocolHelperCore"
@@ -236,20 +262,13 @@ class ClipboardProtocolHelperCore(object):
             proxy.init_uuid()
 
 
-    def local_to_remote(self, selection):
-        #overriden in some subclasses (see: translated_clipboard)
-        return  selection
-    def remote_to_local(self, selection):
-        #overriden in some subclasses (see: translated_clipboard)
-        return  selection
-
     # Used by the client during startup:
     def send_tokens(self, selections=()):
         for selection in selections:
             proxy = self._clipboard_proxies.get(selection)
             if proxy:
                 proxy._have_token = False
-                self._send_clipboard_token_handler(proxy)
+                proxy.do_emit_token()
 
     def send_all_tokens(self):
         self.send_tokens(CLIPBOARDS)
@@ -296,58 +315,6 @@ class ClipboardProtocolHelperCore(object):
             proxy._greedy_client = bool(packet[9])
         synchronous_client = len(packet)>=11 and bool(packet[10])
         proxy.got_token(targets, target_data, claim, synchronous_client)
-
-    def _send_clipboard_token_handler(self, proxy):
-        selection = proxy._selection
-        log("send clipboard token: %s", selection)
-        rsel = self.local_to_remote(selection)
-        def send_token(*args):
-            self.send("clipboard-token", *args)
-        if not proxy._can_send:
-            #send the token without data,
-            #and with claim flag set to False, greedy set to True
-            send_token(rsel, [], "NOTARGET", "UTF8_STRING", 8, "bytes", "", False, True)
-            return
-        if self._want_targets:
-            log("client wants targets with the token, querying TARGETS")
-            #send the token with the target and data once we get them:
-            #first get the targets, then get the contents for targets we want to send (if any)
-            def got_targets(dtype, dformat, targets):
-                log("got_targets for selection %s: %s, %s, %s", selection, dtype, dformat, targets)
-                if targets is None:
-                    send_token(rsel)
-                    return
-                #if there is a text target, send that too (just the first one that matches for now..)
-                send_now = [x for x in targets if x in TEXT_TARGETS]
-                def send_targets_only():
-                    send_token(rsel, targets)
-                if not send_now:
-                    send_targets_only()
-                    return
-                target = send_now[0]
-                def got_contents(dtype, dformat, data):
-                    log("got_contents for selection %s: %s, %s, %s",
-                        selection, dtype, dformat, repr_ellipsized(str(data)))
-                    #code mostly duplicated from _process_clipboard_request
-                    #see there for details
-                    if dtype is None or data is None:
-                        send_targets_only()
-                        return
-                    wire_encoding, wire_data = self._munge_raw_selection_to_wire(target, dtype, dformat, data)
-                    if wire_encoding is None:
-                        send_targets_only()
-                        return
-                    wire_data = self._may_compress(dtype, dformat, wire_data)
-                    if not wire_data:
-                        send_targets_only()
-                        return
-                    target_data = (target, dtype, dformat, wire_encoding, wire_data, True, CLIPBOARD_GREEDY)
-                    log("sending token with target data: %s", target_data)
-                    send_token(rsel, targets, *target_data)
-                proxy.get_contents(target, got_contents)
-            proxy.get_contents("TARGETS", got_targets)
-            return
-        send_token(rsel)
 
     def _munge_raw_selection_to_wire(self, target, dtype, dformat, data):
         log("_munge_raw_selection_to_wire%s", (target, dtype, dformat, repr_ellipsized(bytestostr(data))))
@@ -422,7 +389,7 @@ class ClipboardProtocolHelperCore(object):
             fstr = b"@" + format_char * len(data)
             log("struct.pack(%s, %s)", fstr, data)
             return struct.pack(fstr, *data)
-        raise Exception("unhanled encoding: %s" % encoding)
+        raise Exception("unhanled encoding: %s" % ((encoding, dtype, dformat),))
 
     def _process_clipboard_request(self, packet):
         request_id, selection, target = packet[1:4]
@@ -473,7 +440,8 @@ class ClipboardProtocolHelperCore(object):
                     data = data[:max_send_datalen]
             munged = self._munge_raw_selection_to_wire(target, dtype, dformat, data)
             wire_encoding, wire_data = munged
-            log("clipboard raw -> wire: %r -> %r", (dtype, dformat, data), munged)
+            log("clipboard raw -> wire: %r -> %r",
+                (dtype, dformat, repr_ellipsized(str(data))), repr_ellipsized(str(munged)))
             if wire_encoding is None:
                 no_contents()
                 return
@@ -491,16 +459,17 @@ class ClipboardProtocolHelperCore(object):
         if len(wire_data)>self.max_clipboard_packet_size:
             log.warn("Warning: clipboard contents are too big and have not been sent")
             log.warn(" %s compressed bytes dropped (maximum is %s)", len(wire_data), self.max_clipboard_packet_size)
-            return  None
+            return None
         if isinstance(wire_data, (str, bytes)) and len(wire_data)>=MIN_CLIPBOARD_COMPRESS_SIZE:
             return Compressible("clipboard: %s / %s" % (dtype, dformat), wire_data)
         return wire_data
 
     def _process_clipboard_contents(self, packet):
         request_id, selection, dtype, dformat, wire_encoding, wire_data = packet[1:7]
-        log("process clipboard contents, selection=%s, type=%s, format=%s", selection, dtype, dformat)
+        selection = bytestostr(selection)
         wire_encoding = bytestostr(wire_encoding)
         dtype = bytestostr(dtype)
+        log("process clipboard contents, selection=%s, type=%s, format=%s", selection, dtype, dformat)
         raw_data = self._munge_wire_selection_to_raw(wire_encoding, dtype, dformat, wire_data)
         log("clipboard wire -> raw: %r -> %r", (dtype, dformat, wire_encoding, wire_data), raw_data)
         self._clipboard_got_contents(request_id, dtype, dformat, raw_data)

@@ -17,7 +17,7 @@ from xpra.server.window.window_source import (
     WindowSource, DelayedRegions,
     STRICT_MODE, AUTO_REFRESH_SPEED, AUTO_REFRESH_QUALITY, MAX_RGB,
     )
-from xpra.rectangle import rectangle, add_rectangle, merge_all          #@UnresolvedImport
+from xpra.rectangle import rectangle, merge_all          #@UnresolvedImport
 from xpra.server.window.motion import ScrollData                    #@UnresolvedImport
 from xpra.server.window.video_subregion import VideoSubregion, VIDEO_SUBREGION
 from xpra.server.window.video_scoring import get_pipeline_score
@@ -215,7 +215,7 @@ class WindowVideoSource(WindowSource):
                 i = x.get_info()
                 i[""] = x.get_type()
                 info[prefix] = i
-            except:
+            except Exception:
                 log.error("Error collecting codec information from %s", x, exc_info=True)
         addcinfo("csc", self._csc_encoder)
         addcinfo("encoder", self._video_encoder)
@@ -257,7 +257,7 @@ class WindowVideoSource(WindowSource):
         def specinfo(x):
             try:
                 return x.codec_type
-            except:
+            except AttributeError:
                 return repr(x)
         pi  = {
                "score"             : score,
@@ -342,7 +342,7 @@ class WindowVideoSource(WindowSource):
             self.video_stream_file = None
             try:
                 vsf.close()
-            except:
+            except (OSError, IOError):
                 log.error("Error closing video stream file", exc_info=True)
 
     def ui_cleanup(self):
@@ -530,8 +530,6 @@ class WindowVideoSource(WindowSource):
                 return "rgb32"
         if "png" in options:
             return "png"
-        if "jpeg2000" in options and ww>=32 and wh>=32 and depth in (24, 32):
-            return "jpeg2000"
         #we failed to find a good match, default to the first of the options..
         if options:
             return options[0]
@@ -928,7 +926,7 @@ class WindowVideoSource(WindowSource):
         for item in eq:
             try:
                 self.free_image_wrapper(item[4])
-            except:
+            except Exception:
                 log.error("Error: cannot free image wrapper %s", item[4], exc_info=True)
 
     def schedule_encode_from_queue(self, av_delay):
@@ -1607,7 +1605,7 @@ class WindowVideoSource(WindowSource):
                 videolog.warn(" %s:", option)
                 videolog.warn(" %s", e)
                 del e
-            except:
+            except Exception:
                 if self.is_cancelled():
                     return False
                 videolog.warn("Warning: failed to setup video pipeline %s", option, exc_info=True)
@@ -1870,11 +1868,9 @@ class WindowVideoSource(WindowSource):
                 order = FAST_ORDER
             else:
                 order = PREFERED_ENCODING_ORDER
-        #jpeg2000 errors out on images smaller than 32x32,
-        #and we don't know the size in this method, so discard it
-        #also, don't choose mmap!
+        #don't choose mmap!
         fallback_encodings = tuple(x for x in order if
-                                   (x in encodings and x in self._encoders and x not in ("mmap", "jpeg2000")))
+                                   (x in encodings and x in self._encoders and x!="mmap"))
         depth = self.image_depth
         if depth==8 and "png/P" in fallback_encodings:
             return "png/P"

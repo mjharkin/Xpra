@@ -40,13 +40,19 @@ SOFTWARE.
         var menu = this;
         var ul = $("ul", menu)[0];
         //hack to hide the menu from javascript
-        if(!ul || ul.classList.contains("-hide")){
+        if(!ul){
+			return;
+		}
+
+        if(ul.classList.contains("-hide")){
 			ul.classList.remove("-hide");
 			ul.parentElement.classList.remove("-active");
 			return;
 		};
 
-        if(!ul || ul.classList.contains("-visible")) return;
+        if(ul.classList.contains("-visible")){
+			return;
+		}
 
         menu.classList.add("-active");
         ul.classList.add("-animating");

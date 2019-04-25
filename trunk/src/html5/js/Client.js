@@ -1768,10 +1768,7 @@ XpraClient.prototype._process_hello = function(packet, ctx) {
 				var a2 = document.createElement("a");
 				
 				var name = entry.Name;
-				var trimLength = 15;
-        	    name = name.length > trimLength ? 
-                    name.substring(0, trimLength - 3) + "..." : 
-                    name;
+        	    name = Utilities.trimString(name,15);
 				var command = entry.Exec.replace(/%[uUfF]/g,"");
 				var icon_data = entry.IconData;
 				if (typeof icon_data === 'string') {
@@ -2056,8 +2053,8 @@ XpraClient.prototype._process_new_tray = function(packet, ctx) {
 		var float_tray = document.getElementById("float_tray");
 		var float_menu = document.getElementById("float_menu");
 		$('#float_menu').children().show();
-		//increase size for tray icon and -10 for paddding
-		var new_width = float_menu_width + 30 -10;
+		//increase size for tray icon
+		var new_width = float_menu_width + float_menu_item_size -float_menu_padding;
 		float_menu.style.width = new_width + "px";
 		float_menu_width=$('#float_menu').width() + 10;
 		mydiv.style.backgroundColor = "white";
@@ -2065,8 +2062,8 @@ XpraClient.prototype._process_new_tray = function(packet, ctx) {
 		float_tray.appendChild(mydiv);
 	    x = 0;
 	    y = 0;
-	    w = 30;
-	    h = 30;
+	    w = float_menu_item_size;
+	    h = float_menu_item_size;
 	}
 	
 	mycanvas.width = w;
@@ -2093,7 +2090,7 @@ XpraClient.prototype.send_tray_configure = function(wid) {
 	var y = Math.round(div.offset().top);
 	var w = 48, h = 48;
 	if (getboolparam("floating_menu", true)) {
-		w = 30, h = 30;
+		w = float_menu_item_size, h = float_menu_item_size;
 	}
 	this.clog("tray", wid, "position:", x, y);
 	this.send(["configure-window", Number(wid), x, y, w, h, {}]);
@@ -2157,11 +2154,8 @@ XpraClient.prototype._new_window = function(wid, x, y, w, h, metadata, override_
 		this._window_closed
 		);
 	if(win && !override_redirect && win.metadata["window-type"]=="NORMAL"){
-		var trimLength=30;
 		var decodedTitle = decodeURIComponent(escape(win.title));
-		var trimmedTitle = decodedTitle.length > trimLength ? 
-                    decodedTitle.substring(0, trimLength - 3) + "..." : 
-                    decodedTitle;
+		var trimmedTitle = Utilities.trimString(decodedTitle,30);
 		window.addWindowListItem(wid, trimmedTitle);
 	}
 	this.id_to_window[wid] = win;

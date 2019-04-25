@@ -65,7 +65,7 @@
 		</div>
 
 		<div id="screen" style="width: 100%; height:100%;">
-			<div id="float_menu" onmouseOver="document.getElementById('float_menu').style.width=float_menu_width-10+'px'; $('#float_menu').children().show();" onmouseOut="  document.getElementById('float_menu').style.width ='0px'; $('#float_menu').children().hide();"> 
+			<div id="float_menu" onmouseOver="expand_float_menu()" onmouseOut="retract_float_menu()"> 
 				<ul class="Menu -horizontal">
 					<li class="-hasSubmenu -noChevron">
 						<a href="#" title="Xpra" class="noDrag" data-icon="menu"></a>
@@ -114,7 +114,7 @@
 						<a href="#" id="sound_button"  title="Sound" data-icon="volume_off"></a>
 						</ul>
 					</li>
-					<div id = "float_tray"  class="menu-divright"></div>
+					<div id="float_tray"  class="menu-divright"></div>
 				</ul>
 			</div>
 			<div id="top_bar">
@@ -240,6 +240,8 @@
 			var getparam = Utilities.getparam;
 			var getboolparam = Utilities.getboolparam;
 			var float_menu_width = 130;
+			var float_menu_item_size = 30;
+			var float_menu_padding = 10;
 
 			// disable right click menu:
 			window.oncontextmenu = function(e) {
@@ -875,6 +877,39 @@
 				}
 				wait_for_time();
 			}
+			
+			function toggle_fullscreen() {
+				var f_el = document.fullscreenElement || document.mozFullScreen || document.webkitIsFullScreen || document.msFullscreenElement;
+					if (!f_el) {
+						var elem = document.getElementById("fullscreen");
+				        var req = elem.requestFullScreen || elem.webkitRequestFullScreen || elem.mozRequestFullScreen || elem.msRequestFullscreen;
+						if (req) {
+							req.call(document.body);
+						}
+
+						$('#fullscreen').attr('src', './icons/unfullscreen.png');
+						$('#fullscreen_button').attr('data-icon', 'fullscreen_exit');
+
+					} else {
+						if (document.exitFullscreen) {
+				            document.exitFullscreen();
+				        } else if (document.webkitExitFullscreen) {
+				            document.webkitExitFullscreen();
+				        } else if (document.mozCancelFullScreen) {
+				            document.mozCancelFullScreen();
+				        } else if (document.msExitFullscreen) {
+				            document.msExitFullscreen();
+				        }
+					}
+			}
+			
+			function expand_float_menu(){
+				document.getElementById('float_menu').style.width=float_menu_width-10+'px'; $('#float_menu').children().show();
+			}
+			
+			function retract_float_menu(){
+				document.getElementById('float_menu').style.width ='0px'; $('#float_menu').children().hide();
+			}
 
 			var client = null;
 			$(document).ready(function() {
@@ -940,51 +975,11 @@
 					}
 				});
 				$('#fullscreen').on('click', function (e) {
-					var f_el = document.fullscreenElement || document.mozFullScreen || document.webkitIsFullScreen || document.msFullscreenElement;
-					if (!f_el) {
-						var elem = document.getElementById("fullscreen");
-				        var req = elem.requestFullScreen || elem.webkitRequestFullScreen || elem.mozRequestFullScreen || elem.msRequestFullscreen;
-						if (req) {
-							req.call(document.body);
-						}
-
-						$('#fullscreen').attr('src', './icons/unfullscreen.png');
-
-					} else {
-						if (document.exitFullscreen) {
-				            document.exitFullscreen();
-				        } else if (document.webkitExitFullscreen) {
-				            document.webkitExitFullscreen();
-				        } else if (document.mozCancelFullScreen) {
-				            document.mozCancelFullScreen();
-				        } else if (document.msExitFullscreen) {
-				            document.msExitFullscreen();
-				        }
-					}
+					toggle_fullscreen();
 				});
 				
 				$('#fullscreen_button').on('click', function (e) {
-					var f_el = document.fullscreenElement || document.mozFullScreen || document.webkitIsFullScreen || document.msFullscreenElement;
-					if (!f_el) {
-						var elem = document.getElementById("fullscreen");
-				        var req = elem.requestFullScreen || elem.webkitRequestFullScreen || elem.mozRequestFullScreen || elem.msRequestFullscreen;
-						if (req) {
-							req.call(document.body);
-						}
-						//change icon to unfullscreen:
-						$('#fullscreen_button').attr('data-icon', 'fullscreen_exit');
-						
-					} else {
-						if (document.exitFullscreen) {
-				            document.exitFullscreen();
-				        } else if (document.webkitExitFullscreen) {
-				            document.webkitExitFullscreen();
-				        } else if (document.mozCancelFullScreen) {
-				            document.mozCancelFullScreen();
-				        } else if (document.msExitFullscreen) {
-				            document.msExitFullscreen();
-				        }
-					}
+					toggle_fullscreen();
 				});
 				var screen_change_events = "webkitfullscreenchange mozfullscreenchange fullscreenchange MSFullscreenChange";
 				$(document).on(screen_change_events, function () {

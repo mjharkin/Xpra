@@ -101,7 +101,9 @@ function removeWindowListItem(itemId){
 
 $(function() {
 	$("#float_menu").draggable({
-		cancel: '.noDrag'
+		cancel: '.noDrag',
+		containment: 'window',
+		scroll: false
 	});
 });
 

@@ -2087,12 +2087,11 @@ XpraClient.prototype._tray_closed = function(win) {
 
 XpraClient.prototype.reconfigure_all_trays = function() {
 	var float_menu = document.getElementById("float_menu");
-	// default width 4x30 (icons) + 10 (padding)
-	float_menu_width = 130;
+	float_menu_width = (float_menu_item_size*4) + float_menu_padding;
 	for (var twid in this.id_to_window) {
 		var twin = this.id_to_window[twid];
 		if (twin && twin.tray) {
-		    float_menu_width = float_menu_width + 30;
+		    float_menu_width = float_menu_width + float_menu_item_size;
 			this.send_tray_configure(twid);
 		}
 	}

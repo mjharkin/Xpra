@@ -239,9 +239,9 @@
 		<script>
 			var getparam = Utilities.getparam;
 			var getboolparam = Utilities.getboolparam;
-			var float_menu_width = 130;
 			var float_menu_item_size = 30;
-			var float_menu_padding = 10;
+			var float_menu_padding = 20;
+			var float_menu_width = (float_menu_item_size*4) + float_menu_padding;
 
 			// disable right click menu:
 			window.oncontextmenu = function(e) {
@@ -901,7 +901,12 @@
 			}
 			
 			function expand_float_menu(){
-				document.getElementById('float_menu').style.width=float_menu_width-10+'px'; $('#float_menu').children().show();
+				var expanded_width = (float_menu_item_size*4);
+				document.getElementById('float_menu').style.width= expanded_width +'px';
+				if(client){
+					client.reconfigure_all_trays();
+				}
+				$('#float_menu').children().show();
 			}
 			
 			function retract_float_menu(){

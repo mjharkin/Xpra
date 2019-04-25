@@ -64,6 +64,7 @@ XpraClient.prototype.init_settings = function(container) {
 	this.file_transfer = false;
 	this.keyboard_layout = null;
 	this.printing = false;
+
 	this.bandwidth_limit = 0;
 	this.reconnect = true;
 	this.reconnect_count = 5;
@@ -159,6 +160,7 @@ XpraClient.prototype.init_state = function(container) {
 
     this.server_connection_data = false;
 
+	this.xdg_menu = null;
 	// a list of our windows
 	this.id_to_window = {};
 	this.ui_events = 0;
@@ -436,6 +438,7 @@ XpraClient.prototype.redraw_windows = function() {
 XpraClient.prototype.close_windows = function() {
 	for (var i in this.id_to_window) {
 		var iwin = this.id_to_window[i];
+		window.removeWindowListItem(i);
 		iwin.destroy();
 	}
 }
@@ -1687,6 +1690,117 @@ XpraClient.prototype._process_hello = function(packet, ctx) {
 			}
 		}
 	}
+	ctx.xdg_menu = hello["xdg-menu"];
+	if(ctx.xdg_menu != null)
+	{
+		for(key in ctx.xdg_menu){
+			var xdg_menu_cats = ctx.xdg_menu[key].Entries;
+			var li = document.createElement("li");
+			li.className = "-hasSubmenu";
+			
+			var cat_icon_data = ctx.xdg_menu[key].IconData;
+				if (typeof cat_icon_data === 'string') {
+					var uint = new Uint8Array(cat_icon_data.length);
+					for(var i=0;i<cat_icon_data.length;++i) {
+						uint[i] = cat_icon_data.charCodeAt(i);
+					}
+					cat_icon_data = uint;
+			}
+			
+			
+			
+			var catDivLeft = document.createElement("div");
+				catDivLeft.className="menu-divleft";
+				var img = new Image();
+				if (typeof cat_icon_data !== 'undefined'){
+					img.src = "data:image/png;base64," + Utilities.ArrayBufferToBase64(cat_icon_data);
+				}
+				img.height=24;
+				img.width=24;
+				img.className="menu-content-left";
+				catDivLeft.appendChild(img);
+			
+				
+			var a = document.createElement("a");
+			a.appendChild(catDivLeft);
+			a.appendChild(document.createTextNode(ctx.xdg_menu[key].Name));
+			a.href="#";
+			li.appendChild(a);
+			
+			var ul = document.createElement("ul");
+			
+			//TODO need to figure out how to do this propery
+			a.onmouseenter= function(){ 
+				this.parentElement.childNodes[1].className="-visible";
+			};
+			
+			a.onmouseleave= function(){ 
+				this.parentElement.childNodes[1].className="";
+			};
+			
+
+			
+			
+			for(key in xdg_menu_cats){
+				var entry = xdg_menu_cats[key];
+				var li2 = document.createElement("li");
+				var a2 = document.createElement("a");
+				
+				var name = entry.Name;
+        	    name = Utilities.trimString(name,15);
+				var command = entry.Exec.replace(/%[uUfF]/g,"");
+				var icon_data = entry.IconData;
+				if (typeof icon_data === 'string') {
+					var uint = new Uint8Array(icon_data.length);
+					for(var i=0;i<icon_data.length;++i) {
+						uint[i] = icon_data.charCodeAt(i);
+					}
+					icon_data = uint;
+				}
+				var ignore = "False";
+				
+				
+				var divLeft = document.createElement("div");
+				divLeft.className="menu-divleft";
+				var img = new Image();
+				img.src = "data:image/png;base64," + Utilities.ArrayBufferToBase64(icon_data);
+				img.className="menu-content-left";
+				divLeft.appendChild(img);
+				
+				var titleDiv = document.createElement("div");
+				titleDiv.appendChild(document.createTextNode(name));
+				titleDiv.className="menu-content-left";
+				divLeft.appendChild(titleDiv);
+				
+				a2.appendChild(divLeft);
+				a2.title = command;
+				
+				a2.onclick = function(){
+						ctx.start_command(this.innerText, this.title, ignore);
+						this.parentElement.parentElement.parentElement.parentElement.parentElement.parentElement.className="-hide";
+						
+				};
+				
+				a2.onmouseenter= function(){ 
+					this.parentElement.parentElement.className="-visible";
+				};
+				
+				a2.onmouseleave= function(){ 
+					this.parentElement.parentElement.className="";
+				};
+
+				li2.appendChild(a2);
+				ul.appendChild(li2);
+				
+			}
+			li.appendChild(ul);
+			document.getElementById("startmenu").appendChild(li);
+			
+		}
+
+	}
+
+	
     ctx.server_is_desktop = Boolean(hello["desktop"]);
     ctx.server_is_shadow = Boolean(hello["shadow"]);
     ctx.server_readonly = Boolean(hello["readonly"]);
@@ -1904,12 +2018,33 @@ XpraClient.prototype._process_new_tray = function(packet, ctx) {
 	mydiv.id = String(wid);
 	var mycanvas = document.createElement("canvas");
 	mydiv.appendChild(mycanvas);
-	var top_bar = document.getElementById("top_bar");
-	top_bar.appendChild(mydiv);
-	var x = 100;
+	
+	var x = 0;
 	var y = 0;
-	w = 48;
-	h = 48;
+	if (getboolparam("top_bar", true)) {
+	    var top_bar = document.getElementById("top_bar");
+	    top_bar.appendChild(mydiv);
+	    x = 100;
+	    y = 0;
+	    w = 48;
+	    h = 48;
+	} else {
+		var float_tray = document.getElementById("float_tray");
+		var float_menu = document.getElementById("float_menu");
+		$('#float_menu').children().show();
+		//increase size for tray icon
+		var new_width = float_menu_width + float_menu_item_size -float_menu_padding;
+		float_menu.style.width = new_width + "px";
+		float_menu_width=$('#float_menu').width() + 10;
+		mydiv.style.backgroundColor = "white";
+		
+		float_tray.appendChild(mydiv);
+	    x = 0;
+	    y = 0;
+	    w = float_menu_item_size;
+	    h = float_menu_item_size;
+	}
+	
 	mycanvas.width = w;
 	mycanvas.height = h;
 	var win = new XpraWindow(ctx, mycanvas, wid, x, y, w, h,
@@ -1933,6 +2068,10 @@ XpraClient.prototype.send_tray_configure = function(wid) {
 	var x = Math.round(div.offset().left);
 	var y = Math.round(div.offset().top);
 	var w = 48, h = 48;
+	if (getboolparam("floating_menu", true)) {
+		w = float_menu_item_size;
+		h = float_menu_item_size;
+	}
 	this.clog("tray", wid, "position:", x, y);
 	this.send(["configure-window", Number(wid), x, y, w, h, {}]);
 }
@@ -1947,11 +2086,20 @@ XpraClient.prototype._tray_closed = function(win) {
 }
 
 XpraClient.prototype.reconfigure_all_trays = function() {
+	var float_menu = document.getElementById("float_menu");
+	// default width 4x30 (icons) + 10 (padding)
+	float_menu_width = 130;
 	for (var twid in this.id_to_window) {
 		var twin = this.id_to_window[twid];
 		if (twin && twin.tray) {
+		    float_menu_width = float_menu_width + 30;
 			this.send_tray_configure(twid);
 		}
+	}
+	
+	// only set if float_menu is visible
+	if($('#float_menu').width() > 0){
+		float_menu.style.width = float_menu_width;
 	}
 }
 
@@ -1983,6 +2131,11 @@ XpraClient.prototype._new_window = function(wid, x, y, w, h, metadata, override_
 		this._window_set_focus,
 		this._window_closed
 		);
+	if(win && !override_redirect && win.metadata["window-type"]=="NORMAL"){
+		var decodedTitle = decodeURIComponent(escape(win.title));
+		var trimmedTitle = Utilities.trimString(decodedTitle,30);
+		window.addWindowListItem(wid, trimmedTitle);
+	}
 	this.id_to_window[wid] = win;
 	if (!override_redirect) {
 		var geom = win.get_internal_geometry();
@@ -2083,6 +2236,9 @@ XpraClient.prototype.on_last_window = function() {
 XpraClient.prototype._process_lost_window = function(packet, ctx) {
 	var wid = packet[1];
 	var win = ctx.id_to_window[wid];
+	if(win && !win.override_redirect && win.metadata["window-type"]=="NORMAL"){
+		window.removeWindowListItem(wid);
+	}
 	try {
 		delete ctx.id_to_window[wid];
 	}
@@ -2900,6 +3056,12 @@ XpraClient.prototype.send_file = function(filename, mimetype, size, buffer) {
 		return;
 	}
 	var packet = ["send-file", filename, mimetype, false, this.remote_open_files, size, buffer, {}];
+	this.send(packet);
+}
+
+XpraClient.prototype.start_command = function(name, command, ignore) {
+	
+	var packet = ["start-command", name, command, ignore];
 	this.send(packet);
 }
 

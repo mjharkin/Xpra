@@ -974,6 +974,10 @@
 				$('#fullscreen').on('click', function (e) {
 					toggle_fullscreen();
 				});
+				
+				$('#fullscreen_button').on('click', function (e) {
+					toggle_fullscreen();
+				});
 
 				var screen_change_events = "webkitfullscreenchange mozfullscreenchange fullscreenchange MSFullscreenChange";
 				$(document).on(screen_change_events, function () {
@@ -984,7 +988,7 @@
 						if (getboolparam("top_bar", true)) {
 							$('#fullscreen').attr('src', './icons/fullscreen.png');
 						}else{	
-							$('#fullscreen').attr('data-icon', 'fullscreen');
+							$('#fullscreen_button').attr('data-icon', 'fullscreen');
 						}
 				    }
 				});

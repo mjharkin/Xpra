@@ -267,7 +267,7 @@ XpraWindow.prototype.swap_buffers = function() {
 	//the up to date canvas is what we'll draw on screen:
 	this.draw_canvas = this.offscreen_canvas;
 	this._init_2d_canvas();
-	this.offscreen_canvas_ctx.drawImage(this.draw_canvas, 0, 0);	
+	this.offscreen_canvas_ctx.drawImage(this.draw_canvas, 0, 0);
 }
 
 XpraWindow.prototype.set_spinner = function(state) {
@@ -444,11 +444,6 @@ XpraWindow.prototype.update_metadata = function(metadata, safe) {
 	} else {
 		this.set_metadata(metadata)
 	}
-	
-	if(this.title=="JidePopup"){
-		this.metadata["window-type"][0]="NORMAL"
-	}
-	
 	this.update_zindex();
 };
 
@@ -632,7 +627,7 @@ XpraWindow.prototype.set_maximized = function(maximized) {
 	if(jQuery(this.div).is(":hidden")){
 		jQuery(this.div).show();
 	}
-	
+
 	if (this.maximized==maximized) {
 		return;
 	}
@@ -891,18 +886,16 @@ XpraWindow.prototype.move_resize = function(x, y, w, h) {
 	this.debug("geometry", "move_resize(", x, y, w, h, ")");
 	// only do it if actually changed!
 	if(!(this.w == w) || !(this.h == h) || !(this.x == x) || !(this.y == y)) {
-		if(!(this.h==(h-30))){
-			this.w = w;
-			this.h = h;
-			this.x = x;
-			this.y = y;
-			if(!this.ensure_visible()) {
-				// we had to move the window so that it was visible
-				// is this the right thing to do?
-				this.geometry_cb(this);
-			}
-			this.updateCSSGeometry();
+		this.w = w;
+		this.h = h;
+		this.x = x;
+		this.y = y;
+		if(!this.ensure_visible()) {
+			// we had to move the window so that it was visible
+			// is this the right thing to do?
+			this.geometry_cb(this);
 		}
+		this.updateCSSGeometry();
 	}
 };
 

@@ -600,7 +600,7 @@ XpraClient.prototype.translate_modifiers = function(modifiers) {
 	index = modifiers.indexOf("alt");
 	if (index>=0 && alt)
 		new_modifiers[index] = alt;
-	
+
 	//add altgr?
 	if (this.altgr_state && altgr && !new_modifiers.includes(altgr)) {
 		new_modifiers.push(altgr);
@@ -756,7 +756,7 @@ XpraClient.prototype._keyb_process = function(pressed, event) {
 			str = "control";
 		}
 	}
-	
+
 	if (this.topwindow != null) {
 		//send via a timer so we get a chance to capture the clipboard value,
 		//before we send control-V to the server:
@@ -1268,16 +1268,10 @@ XpraClient.prototype._window_mouse_move = function(ctx, e, window) {
 	ctx.do_window_mouse_move(e, window);
 }
 XpraClient.prototype.do_window_mouse_move = function(e, window) {
-	
-	if(window==null || (!window.focused && !window.override_redirect && !window.tray)){
-		return;
-	}
-	
 	this._check_browser_language();
 	if (this.server_readonly || this.mouse_grabbed) {
 		return;
 	}
-	
 	var mouse = this.getMouse(e, window),
 		x = Math.round(mouse.x),
 		y = Math.round(mouse.y);
@@ -1304,7 +1298,6 @@ XpraClient.prototype.do_window_mouse_click = function(e, window, pressed) {
 	if (this.server_readonly || this.mouse_grabbed) {
 		return;
 	}
-
 	var mouse = this.getMouse(e, window),
 		x = Math.round(mouse.x),
 		y = Math.round(mouse.y);
@@ -1315,16 +1308,9 @@ XpraClient.prototype.do_window_mouse_click = function(e, window, pressed) {
 		wid = window.wid;
 	}
 	// dont call set focus unless the focus has actually changed
-	// TODO need to set focus here as some windows don't have focus
-	//if (wid>0 && this.focus != wid && pressed) {
+	if (wid>0 && this.focus != wid) {
 		this._window_set_focus(window);
-	//}
-	
-	
-	if(window==null || (!window.focused && !window.override_redirect && !window.tray)){
-		return;
 	}
-	
 	var button = mouse.button;
 	this.debug("mouse", "click:", button, pressed, x, y);
 	if (button==4) {
@@ -1334,8 +1320,6 @@ XpraClient.prototype.do_window_mouse_click = function(e, window, pressed) {
 		button = 9;
 	}
 	var me = this;
-	
-	
 	setTimeout(function() {
 		me.send(["button-action", wid, button, pressed, [x, y], modifiers, buttons]);
 	}, 0);
@@ -1441,11 +1425,6 @@ XpraClient.prototype._window_set_focus = function(win) {
 	for (var i in client.id_to_window) {
 		iwin = client.id_to_window[i];
 		iwin.focused = (i==wid);
-		if(iwin.title=="JidePopup" && iwin.metadata["transient-for"]==wid){
-			iwin.stacking_layer = top_stacking_layer;
-			client.send(["focus", iwin.wid, []]);
-		}
-		
 		if (iwin.focused) {
 			iwin.stacking_layer = top_stacking_layer;
 		}
@@ -1712,116 +1691,11 @@ XpraClient.prototype._process_hello = function(packet, ctx) {
 		}
 	}
 	ctx.xdg_menu = hello["xdg-menu"];
-	if(ctx.xdg_menu != null)
-	{
-		for(key in ctx.xdg_menu){
-			var xdg_menu_cats = ctx.xdg_menu[key].Entries;
-			var li = document.createElement("li");
-			li.className = "-hasSubmenu";
-			
-			var cat_icon_data = ctx.xdg_menu[key].IconData;
-				if (typeof cat_icon_data === 'string') {
-					var uint = new Uint8Array(cat_icon_data.length);
-					for(var i=0;i<cat_icon_data.length;++i) {
-						uint[i] = cat_icon_data.charCodeAt(i);
-					}
-					cat_icon_data = uint;
-			}
-			
-			
-			
-			var catDivLeft = document.createElement("div");
-				catDivLeft.className="menu-divleft";
-				var img = new Image();
-				if (typeof cat_icon_data !== 'undefined'){
-					img.src = "data:image/png;base64," + Utilities.ArrayBufferToBase64(cat_icon_data);
-				}
-				img.height=24;
-				img.width=24;
-				img.className="menu-content-left";
-				catDivLeft.appendChild(img);
-			
-				
-			var a = document.createElement("a");
-			a.appendChild(catDivLeft);
-			a.appendChild(document.createTextNode(ctx.xdg_menu[key].Name));
-			a.href="#";
-			li.appendChild(a);
-			
-			var ul = document.createElement("ul");
-			
-			//TODO need to figure out how to do this propery
-			a.onmouseenter= function(){ 
-				this.parentElement.childNodes[1].className="-visible";
-			};
-			
-			a.onmouseleave= function(){ 
-				this.parentElement.childNodes[1].className="";
-			};
-			
-
-			
-			
-			for(key in xdg_menu_cats){
-				var entry = xdg_menu_cats[key];
-				var li2 = document.createElement("li");
-				var a2 = document.createElement("a");
-				
-				var name = entry.Name;
-        	    name = Utilities.trimString(name,15);
-				var command = entry.Exec.replace(/%[uUfF]/g,"");
-				var icon_data = entry.IconData;
-				if (typeof icon_data === 'string') {
-					var uint = new Uint8Array(icon_data.length);
-					for(var i=0;i<icon_data.length;++i) {
-						uint[i] = icon_data.charCodeAt(i);
-					}
-					icon_data = uint;
-				}
-				var ignore = "False";
-				
-				
-				var divLeft = document.createElement("div");
-				divLeft.className="menu-divleft";
-				var img = new Image();
-				img.src = "data:image/png;base64," + Utilities.ArrayBufferToBase64(icon_data);
-				img.className="menu-content-left";
-				divLeft.appendChild(img);
-				
-				var titleDiv = document.createElement("div");
-				titleDiv.appendChild(document.createTextNode(name));
-				titleDiv.className="menu-content-left";
-				divLeft.appendChild(titleDiv);
-				
-				a2.appendChild(divLeft);
-				a2.title = command;
-				
-				a2.onclick = function(){
-						ctx.start_command(this.innerText, this.title, ignore);
-						this.parentElement.parentElement.parentElement.parentElement.parentElement.parentElement.className="-hide";
-						
-				};
-				
-				a2.onmouseenter= function(){ 
-					this.parentElement.parentElement.className="-visible";
-				};
-				
-				a2.onmouseleave= function(){ 
-					this.parentElement.parentElement.className="";
-				};
-
-				li2.appendChild(a2);
-				ul.appendChild(li2);
-				
-			}
-			li.appendChild(ul);
-			document.getElementById("startmenu").appendChild(li);
-			
-		}
-
+	if (ctx.xdg_menu) {
+		ctx.process_xdg_menu();
 	}
 
-	
+
     ctx.server_is_desktop = Boolean(hello["desktop"]);
     ctx.server_is_shadow = Boolean(hello["shadow"]);
     ctx.server_readonly = Boolean(hello["readonly"]);
@@ -1867,6 +1741,98 @@ XpraClient.prototype._process_hello = function(packet, ctx) {
 	ctx.on_connect();
 	ctx.connected = true;
 }
+
+XpraClient.prototype.process_xdg_menu = function() {
+	var key;
+	for(key in this.xdg_menu){
+		var category = this.xdg_menu[key];
+		var li = document.createElement("li");
+		li.className = "-hasSubmenu";
+
+		var catDivLeft = document.createElement("div");
+			catDivLeft.className="menu-divleft";
+		catDivLeft.appendChild(this.xdg_image(category.IconData, category.IconType));
+
+		var a = document.createElement("a");
+		a.appendChild(catDivLeft);
+		a.appendChild(document.createTextNode(this.xdg_menu[key].Name));
+		a.href = "#";
+		li.appendChild(a);
+
+		var ul = document.createElement("ul");
+
+		//TODO need to figure out how to do this properly
+		a.onmouseenter= function(){
+			this.parentElement.childNodes[1].className="-visible";
+		};
+		a.onmouseleave= function(){
+			this.parentElement.childNodes[1].className="";
+		};
+
+		var xdg_menu_cats = category.Entries;
+		for(key in xdg_menu_cats){
+			var entry = xdg_menu_cats[key];
+			var li2 = document.createElement("li");
+			var a2 = document.createElement("a");
+
+			var name = entry.Name;
+    	    name = Utilities.trimString(name,15);
+			var command = entry.Exec.replace(/%[uUfF]/g,"");
+
+			var divLeft = document.createElement("div");
+			divLeft.className = "menu-divleft";
+			divLeft.appendChild(this.xdg_image(entry.IconData, entry.IconType));
+
+			var titleDiv = document.createElement("div");
+			titleDiv.appendChild(document.createTextNode(name));
+			titleDiv.className = "menu-content-left";
+			divLeft.appendChild(titleDiv);
+
+			a2.appendChild(divLeft);
+			a2.title = command;
+
+			var me = this;
+			a2.onclick = function(){
+				var ignore = "False";
+				me.start_command(this.innerText, this.title, ignore);
+				document.getElementById("menu_list").className="-hide";
+			};
+			a2.onmouseenter= function(){
+				this.parentElement.parentElement.className="-visible";
+			};
+			a2.onmouseleave= function(){
+				this.parentElement.parentElement.className="";
+			};
+
+			li2.appendChild(a2);
+			ul.appendChild(li2);
+		}
+		li.appendChild(ul);
+		document.getElementById("startmenu").appendChild(li);
+	}
+}
+
+
+XpraClient.prototype.xdg_image = function(icon_data, icon_type) {
+	var img = new Image();
+	if (typeof icon_data !== 'undefined'){
+		if (typeof icon_data === 'string') {
+			icon_data = Utilities.StringToUint8(icon_data);
+		}
+		if (icon_type=="svg") {
+			img.src = "data:image/svg+xml;base64," + Utilities.ArrayBufferToBase64(icon_data);
+		}
+		else if (icon_type=="png" || icon_type=="jpeg") {
+			img.src = "data:image/"+icon_type+";base64," + Utilities.ArrayBufferToBase64(icon_data);
+		}
+	}
+	img.className = "menu-content-left";
+	img.height = 24;
+	img.width = 24;
+	return img
+}
+
+
 
 XpraClient.prototype.on_connect = function() {
 	//this hook can be overriden
@@ -2039,33 +2005,22 @@ XpraClient.prototype._process_new_tray = function(packet, ctx) {
 	mydiv.id = String(wid);
 	var mycanvas = document.createElement("canvas");
 	mydiv.appendChild(mycanvas);
-	
+
+	var float_tray = document.getElementById("float_tray");
+	var float_menu = document.getElementById("float_menu");
+	$('#float_menu').children().show();
+	//increase size for tray icon
+	var new_width = float_menu_width + float_menu_item_size - float_menu_padding + 5;
+	float_menu.style.width = new_width + "px";
+	float_menu_width=$('#float_menu').width() + 10;
+	mydiv.style.backgroundColor = "white";
+
+	float_tray.appendChild(mydiv);
 	var x = 0;
 	var y = 0;
-	if (getboolparam("top_bar", true)) {
-	    var top_bar = document.getElementById("top_bar");
-	    top_bar.appendChild(mydiv);
-	    x = 100;
-	    y = 0;
-	    w = 48;
-	    h = 48;
-	} else {
-		var float_tray = document.getElementById("float_tray");
-		var float_menu = document.getElementById("float_menu");
-		$('#float_menu').children().show();
-		//increase size for tray icon
-		var new_width = float_menu_width + float_menu_item_size -float_menu_padding;
-		float_menu.style.width = new_width + "px";
-		float_menu_width=$('#float_menu').width() + 10;
-		mydiv.style.backgroundColor = "white";
-		
-		float_tray.appendChild(mydiv);
-	    x = 0;
-	    y = 0;
-	    w = float_menu_item_size;
-	    h = float_menu_item_size;
-	}
-	
+    w = float_menu_item_size;
+    h = float_menu_item_size;
+
 	mycanvas.width = w;
 	mycanvas.height = h;
 	var win = new XpraWindow(ctx, mycanvas, wid, x, y, w, h,
@@ -2088,38 +2043,33 @@ XpraClient.prototype.send_tray_configure = function(wid) {
 	var div = jQuery("#" + String(wid));
 	var x = Math.round(div.offset().left);
 	var y = Math.round(div.offset().top);
-	var w = 48, h = 48;
-	if (getboolparam("floating_menu", true)) {
-		w = float_menu_item_size, h = float_menu_item_size;
-	}
+	var w = float_menu_item_size,
+		h = float_menu_item_size;
 	this.clog("tray", wid, "position:", x, y);
 	this.send(["configure-window", Number(wid), x, y, w, h, {}]);
 }
 XpraClient.prototype._tray_geometry_changed = function(win) {
-	ctx.debug("main", "tray geometry changed (ignored)");
+	ctx.debug("tray", "tray geometry changed (ignored)");
 }
 XpraClient.prototype._tray_set_focus = function(win) {
-	ctx.debug("main", "tray set focus (ignored)");
+	ctx.debug("tray", "tray set focus (ignored)");
 }
 XpraClient.prototype._tray_closed = function(win) {
-	ctx.debug("main", "tray closed (ignored)");
+	ctx.debug("tray", "tray closed (ignored)");
 }
 
 XpraClient.prototype.reconfigure_all_trays = function() {
-	
 	var float_menu = document.getElementById("float_menu");
-	// default width 4x30 (icons) + 10 (padding)
-	float_menu_width = 130;
+	float_menu_width = (float_menu_item_size*4) + float_menu_padding;
 	for (var twid in this.id_to_window) {
-		
 		var twin = this.id_to_window[twid];
 		if (twin && twin.tray) {
-		    float_menu_width = float_menu_width + 30;
+		    float_menu_width = float_menu_width + float_menu_item_size;
 			this.send_tray_configure(twid);
 		}
 	}
-	
-	// don't set width if children are hidden
+
+	// only set if float_menu is visible
 	if($('#float_menu').width() > 0){
 		float_menu.style.width = float_menu_width;
 	}
@@ -2539,7 +2489,7 @@ XpraClient.prototype._process_draw_queue = function(packet, ctx){
 	}
 	if (!win) {
 		ctx.debug("draw", 'cannot paint, window not found:', wid);
-		send_damage_sequence(-1, "window not found");
+		send_damage_sequence(-1, "window "+wid+" not found");
 		return;
 	}
 	try {
@@ -3082,7 +3032,6 @@ XpraClient.prototype.send_file = function(filename, mimetype, size, buffer) {
 }
 
 XpraClient.prototype.start_command = function(name, command, ignore) {
-	
 	var packet = ["start-command", name, command, ignore];
 	this.send(packet);
 }
@@ -3096,9 +3045,13 @@ XpraClient.prototype._process_open_url = function(packet, ctx) {
         return
     }
     ctx.clog("opening url:", url);
-	if (window.doNotification) {
-		var summary = "Server URL Open Request";
-		var body = "Link: <a href=\""+url+"\" target=\"_blank\">"+url+"</a>";
-		window.doNotification("info", 0, summary, body, 30);
-	}
+    var new_window = window.open(url, '_blank');
+    if(!new_window || new_window.closed || typeof new_window.closed=='undefined')
+    {
+		//Popup blocked, display link in notification
+		var summary = "Open URL";
+		var body = "<a href=\""+url+"\" target=\"_blank\">"+url+"</a>";
+		var timeout = 10;
+		window.doNotification("", 0, summary, body, timeout, null, null, null, null, null);
+    }
 }

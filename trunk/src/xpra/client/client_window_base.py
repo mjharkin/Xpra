@@ -225,10 +225,15 @@ class ClientWindowBase(ClientWidgetBase):
                                       "title"           : "<untitled window>",
                                       "client-machine"  : "<unknown machine>",
                                       "windowid"        : str(self._id),
+                                      "server-machine"  : getattr(self._client, "_remote_hostname", "<unknown machine>"),
+                                      "server-display"  : getattr(self._client, "_remote_display", "<unknown display>"),
                                       }
                     def metadata_replace(match):
                         atvar = match.group(0)          #ie: '@title@'
                         var = atvar[1:len(atvar)-1]     #ie: 'title'
+                        if not var:
+                            #atvar = "@@"
+                            return "@"
                         default_value = default_values.get(var, "<unknown %s>" % var)
                         value = self._metadata.strget(var, default_value)
                         if PYTHON2:

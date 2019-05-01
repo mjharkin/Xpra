@@ -824,13 +824,20 @@ fi
 
 
 %changelog
-* Sat Apr 20 2019 Antoine Martin <antoine@xpra.org> 2.5.2-2
+* Sat Apr 20 2019 Antoine Martin <antoine@xpra.org> 2.5.2-1
+- fix OpenGL crashes: don't try to use it when probing process has crashed
 - fix errors in avahi error handler
 - fix tests being run with the wrong python interpreter version
 - fix systemd-run using the wrong python interpreter version
 - fix start menu with python3 clients
 - fix x264 encoder failing to create a compatible stream for the html5 client
 - fix html5 client compatibility with buggy x264 encoders (as above)
+- fix session info graphs start values
+- fix colour channels swapped with some window icons and desktop servers
+- fix slower compression code path wrongly used when av-sync is disabled
+- fix icon type attribute (remove dot)
+- fix system tray forwarding with python3 servers
+- updated package dependencies: recommend python-dns for sshfp support
 
 * Sat Apr 20 2019 Antoine Martin <antoine@xpra.org> 2.5.1-2
 - fix h264 decoding in html5 client (workaround for server side bug)

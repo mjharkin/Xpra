@@ -71,12 +71,12 @@ FAMILY_STR = {}
 for x in dir(socket):
     if x.startswith("AF_"):
         try:
-            PROTOCOL_STR[getattr(socket, "AF_%s" % x)] = x
+            PROTOCOL_STR[getattr(socket, x)] = x
         except:
             pass
     if x.startswith("SOCK_"):
         try:
-            FAMILY_STR[getattr(socket, "SOCK_%s" % x)] = x
+            FAMILY_STR[getattr(socket, x)] = x
         except:
             pass
 

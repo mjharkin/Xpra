@@ -1272,6 +1272,9 @@ XpraClient.prototype.do_window_mouse_move = function(e, window) {
 	if (this.server_readonly || this.mouse_grabbed) {
 		return;
 	}
+	if(e.target.localName != "canvas"){
+		return;
+	}
 	var mouse = this.getMouse(e, window),
 		x = Math.round(mouse.x),
 		y = Math.round(mouse.y);
@@ -1311,6 +1314,9 @@ XpraClient.prototype.do_window_mouse_click = function(e, window, pressed) {
 	if (wid>0 && this.focus != wid) {
 		this._window_set_focus(window);
 	}
+	if(e.target.localName != "canvas"){
+		return;
+	}
 	var button = mouse.button;
 	this.debug("mouse", "click:", button, pressed, x, y);
 	if (button==4) {
@@ -1331,6 +1337,9 @@ XpraClient.prototype._window_mouse_scroll = function(ctx, e, window) {
 
 XpraClient.prototype.do_window_mouse_scroll = function(e, window) {
 	if (this.server_readonly) {
+		return;
+	}
+	if(e.target.localName != "canvas"){
 		return;
 	}
 	var mouse = this.getMouse(e, window),

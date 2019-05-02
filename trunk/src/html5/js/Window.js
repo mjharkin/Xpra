@@ -889,6 +889,9 @@ XpraWindow.prototype.move_resize = function(x, y, w, h) {
 	this.debug("geometry", "move_resize(", x, y, w, h, ")");
 	// only do it if actually changed!
 	if(!(this.w == w) || !(this.h == h) || !(this.x == x) || !(this.y == y)) {
+		if(this.h == (h-30)){
+			return;
+		}
 		this.w = w;
 		this.h = h;
 		this.x = x;

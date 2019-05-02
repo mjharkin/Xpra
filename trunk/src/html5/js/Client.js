@@ -1272,7 +1272,14 @@ XpraClient.prototype.do_window_mouse_move = function(e, window) {
 	if (this.server_readonly || this.mouse_grabbed) {
 		return;
 	}
-	if(e.target.localName != "canvas"){
+	var targetId = e.target.id;
+	if(targetId.startsWith("head")){
+		wid = targetId.replace("head", '');
+	}else if(targetId.startsWith("title")){
+		wid = targetId.replace("title", '');
+	}else if(targetId.startsWith("windowicon")){
+		wid = targetId.replace("windowicon", '');
+	}else if(targetId!="screen" && e.target.localName != "canvas"){
 		return;
 	}
 	var mouse = this.getMouse(e, window),
@@ -1314,7 +1321,14 @@ XpraClient.prototype.do_window_mouse_click = function(e, window, pressed) {
 	//if (wid>0 && this.focus != wid) {
 		this._window_set_focus(window);
 	//}
-	if(e.target.localName != "canvas"){
+	var targetId = e.target.id;
+	if(targetId.startsWith("head")){
+		wid = targetId.replace("head", '');
+	}else if(targetId.startsWith("title")){
+		wid = targetId.replace("title", '');
+	}else if(targetId.startsWith("windowicon")){
+		wid = targetId.replace("windowicon", '');
+	}else if(targetId!="screen" && e.target.localName != "canvas"){
 		return;
 	}
 	var button = mouse.button;
@@ -1339,7 +1353,14 @@ XpraClient.prototype.do_window_mouse_scroll = function(e, window) {
 	if (this.server_readonly) {
 		return;
 	}
-	if(e.target.localName != "canvas"){
+	var targetId = e.target.id;
+	if(targetId.startsWith("head")){
+		wid = targetId.replace("head", '');
+	}else if(targetId.startsWith("title")){
+		wid = targetId.replace("title", '');
+	}else if(targetId.startsWith("windowicon")){
+		wid = targetId.replace("windowicon", '');
+	}else if(targetId!="screen" && e.target.localName != "canvas"){
 		return;
 	}
 	var mouse = this.getMouse(e, window),

@@ -444,6 +444,9 @@ XpraWindow.prototype.update_metadata = function(metadata, safe) {
 	} else {
 		this.set_metadata(metadata)
 	}
+	if(this.title=="JidePopup"){
+		this.metadata["window-type"][0]="NORMAL"
+	}
 	this.update_zindex();
 };
 

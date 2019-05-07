@@ -29,7 +29,8 @@ from xpra.gtk_common.gtk_util import (
     FILE_CHOOSER_ACTION_SAVE, FILE_CHOOSER_ACTION_OPEN,
     )
 from xpra.util import DEFAULT_PORT, csv, repr_ellipsized
-from xpra.os_util import thread, WIN32, OSX, PYTHON3
+from xpra.os_util import WIN32, OSX, PYTHON3
+from xpra.make_thread import start_thread
 from xpra.client.gtk_base.gtk_tray_menu_base import (
     make_min_auto_menu, make_encodingsmenu,
     MIN_QUALITY_OPTIONS, QUALITY_OPTIONS, MIN_SPEED_OPTIONS, SPEED_OPTIONS,
@@ -151,7 +152,7 @@ class ApplicationWindow:
             import ssl
             assert ssl
             modes.append("ssl")
-        except:
+        except ImportError:
             pass
         #assume crypto is available
         modes.append("tcp + aes")
@@ -552,7 +553,7 @@ class ApplicationWindow:
         else:
             try:
                 port = int(port)
-            except:
+            except (ValueError, TypeError):
                 port = -1
         errs.append((self.port_entry, port<0 or port>=2**16, "invalid port number"))
         err_text = []
@@ -834,7 +835,7 @@ class ApplicationWindow:
         self.client.init(self.config)
         self.client.username = username
         self.set_info_text("Connecting...")
-        thread.start_new_thread(self.do_connect_builtin, (params,))
+        start_thread(self.do_connect_builtin, "connect", daemon=True, args=(params,))
 
     def ssh_failed(self, message):
         log("ssh_failed(%s)", message)

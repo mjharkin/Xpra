@@ -7,12 +7,11 @@
 import os
 import sys
 from multiprocessing import Queue as MQueue, freeze_support #@UnresolvedImport
-freeze_support()
 
 from xpra.gtk_common.gobject_compat import import_glib, import_gobject
 from xpra.util import (
     LOGIN_TIMEOUT, AUTHENTICATION_ERROR, SESSION_NOT_FOUND, SERVER_ERROR,
-    repr_ellipsized, print_nested_dict, csv, envfloat, envbool, typedict,
+    repr_ellipsized, print_nested_dict, csv, envfloat, envbool, envint, typedict,
     )
 from xpra.os_util import (
     get_username_for_uid, get_groups, get_home_for_uid, bytestostr,
@@ -34,6 +33,8 @@ authlog = Logger("proxy", "auth")
 glib = import_glib()
 gobject = import_gobject()
 
+freeze_support()
+
 
 PROXY_SOCKET_TIMEOUT = envfloat("XPRA_PROXY_SOCKET_TIMEOUT", "0.1")
 PROXY_WS_TIMEOUT = envfloat("XPRA_PROXY_WS_TIMEOUT", "2.0")
@@ -41,8 +42,7 @@ assert PROXY_SOCKET_TIMEOUT>0, "invalid proxy socket timeout"
 CAN_STOP_PROXY = envbool("XPRA_CAN_STOP_PROXY", getuid()!=0)
 STOP_PROXY_SOCKET_TYPES = os.environ.get("XPRA_STOP_PROXY_SOCKET_TYPES", "unix-domain,named-pipe").split(",")
 
-
-MAX_CONCURRENT_CONNECTIONS = 200
+MAX_CONCURRENT_CONNECTIONS = envint("XPRA_PROXY_MAX_CONCURRENT_CONNECTIONS", 200)
 
 
 class ProxyServer(ServerCore):
@@ -165,7 +165,7 @@ class ProxyServer(ServerCore):
     def verify_connection_accepted(self, protocol):
         #if we start a proxy, the protocol will be closed
         #(a new one is created in the proxy process)
-        if not protocol._closed:
+        if not protocol.is_closed():
             self.send_disconnect(protocol, LOGIN_TIMEOUT)
 
     def hello_oked(self, proto, packet, c, auth_caps):
@@ -189,7 +189,7 @@ class ProxyServer(ServerCore):
             #verify socket type (only local connections by default):
             try:
                 socktype = proto._conn.get_info().get("type", "unknown")
-            except:
+            except Exception:
                 socktype = "unknown"
             if socktype not in STOP_PROXY_SOCKET_TYPES:
                 msg = "cannot stop proxy server from a '%s' connection" % socktype
@@ -212,7 +212,7 @@ class ProxyServer(ServerCore):
                     self._requests.remove(proto)
                 except KeyError:
                     pass
-                if not proto._closed:
+                if not proto.is_closed():
                     self.send_disconnect(proto, "timeout")
             self.timeout_add(10*1000, force_exit_request_client)
             return
@@ -228,7 +228,7 @@ class ProxyServer(ServerCore):
             log.error("Error: the proxy server requires an authentication mode,")
             try:
                 log.error(" client connection '%s' does not specify one", client_proto._conn.socktype)
-            except:
+            except Exception:
                 pass
             log.error(" use 'none' to disable authentication")
             disconnect(SESSION_NOT_FOUND, "no sessions found")
@@ -288,7 +288,7 @@ class ProxyServer(ServerCore):
         proc = None
         socket_path = None
         display = None
-        sns = c.dictget("start-new-session")
+        sns = typedict(c.dictget("start-new-session"))
         authlog("proxy_session: displays=%s, start_sessions=%s, start-new-session=%s",
                 displays, self._start_sessions, sns)
         if not displays or sns:
@@ -332,7 +332,7 @@ class ProxyServer(ServerCore):
             if socket_path:
                 hello["socket-path"] = socket_path
             #echo mode if present:
-            mode = sns.get("mode")
+            mode = sns.strget("mode")
             if mode:
                 hello["mode"] = mode
             client_proto.send_now(("hello", hello))
@@ -411,7 +411,8 @@ class ProxyServer(ServerCore):
                 popen = process._popen
                 assert popen
                 #when this process dies, run reap to update our list of proxy processes:
-                self.child_reaper.add_process(popen, "xpra-proxy-%s" % display, "xpra-proxy-instance", True, True, self.reap)
+                self.child_reaper.add_process(popen, "xpra-proxy-%s" % display,
+                                              "xpra-proxy-instance", True, True, self.reap)
             finally:
                 #now we can close our handle on the connection:
                 client_conn.close()
@@ -474,7 +475,8 @@ class ProxyServer(ServerCore):
         log("env=%s", env)
         log("args=%s", args)
         log("cwd=%s", cwd)
-        proc, socket_path, display = start_server_subprocess(sys.argv[0], args, mode, opts, username, uid, gid, env, cwd)
+        proc, socket_path, display = start_server_subprocess(sys.argv[0], args,
+                                                             mode, opts, username, uid, gid, env, cwd)
         if proc:
             self.child_reaper.add_process(proc, "server-%s" % (display or socket_path), "xpra %s" % mode, True, True)
         log("start_new_session(..) pid=%s, socket_path=%s, display=%s, ", proc.pid, socket_path, display)
@@ -523,13 +525,14 @@ class ProxyServer(ServerCore):
             from subprocess import PIPE
             env = self.get_proxy_env()
             log("env=%s", env)
-            proc = Popen(command, stdout=PIPE, stderr=PIPE, cwd=cwd, env=env, startupinfo=startupinfo, creationinfo=creation_info)
+            proc = Popen(command, stdout=PIPE, stderr=PIPE, cwd=cwd, env=env,
+                         startupinfo=startupinfo, creationinfo=creation_info)
             log("Popen(%s)=%s", command, proc)
             log("poll()=%s", proc.poll())
             try:
                 log("stdout=%s", proc.stdout.read())
                 log("stderr=%s", proc.stderr.read())
-            except:
+            except (OSError, IOError, AttributeError):
                 pass
             if proc.poll() is not None:
                 return None
@@ -549,7 +552,7 @@ class ProxyServer(ServerCore):
     def reap(self, *args):
         log("reap%s", args)
         dead = []
-        for p in self.processes.keys():
+        for p in tuple(self.processes):
             live = p.is_alive()
             if not live:
                 dead.append(p)
@@ -559,7 +562,7 @@ class ProxyServer(ServerCore):
 
 
     def get_info(self, proto, *_args):
-        info = ServerCore.get_minimal_server_info(self, proto)
+        info = ServerCore.get_minimal_server_info(self)
         info.setdefault("server", {})["type"] = "Python/GLib/proxy"
         #only show more info if we have authenticated
         #as the user running the proxy server process:
@@ -567,10 +570,9 @@ class ProxyServer(ServerCore):
             sessions = []
             for authenticator in proto.authenticators:
                 auth_sessions = authenticator.get_sessions()
-                #don't add duplicates:
-                for x in auth_sessions:
-                    if x not in sessions:
-                        sessions.append(x)
+                if auth_sessions:
+                    sessions = auth_sessions
+                    break
             if sessions:
                 uid, gid = sessions[:2]
                 if not POSIX or (uid==os.getuid() and gid==os.getgid()):

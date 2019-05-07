@@ -126,8 +126,6 @@ Recommends:
         ,openssh-client
 #for using SSH passwords from the GUI launcher:
         ,sshpass
-#the start-session GUI:
-        ,python-xdg
 # to make the system tray work again with gnome-shell:
 #buster:		,gnome-shell-extension-appindicator
 #bionic:		,gnome-shell-extension-appindicator
@@ -183,6 +181,8 @@ Depends: ${misc:Depends}, ${python:Depends}, ${shlibs:Depends}
         ,python-rencode
 # packet compression:
         ,python-lz4
+# clipboard packet compression:
+        ,python-brotli
 # for notifications forwarding and dbus server / proxying:
 Recommends: python-dbus
 # for the proxy server:
@@ -247,8 +247,10 @@ Depends: ${misc:Depends}, ${python3:Depends}, ${shlibs:Depends}
         ,python3-pil
 # packet encoder:
         ,python3-rencode
-# depend on lz4 for those that have it, lzo otherwise:
+# packet compression:
         ,python3-lz4
+# clipboard packet compression:
+        ,python3-brotli
 # for notifications forwarding and dbus server / proxying:
 Recommends: python3-dbus
 # for the proxy server:

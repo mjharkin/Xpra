@@ -116,7 +116,7 @@ class DisplayManager(StubServerMixin):
                     log.info(" client root window size is %sx%s with %s display%s:",
                              dw, dh, len(ss.screen_sizes), engs(ss.screen_sizes))
                     log_screen_sizes(dw, dh, ss.screen_sizes)
-            except:
+            except Exception:
                 dw, dh = None, None
         sw, sh = self.configure_best_screen_size()
         log("configure_best_screen_size()=%s", (sw, sh))
@@ -269,7 +269,7 @@ class DisplayManager(StubServerMixin):
     def make_screenshot_packet(self):
         try:
             return self.do_make_screenshot_packet()
-        except:
+        except Exception:
             log.error("make_screenshot_packet()", exc_info=True)
             return None
 
@@ -291,7 +291,9 @@ class DisplayManager(StubServerMixin):
 
 
     def init_packet_handlers(self):
-        self.add_packet_handler("set-cursors",  self._process_set_cursors)
-        self.add_packet_handler("set-bell",     self._process_set_bell)
-        self.add_packet_handler("desktop_size", self._process_desktop_size)
-        self.add_packet_handler("screenshot",   self._process_screenshot)
+        self.add_packet_handlers({
+            "set-cursors"   : self._process_set_cursors,
+            "set-bell"      : self._process_set_bell,
+            "desktop_size"  : self._process_desktop_size,
+            "screenshot"    : self._process_screenshot,
+            })

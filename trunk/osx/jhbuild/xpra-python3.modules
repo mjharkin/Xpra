@@ -27,9 +27,9 @@
 
 	<distutils id="python3-setuptools" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/ed/69/c805067de1feedbb98c53174b0f2df44cc05e0e9ee73bb85eebc59e508c6/setuptools-41.0.0.zip"
-			hash="sha256:79d30254b6fe7a8e672e43cd85f13a9f3f2a50080bc81d851143e2219ef0dcb1"
-			version="41.0.0"/>
+			module="/packages/1d/64/a18a487b4391a05b9c7f938b94a16d80305bf0369c6b0b9509e86165e1d3/setuptools-41.0.1.zip"
+			hash="sha256:a222d126f5471598053c9a77f4b5d4f26eaa1f150ad6e01dcf1a42e185d05613"
+			version="41.0.1"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -413,6 +413,17 @@
 		</after>
 	</distutils>
 
+	<distutils id="python3-brotli" python3="1">
+		<branch repo="files.pythonhosted.org"
+			module="/packages/cd/9c/7955895f5672ecc85270244582c6b53ff95bb4c24bf77bd9271d42351635/Brotli-1.0.7.zip"
+			hash="sha256:0538dc1744fd17c314d2adc409ea7d1b779783b89fd95bcfb0c2acc93a6ea5a7"
+			version="1.0.7">
+		</branch>
+		<dependencies>
+			<dep package="python3"/>
+		</dependencies>
+	</distutils>
+
 	<distutils id="python3-pyasn1-modules" python3="1">
 		<branch repo="pypi.python.org"
 			module="/packages/ab/76/36ab0e099e6bd27ed95b70c2c86c326d3affa59b9b535c63a2f892ac9f45/pyasn1-modules-0.2.1.tar.gz"
@@ -672,9 +683,9 @@
 
 	<distutils id="python3-yaml" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/9e/a3/1d13970c3f36777c583f136c136f804d70f500168edc1edea6daa7200769/PyYAML-3.13.tar.gz"
-			hash="sha256:3ef3092145e9b70e3ddd2c7ad59bdd0252a94dfe3949721633e41344de00a6bf"
-			version="3.13"/>
+			module="/packages/9f/2c/9417b5c774792634834e730932745bc09a7d36754ca00acf1ccd1ac2594d/PyYAML-5.1.tar.gz"
+			hash="sha256:436bc774ecf7c103814098159fbb84c2715d25980175292c648f2da143909f95"
+			version="5.1"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -744,6 +755,7 @@
 		  <dep package="python3-deprecation"/>
 		  <dep package="python3-lz4"/>
 		  <dep package="python3-lzo"/>
+		  <dep package="python3-brotli"/>
 		  <dep package="python3-ldap3"/>
 		  <dep package="python3-ldap"/>
 		  <dep package="python3-future"/>

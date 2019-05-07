@@ -53,6 +53,10 @@ class RFBProtocol(object):
         self._read_thread = make_thread(self._read_thread_loop, "read", daemon=True)
 
 
+    def is_closed(self):
+        return self._closed
+
+
     def send_protocol_handshake(self):
         self.send(b"RFB 003.008\n")
 

@@ -13,7 +13,8 @@ import platform as python_platform
 assert python_platform
 from xpra.util import csv
 from xpra.os_util import (
-    WIN32, OSX, PYTHON2, osexpand, getuid, getgid, get_username_for_uid,
+    WIN32, OSX, PYTHON2, POSIX,
+    osexpand, getuid, getgid, get_username_for_uid,
     is_CentOS, is_RedHat, is_Fedora, is_Debian, is_Ubuntu, getUbuntuVersion,
     )
 
@@ -40,7 +41,10 @@ DEBUG_CONFIG_PROPERTIES = os.environ.get("XPRA_DEBUG_CONFIG_PROPERTIES", "").spl
 DEFAULT_XPRA_CONF_FILENAME = os.environ.get("XPRA_CONF_FILENAME", 'xpra.conf')
 DEFAULT_NET_WM_NAME = os.environ.get("XPRA_NET_WM_NAME", "Xpra")
 
-DEFAULT_POSTSCRIPT_PRINTER = os.environ.get("XPRA_POSTSCRIPT_PRINTER", "drv:///sample.drv/generic.ppd")
+if POSIX:
+    DEFAULT_POSTSCRIPT_PRINTER = os.environ.get("XPRA_POSTSCRIPT_PRINTER", "drv:///sample.drv/generic.ppd")
+else:
+    DEFAULT_POSTSCRIPT_PRINTER = ""
 DEFAULT_PULSEAUDIO = None   #auto
 if OSX or WIN32:
     DEFAULT_PULSEAUDIO = False
@@ -53,7 +57,7 @@ def has_sound_support():
         try:
             import xpra.sound
             _has_sound_support = bool(xpra.sound)
-        except:
+        except ImportError:
             _has_sound_support = False
     return _has_sound_support
 
@@ -168,10 +172,9 @@ def detect_xvfb_command(conf_dir="/etc/xpra/", bin_dir=None, Xdummy_ENABLED=None
 
     if is_Ubuntu():
         rnum = getUbuntuVersion()
-        if rnum==(16, 10):
-            return Xorg_suid_check()
-        debug("Warning: Ubuntu breaks Xorg/Xdummy usage - using Xvfb fallback")
-        return get_Xvfb_command()
+        if rnum<(16, 10):
+            debug("Warning: Ubuntu Xenial breaks Xorg/Xdummy usage - using Xvfb fallback")
+            return get_Xvfb_command()
     return Xorg_suid_check()
 
 
@@ -184,7 +187,7 @@ def OpenGL_safety_check():
         from ctypes import cdll
         if cdll.LoadLibrary("VBoxHook.dll"):
             return "VirtualBox is present (VBoxHook.dll)"
-    except:
+    except (ImportError, OSError):
         pass
     try:
         try:
@@ -199,13 +202,6 @@ def OpenGL_safety_check():
         if e.args[0]==errno.EACCES:
             return "VirtualBox is present (VBoxMiniRdrDN)"
     return None
-
-OPENGL_DEFAULT = "probe"       #will auto-detect by probing
-def get_opengl_default():
-    global OPENGL_DEFAULT
-    if OpenGL_safety_check() is not None:
-        OPENGL_DEFAULT = "no"
-    return OPENGL_DEFAULT
 
 
 def get_build_info():
@@ -253,10 +249,11 @@ def get_build_info():
 def name_to_field(name):
     return name.replace("-", "_")
 
-def save_config(conf_file, config, keys, extras_types={}):
+def save_config(conf_file, config, keys, extras_types=None):
     with open(conf_file, "w") as f:
         option_types = OPTION_TYPES.copy()
-        option_types.update(extras_types)
+        if extras_types:
+            option_types.update(extras_types)
         saved = {}
         for key in keys:
             assert key in option_types, "invalid configuration key: %s" % key
@@ -819,7 +816,7 @@ def get_defaults():
     try:
         from xpra.platform.info import get_username
         username = get_username()
-    except:
+    except Exception:
         username = ""
     conf_dirs = [os.environ.get("XPRA_CONF_DIR")]
     build_root = os.environ.get("RPM_BUILD_ROOT")
@@ -985,7 +982,7 @@ def get_defaults():
                     "av-sync"           : True,
                     "exit-ssh"          : True,
                     "dbus-control"      : not WIN32 and not OSX,
-                    "opengl"            : get_opengl_default(),
+                    "opengl"            : "probe",
                     "mdns"              : not WIN32,
                     "swap-keys"         : OSX,  #only used on osx
                     "desktop-fullscreen": False,
@@ -1327,10 +1324,10 @@ def fixup_compression(options):
         compressors = compression.PERFORMANCE_ORDER
     else:
         compressors = _nodupes(cstr)
-        unknown = [x for x in compressors if x and x not in compression.ALL_COMPRESSORS]
+        unknown = tuple(x for x in compressors if x and x not in compression.ALL_COMPRESSORS)
         if unknown:
             warn("warning: invalid compressor(s) specified: %s" % csv(unknown))
-    options.compressors = compressors
+    options.compressors = list(compressors)
 
 def fixup_packetencoding(options):
     #packet encoding

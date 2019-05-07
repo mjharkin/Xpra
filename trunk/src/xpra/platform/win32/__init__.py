@@ -5,6 +5,7 @@
 # later version. See the file COPYING for details.
 
 # Platform-specific code for Win32.
+#pylint: disable=bare-except
 
 import errno
 import os.path
@@ -98,7 +99,7 @@ def fix_unicode_out():
     if PYTHON3:
         _unicode = str
     else:
-        _unicode = unicode
+        _unicode = unicode  #@UndefinedVariable
     #code found here:
     #http://stackoverflow.com/a/3259271/428751
     import codecs

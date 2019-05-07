@@ -34,7 +34,7 @@ from xpra.log import Logger
 
 log = Logger("encoder", "nvenc")
 
-from libc.stdint cimport uintptr_t, uint8_t, uint16_t, uint32_t, int32_t, uint64_t
+from libc.stdint cimport uintptr_t, uint8_t, uint16_t, uint32_t, int32_t, uint64_t  #pylint: disable=syntax-error
 from libc.stdlib cimport free, malloc
 from libc.string cimport memset, memcpy
 from xpra.monotonic_time cimport monotonic_time
@@ -1055,7 +1055,7 @@ def init_nvencode_library():
     else:
         #assert os.name=="posix"
         load = ctypes.cdll.LoadLibrary
-        nvenc_libname = "libnvidia-encode.so"
+        nvenc_libname = "libnvidia-encode.so.1"
         cuda_libname = "libcuda.so"
     #CUDA:
     log("init_nvencode_library() will try to load %s", cuda_libname)

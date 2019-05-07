@@ -1,5 +1,5 @@
 # This file is part of Xpra.
-# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008, 2010 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -60,6 +60,9 @@ DETECT_LEAKS = envbool("XPRA_DETECT_LEAKS", False)
 LEGACY_SALT_DIGEST = envbool("XPRA_LEGACY_SALT_DIGEST", True)
 MOUSE_DELAY = envint("XPRA_MOUSE_DELAY", 0)
 
+
+def noop():
+    pass
 
 
 """ Base class for Xpra clients.
@@ -136,6 +139,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         self.completed_startup = False
         self.uuid = get_user_uuid()
         self.init_packet_handlers()
+        self.have_more = noop
         sanity_checks()
 
     def init(self, opts, _extra_args=()):
@@ -172,16 +176,6 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
             self.timeout_add(10*1000, print_leaks)
 
 
-    def timeout_add(self, *_args):
-        raise NotImplementedError("override me!")
-
-    def idle_add(self, *_args):
-        raise NotImplementedError("override me!")
-
-    def source_remove(self, *_args):
-        raise NotImplementedError("override me!")
-
-
     def may_notify(self, nid, summary, body, *args, **kwargs):
         notifylog = Logger("notify")
         notifylog("may_notify(%s, %s, %s, %s, %s)", nid, summary, body, args, kwargs)
@@ -199,7 +193,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
     def handle_app_signal(self, signum, _frame=None):
         try:
             log.info("exiting")
-        except:
+        except Exception:
             pass
         signal.signal(signal.SIGINT, self.handle_deadly_signal)
         signal.signal(signal.SIGTERM, self.handle_deadly_signal)
@@ -213,7 +207,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
                 sys.stderr.write("\n")
                 sys.stderr.flush()
                 log.info("got signal %s", SIGNAMES.get(signum, signum))
-            except:
+            except Exception:
                 pass
             self.handle_app_signal(signum)
         signal.signal(signal.SIGINT, os_signal)
@@ -247,7 +241,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         #try to tell the server we're going, then quit
         log("disconnect_and_quit(%s, %s)", exit_code, reason)
         p = self._protocol
-        if p is None or p._closed:
+        if p is None or p.is_closed():
             self.quit(exit_code)
             return
         def protocol_closed():
@@ -272,9 +266,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
     def setup_connection(self, conn):
         netlog("setup_connection(%s) timeout=%s, socktype=%s", conn, conn.timeout, conn.socktype)
         if conn.socktype=="udp":
-            self.set_packet_handlers(self._packet_handlers, {
-                "udp-control"   : self._process_udp_control,
-                })
+            self.add_packet_handler("udp-control", self._process_udp_control, False)
         protocol_class = get_client_protocol_class(conn.socktype)
         self._protocol = protocol_class(self.get_scheduler(), conn, self.process_packet, self.next_packet)
         for x in (b"keymap-changed", b"server-settings", b"logging", b"input-devices"):
@@ -300,42 +292,6 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
     def _process_udp_control(self, packet):
         #send it back to the protocol object:
         self._protocol.process_control(*packet[1:])
-
-
-    def remove_packet_handlers(self, *keys):
-        for k in keys:
-            for d in (self._packet_handlers, self._ui_packet_handlers):
-                try:
-                    del d[k]
-                except KeyError:
-                    pass
-
-    def set_packet_handlers(self, to, defs):
-        """ configures the given packet handlers,
-            and make sure we remove any existing ones with the same key
-            (which can be useful for subclasses, not here)
-        """
-        log("set_packet_handlers(%s, %s)", to, defs)
-        self.remove_packet_handlers(*defs.keys())
-        for k,v in defs.items():
-            to[k] = v
-
-    def init_packet_handlers(self):
-        self._packet_handlers = {}
-        self._ui_packet_handlers = {}
-        self.set_packet_handlers(self._packet_handlers, {"hello" : self._process_hello})
-        self.set_packet_handlers(self._ui_packet_handlers, {
-            "challenge":                self._process_challenge,
-            "disconnect":               self._process_disconnect,
-            "set_deflate":              self._process_set_deflate,
-            "startup-complete":         self._process_startup_complete,
-            Protocol.CONNECTION_LOST:   self._process_connection_lost,
-            Protocol.GIBBERISH:         self._process_gibberish,
-            Protocol.INVALID:           self._process_invalid,
-            })
-
-    def init_authenticated_packet_handlers(self):
-        FilePrintMixin.init_authenticated_packet_handlers(self)
 
 
     def init_aliases(self):
@@ -452,13 +408,17 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         return capabilities
 
     def compressed_wrapper(self, datatype, data, level=5):
-        #FIXME: ugly assumptions here, should pass by name!
+        #ugly assumptions here, should pass by name
         zlib = "zlib" in self.server_compressors and compression.use_zlib
         lz4 = "lz4" in self.server_compressors and compression.use_lz4
         lzo = "lzo" in self.server_compressors and compression.use_lzo
+        brotli = False
+        #never use brotli as a generic compressor
+        #brotli = "brotli" in self.server_compressors and compression.use_brotli
         if level>0 and len(data)>=256 and (zlib or lz4 or lzo):
             cw = compression.compressed_wrapper(datatype, data, level=level,
-                                                zlib=zlib, lz4=lz4, lzo=lzo, can_inline=False)
+                                                zlib=zlib, lz4=lz4, lzo=lzo, brotli=brotli,
+                                                can_inline=False)
             if len(cw)<len(data):
                 #the compressed version is smaller, use it:
                 return cw
@@ -510,12 +470,6 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
             self._mouse_position_timer = 0
             self.source_remove(mpt)
 
-
-    def have_more(self):
-        #this function is overridden in setup_protocol()
-        p = self._protocol
-        if p and p.source:
-            p.source_has_more()
 
     def next_packet(self):
         netlog("next_packet() packets in queues: priority=%i, ordinary=%i, mouse=%s",
@@ -713,7 +667,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
                         try:
                             log.error(" %s", csv(x))
                             continue
-                        except:
+                        except Exception:
                             pass
                     authlog.error(" %s", x)
             except Exception:
@@ -772,7 +726,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
                 #split on colon
                 for x in str(e).split(":", 2):
                     authlog.error(" %s", x.lstrip(" "))
-            except:
+            except Exception:
                 authlog.error(" %s", e)
             return False
         authlog("gss token=%s", repr(token))
@@ -789,8 +743,8 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         if not is_debug_enabled("auth"):
             logging.getLogger("pyu2f.hardware").setLevel(logging.INFO)
             logging.getLogger("pyu2f.hidtransport").setLevel(logging.INFO)
-        from pyu2f import model
-        from pyu2f.u2f import GetLocalU2FInterface
+        from pyu2f import model                     #@UnresolvedImport
+        from pyu2f.u2f import GetLocalU2FInterface  #@UnresolvedImport
         dev = GetLocalU2FInterface()
         APP_ID = os.environ.get("XPRA_U2F_APP_ID", "Xpra")
         key_handle_str = os.environ.get("XPRA_U2F_KEY_HANDLE")
@@ -862,16 +816,19 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
             text += " for user '%s',\n connecting to %s server %s" % (
                 self.username, conn.socktype, pretty_socket(conn.remote),
                 )
-        except:
+        except Exception:
             pass
         return text
 
     def send_challenge_reply(self, packet, password):
         if not password:
             if self.password_file:
-                self.auth_error(EXIT_PASSWORD_FILE_ERROR, "failed to load password from file%s %s" % (engs(self.password_file), csv(self.password_file)), "no password available")
+                self.auth_error(EXIT_PASSWORD_FILE_ERROR,
+                                "failed to load password from file%s %s" % (engs(self.password_file), csv(self.password_file)),
+                                "no password available")
             else:
-                self.auth_error(EXIT_PASSWORD_REQUIRED, "this server requires authentication and no password is available")
+                self.auth_error(EXIT_PASSWORD_REQUIRED,
+                                "this server requires authentication and no password is available")
             return
         server_salt = bytestostr(packet[1])
         if self.encryption:
@@ -1068,6 +1025,46 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         self.quit(EXIT_PACKET_FAILURE)
 
 
+    ######################################################################
+    # packets:
+    def remove_packet_handlers(self, *keys):
+        for k in keys:
+            for d in (self._packet_handlers, self._ui_packet_handlers):
+                try:
+                    del d[k]
+                except KeyError:
+                    pass
+
+    def init_packet_handlers(self):
+        self._packet_handlers = {}
+        self._ui_packet_handlers = {}
+        self.add_packet_handler("hello", self._process_hello, False)
+        self.add_packet_handlers({
+            "challenge":                self._process_challenge,
+            "disconnect":               self._process_disconnect,
+            "set_deflate":              self._process_set_deflate,
+            "startup-complete":         self._process_startup_complete,
+            Protocol.CONNECTION_LOST:   self._process_connection_lost,
+            Protocol.GIBBERISH:         self._process_gibberish,
+            Protocol.INVALID:           self._process_invalid,
+            })
+
+    def init_authenticated_packet_handlers(self):
+        FilePrintMixin.init_authenticated_packet_handlers(self)
+
+    def add_packet_handlers(self, defs, main_thread=True):
+        for packet_type, handler in defs.items():
+            self.add_packet_handler(packet_type, handler, main_thread)
+
+    def add_packet_handler(self, packet_type, handler, main_thread=True):
+        netlog("add_packet_handler%s", (packet_type, handler, main_thread))
+        self.remove_packet_handlers(packet_type)
+        if main_thread:
+            handlers = self._ui_packet_handlers
+        else:
+            handlers = self._packet_handlers
+        handlers[packet_type] = handler
+
     def process_packet(self, _proto, packet):
         try:
             handler = None
@@ -1083,8 +1080,6 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
                 netlog.error("unknown packet type: %s", packet_type)
                 return
             self.idle_add(handler, packet)
-        except KeyboardInterrupt:
-            raise
-        except:
+        except Exception:
             netlog.error("Unhandled error while processing a '%s' packet from peer using %s",
                          packet_type, handler, exc_info=True)

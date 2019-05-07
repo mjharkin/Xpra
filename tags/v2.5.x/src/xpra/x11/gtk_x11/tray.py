@@ -239,7 +239,7 @@ class SystemTray(gobject.GObject):
         if title is None:
             title = ""
         xid = get_xwindow(root)
-        log("dock_tray(%#x) gdk window=%#x, geometry=%s, title=%s, visual.depth=%s", xid, xid, window.get_geometry(), title, window.get_visual().depth)
+        log("dock_tray(%#x) gdk window=%#x, geometry=%s, title=%s", xid, xid, window.get_geometry(), title)
         kwargs = {}
         if not is_gtk3():
             kwargs["colormap"] = window.get_colormap()

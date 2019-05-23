@@ -824,7 +824,7 @@ fi
 
 
 %changelog
-* Sat Apr 20 2019 Antoine Martin <antoine@xpra.org> 2.5.2-1
+* Thu May 23 2019 Antoine Martin <antoine@xpra.org> 2.5.2-1
 - fix OpenGL crashes: don't try to use it when probing process has crashed
 - fix errors in avahi error handler
 - fix tests being run with the wrong python interpreter version
@@ -837,6 +837,31 @@ fi
 - fix slower compression code path wrongly used when av-sync is disabled
 - fix icon type attribute (remove dot)
 - fix system tray forwarding with python3 servers
+- fix socket attributes name lookup for xpra info
+- fix handling proxy server info requests
+- fix proxy server info errors trying to enumerate sessions
+- fix automatic MTU adjustements with UDP transport
+- fix NVENC compatiblity with library soname found in newer installers
+- fix invalid python2 DEB dependency in main meta package
+- fix default config value for opengl attribute
+- fix HTML5 client authentication issue when going through a proxy server
+- fix socket errors on startup with bind-ssl
+- fix server dbus service attribute accessor methods
+- fix network jitter injector
+- fix avahi mdns publisher test tool
+- fix zeroconf error when service info is not available
+- fix remote ssh failures with python3-only installations
+- fix automatic interpreter version switching when re-executing
+- fix start-via-proxy exit code handler
+- fix socket-permissions option not being honoured
+- fix error in the codec loader if the first codec attempted fails
+- fix error in the codec instantiation leak detection code
+- fix exit hooks not being called with 'exit-with-client'
+- fix RandR build errors with older versions of Cython (ie: Xenial)
+- fix GTK3 build of the keyboard test tool on MS Windows
+- fix errors parsing xresources
+- fix font hinting detection with python3
+- fix errors during cleanup if server initialization or startup had failed
 - updated package dependencies: recommend python-dns for sshfp support
 
 * Sat Apr 20 2019 Antoine Martin <antoine@xpra.org> 2.5.1-2

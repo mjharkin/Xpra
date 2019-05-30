@@ -92,9 +92,16 @@ class ChildCommandServer(StubServerMixin):
     def get_caps(self, source):
         caps = {}
         if self.start_new_commands and POSIX and not OSX and source.wants_features::
-            from xpra.platform.xposix.xdg_helper import load_xdg_menu_data
+            from xpra.platform.xposix.xdg_helper import load_xdg_menu_data, remove_icons
             xdg_menu = load_xdg_menu_data()
             if xdg_menu:
+                l = len(str(xdg_menu))
+                #arbitrary: don't use more than half
+                #of the maximum size of the hello packet:
+                if l>2*1024*1024:
+                    xdg_menu = remove_icons(xdg_menu)
+                    log.info("removed icons to reduce the size of the xdg menu data")
+                    log.info("size reduced from %i to %i", l, len(str(xdg_menu)))
                 caps["xdg-menu"] = xdg_menu
         return caps
 

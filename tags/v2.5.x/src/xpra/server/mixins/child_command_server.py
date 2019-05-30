@@ -89,9 +89,9 @@ class ChildCommandServer(StubServerMixin):
             "server-commands-info"      : not WIN32 and not OSX,
             }
 
-    def get_caps(self, _source):
+    def get_caps(self, source):
         caps = {}
-        if self.start_new_commands and POSIX and not OSX:
+        if self.start_new_commands and POSIX and not OSX and source.wants_features::
             from xpra.platform.xposix.xdg_helper import load_xdg_menu_data
             xdg_menu = load_xdg_menu_data()
             if xdg_menu:

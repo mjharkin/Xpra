@@ -17,6 +17,7 @@ from xpra.gtk_common.gobject_compat import (
     register_os_signals,
     )
 from xpra.platform.paths import get_icon_dir
+from xpra.util import typedict
 from xpra.log import Logger, enable_debug_for
 
 log = Logger("exec")
@@ -40,7 +41,7 @@ class StartNewCommand(object):
 
     def __init__(self, run_callback=None, can_share=False, xdg_menu=None):
         self.run_callback = run_callback
-        self.xdg_menu = xdg_menu
+        self.xdg_menu = typedict(xdg_menu)
         self.window = gtk.Window()
         window_defaults(self.window)
         self.window.connect("destroy", self.close)
@@ -121,8 +122,8 @@ class StartNewCommand(object):
 
     def category_changed(self, *args):
         category = self.category_combo.get_active_text().encode("utf-8")
-        log("category_changed(%s) category=%s", args, category)
-        entries = self.xdg_menu.get(category, {}).get("Entries", {})
+        entries = typedict(self.xdg_menu.dictget(category, {})).dictget("Entries", {})
+        log("category_changed(%s) category=%s, entries=%s", args, category, entries)
         self.command_combo.get_model().clear()
         for name in entries.keys():
             self.command_combo.append_text(name.decode("utf-8"))

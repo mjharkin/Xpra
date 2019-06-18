@@ -58,7 +58,7 @@ exit 1
 
 Name:				xpra
 Version:			%{version}
-Release:			0%{?revision_no}%{?dist}
+Release:			1%{?revision_no}%{?dist}
 Summary:			Xpra gives you "persistent remote applications" for X.
 Group:				Networking
 License:			GPL-2.0+ AND BSD-3-Clause AND LGPL-3.0+ AND MIT
@@ -826,6 +826,9 @@ fi
 
 
 %changelog
+* Tue Jun 18 2019 Antoine Martin <antoine@xpra.org> 2.5.2-1
+- force rebuild with bumped release number to prevent conflicts with Fedora packages
+
 * Fri Jun 07 2019 Antoine Martin <antoine@xpra.org> 2.5.2-1
 - fix mmap leak which can cause the client to stop painting
 - fix OpenGL crashes: don't try to use it when probing process has crashed

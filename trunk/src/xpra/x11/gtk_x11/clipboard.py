@@ -5,6 +5,7 @@
 
 import os
 import struct
+from io import BytesIO
 
 from xpra.gtk_common.error import xsync, xswallow
 from xpra.gtk_common.gobject_util import one_arg_signal, n_arg_signal
@@ -27,7 +28,7 @@ from xpra.x11.bindings.window_bindings import ( #@UnresolvedImport
     X11WindowBindings,                          #@UnresolvedImport
     )
 from xpra.os_util import bytestostr
-from xpra.util import csv, repr_ellipsized, first_time
+from xpra.util import csv, repr_ellipsized, first_time, envbool
 from xpra.log import Logger
 
 gdk = import_gdk()
@@ -138,6 +139,10 @@ class X11Clipboard(ClipboardTimeoutHelper, gobject.GObject):
             proxy.do_selection_notify_event(event)
 
     def do_xpra_client_message_event(self, event):
+        message_type = event.message_type
+        if message_type=="_GTK_LOAD_ICONTHEMES":
+            log("ignored clipboard client message: %s", message_type)
+            return
         log.info("clipboard X11 window %#x received a client message", get_xwindow(self.window))
         log.info(" %s", event)
 
@@ -203,6 +208,7 @@ class ClipboardProxy(ClipboardProxyCore, gobject.GObject):
         self.local_request_counter = 0
         self.targets = ()
         self.target_data = {}
+        self.reset_incr_data()
 
     def __repr__(self):
         return  "X11ClipboardProxy(%s)" % self._selection
@@ -268,7 +274,7 @@ class ClipboardProxy(ClipboardProxyCore, gobject.GObject):
                 log("claim_selection: set selection owner returned %s, owner=%#x",
                     setsel, X11Window.XGetSelectionOwner(self._selection))
                 event_mask = StructureNotifyMask
-                log("claim_selection: sending client message")
+                log("claim_selection: sending message to root window")
                 owner = X11Window.XGetSelectionOwner(self._selection)
                 self.owned = owner==self.xid
                 if not self.owned:
@@ -324,10 +330,10 @@ class ClipboardProxy(ClipboardProxyCore, gobject.GObject):
         requestor = event.requestor
         assert requestor
         wininfo = self.get_wininfo(get_xwindow(requestor))
-        log("clipboard request for %s from window %#x: %s",
-            self._selection, get_xwindow(requestor), wininfo)
         prop = event.property
         target = str(event.target)
+        log("clipboard request for %s from window %#x: %s, target=%s, prop=%s",
+            self._selection, get_xwindow(requestor), wininfo, target, prop)
         def nodata():
             self.set_selection_response(requestor, target, prop, "STRING", 8, b"", time=event.time)
         if not self._enabled:
@@ -358,7 +364,7 @@ class ClipboardProxy(ClipboardProxyCore, gobject.GObject):
 
         if target=="TARGETS":
             if self.targets:
-                log("using existing TARGETS value as response")
+                log("using existing TARGETS value as response: %s", self.targets)
                 xatoms = strings_to_xatoms(self.targets)
                 self.set_selection_response(requestor, target, prop, "ATOM", 32, xatoms, event.time)
                 return
@@ -378,7 +384,7 @@ class ClipboardProxy(ClipboardProxyCore, gobject.GObject):
                 return
 
         target_data = self.target_data.get(target)
-        if target_data:
+        if target_data and not self._have_token:
             #we have it already
             dtype, dformat, data = target_data
             dtype = bytestostr(dtype)
@@ -416,8 +422,9 @@ class ClipboardProxy(ClipboardProxyCore, gobject.GObject):
         log("got_contents%s pending=%s",
             (target, dtype, dformat, repr_ellipsized(str(data))), csv(pending))
         for requestor, prop, time in pending:
-            log("setting response %s to property %s of window %s as %s",
-                     repr_ellipsized(data), prop, self.get_wininfo(get_xwindow(requestor)), dtype)
+            if log.is_debug_enabled():
+                log("setting response %s to property %s of window %s as %s",
+                     repr_ellipsized(str(data)), prop, self.get_wininfo(get_xwindow(requestor)), dtype)
             self.set_selection_response(requestor, target, prop, dtype, dformat, data, time)
 
 
@@ -439,6 +446,7 @@ class ClipboardProxy(ClipboardProxyCore, gobject.GObject):
         if not (self._want_targets or self._greedy_client):
             self._have_token = False
             self.emit("send-clipboard-token", ())
+            return
         #we need the targets, and the target data for greedy clients:
         def send_token_with_targets():
             token_data = (self.targets, )
@@ -448,21 +456,21 @@ class ClipboardProxy(ClipboardProxyCore, gobject.GObject):
             if not self._greedy_client:
                 send_token_with_targets()
                 return
-            #find the preferred text target:
-            text_targets = tuple(x for x in targets if x in TEXT_TARGETS)
-            if not text_targets:
+            #find the preferred targets:
+            targets = self.choose_targets(targets)
+            if not targets:
                 send_token_with_targets()
                 return
-            text_target = text_targets[0]
+            target = targets[0]
             def got_text_target(dtype, dformat, data):
                 log("got_text_target(%s, %s, %s)", dtype, dformat, repr_ellipsized(str(data)))
                 if not (dtype and dformat and data):
                     send_token_with_targets()
                     return
-                token_data = (targets, (text_target, dtype, dformat, data))
+                token_data = (targets, (target, dtype, dformat, data))
                 self._have_token = False
                 self.emit("send-clipboard-token", token_data)
-            self.get_contents(text_target, got_text_target)
+            self.get_contents(target, got_text_target)
         if self.targets:
             with_targets(self.targets)
             return
@@ -473,6 +481,10 @@ class ClipboardProxy(ClipboardProxyCore, gobject.GObject):
             with_targets(self.targets)
         self.get_contents("TARGETS", got_targets)
 
+    def choose_targets(self, targets):
+        #if "image/png" in targets:
+        #    return ("image/png",)
+        return tuple(x for x in targets if x in TEXT_TARGETS)
 
     def do_selection_clear_event(self, event):
         log("do_xpra_selection_clear(%s) was owned=%s", event, self.owned)
@@ -503,10 +515,6 @@ class ClipboardProxy(ClipboardProxyCore, gobject.GObject):
                 got_contents(dtype, dformat, value)
                 return
         prop = "%s-%s" % (self._selection, target)
-        request_id = self.local_request_counter
-        self.local_request_counter += 1
-        timer = glib.timeout_add(CONVERT_TIMEOUT, self.timeout_get_contents, target, request_id)
-        self.local_requests.setdefault(target, {})[request_id] = (timer, got_contents, time)
         with xsync:
             owner = X11Window.XGetSelectionOwner(self._selection)
             self.owned = owner==self.xid
@@ -515,6 +523,10 @@ class ClipboardProxy(ClipboardProxyCore, gobject.GObject):
                 log("we are the %s selection owner, using empty reply", self._selection)
                 got_contents(None, None, None)
                 return
+            request_id = self.local_request_counter
+            self.local_request_counter += 1
+            timer = glib.timeout_add(CONVERT_TIMEOUT, self.timeout_get_contents, target, request_id)
+            self.local_requests.setdefault(target, {})[request_id] = (timer, got_contents, time)
             log("requesting local XConvertSelection from %s for '%s' into '%s'", self.get_wininfo(owner), target, prop)
             X11Window.ConvertSelection(self._selection, target, prop, self.xid, time=time)
 
@@ -547,11 +559,41 @@ class ClipboardProxy(ClipboardProxyCore, gobject.GObject):
         target = parts[1]           #ie: VALUE
         try:
             with xsync:
-                dtype, dformat = X11Window.GetWindowPropertyType(self.xid, event.atom)
+                dtype, dformat = X11Window.GetWindowPropertyType(self.xid, event.atom, self.incr_data_size>0)
                 dtype = bytestostr(dtype)
                 MAX_DATA_SIZE = 4*1024*1024
-                data = X11Window.XGetWindowProperty(self.xid, event.atom, dtype, None, MAX_DATA_SIZE)
-                X11Window.XDeleteProperty(self.xid, event.atom)
+                data = X11Window.XGetWindowProperty(self.xid, event.atom, dtype, None, MAX_DATA_SIZE, True)
+                #all the code below deals with INCRemental transfers:
+                if dtype=="INCR" and not self.incr_data_size:
+                    #start of an incremental transfer, extract the size
+                    assert dformat==32
+                    self.incr_data_size = struct.unpack("@L", data)[0]
+                    self.incr_data_chunks = []
+                    self.incr_data_type = None
+                    log("incremental clipboard data of size %s", self.incr_data_size)
+                    self.reschedule_incr_data_timer()
+                    return
+                if self.incr_data_size>0:
+                    #incremental is now in progress:
+                    if not self.incr_data_type:
+                        self.incr_data_type = dtype
+                    elif self.incr_data_type!=dtype:
+                        log.error("Error: invalid change of data type")
+                        log.error(" from %s to %s", self.incr_data_type, dtype)
+                        self.reset_incr_data()
+                        self.cancel_incr_data_timer()
+                        return
+                    if data:
+                        log("got incremental data: %i bytes", len(data))
+                        self.incr_data_chunks.append(data)
+                        self.reschedule_incr_data_timer()
+                        return
+                    self.cancel_incr_data_timer()
+                    data = b"".join(self.incr_data_chunks)
+                    log("got incremental data termination, total size=%i bytes", len(data))
+                    self.reset_incr_data()
+                    self.got_local_contents(target, dtype, dformat, data)
+                    return
         except PropertyError:
             log("do_property_notify() property '%s' is gone?", event.atom, exc_info=True)
             return
@@ -561,10 +603,74 @@ class ClipboardProxy(ClipboardProxyCore, gobject.GObject):
         self.got_local_contents(target, dtype, dformat, data)
 
     def got_local_contents(self, target, dtype=None, dformat=None, data=None):
+        data = self.filter_data(target, dtype, dformat, data)
         target_requests = self.local_requests.pop(target, {})
         for timer, got_contents, time in target_requests.values():
-            log("got_local_contents: calling %s%s, time=%i", got_contents, (dtype, dformat, data), time)
+            if log.is_debug_enabled():
+                log("got_local_contents: calling %s%s, time=%i",
+                    got_contents, (dtype, dformat, repr_ellipsized(str(data))), time)
             glib.source_remove(timer)
             got_contents(dtype, dformat, data)
+
+    def filter_data(self, target, dtype=None, dformat=None, data=None):
+        log("filter_data(%s, %s, %s, ..)", target, dtype, dformat)
+        IMAGE_OVERLAY = os.environ.get("XPRA_CLIPBOARD_IMAGE_OVERLAY", None)
+        if IMAGE_OVERLAY and not os.path.exists(IMAGE_OVERLAY):
+            IMAGE_OVERLAY = None
+        IMAGE_STAMP = envbool("XPRA_CLIPBOARD_IMAGE_STAMP", True)
+        if dtype in ("image/png", ) and (IMAGE_STAMP or IMAGE_OVERLAY):
+            from xpra.codecs.pillow.decoder import open_only
+            img = open_only(data, ("png", ))
+            has_alpha = img.mode=="RGBA"
+            if not has_alpha and IMAGE_OVERLAY:
+                img = img.convert("RGBA")
+            w, h = img.size
+            if IMAGE_OVERLAY:
+                from PIL import Image   #@UnresolvedImport
+                overlay = Image.open(IMAGE_OVERLAY)
+                if overlay.mode!="RGBA":
+                    log.warn("Warning: cannot use overlay image '%s'", IMAGE_OVERLAY)
+                    log.warn(" invalid mode '%s'", overlay.mode)
+                else:
+                    log("adding clipboard image overlay to %s", dtype)
+                    overlay_resized = overlay.resize((w, h), Image.ANTIALIAS)
+                    composite = Image.alpha_composite(img, overlay_resized)
+                    if not has_alpha and img.mode=="RGBA":
+                        composite = composite.convert("RGB")
+                    img = composite
+            if IMAGE_STAMP:
+                log("adding clipboard image stamp to %s", dtype)
+                from datetime import datetime
+                from PIL import ImageDraw
+                img_draw = ImageDraw.Draw(img)
+                w, h = img.size
+                img_draw.text((10, max(0, h//2-16)), 'via Xpra, %s' % datetime.now().isoformat(), fill='black')
+            buf = BytesIO()
+            img.save(buf, "PNG")
+            data = buf.getvalue()
+            buf.close()
+        return data
+
+
+    def reschedule_incr_data_timer(self):
+        self.cancel_incr_data_timer()
+        self.incr_data_timer = glib.timeout_add(1*1000, self.incr_data_timeout)
+
+    def cancel_incr_data_timer(self):
+        idt = self.incr_data_timer
+        if idt:
+            self.incr_data_timer = None
+            glib.source_remove(idt)
+
+    def incr_data_timeout(self):
+        self.incr_data_timer = None
+        log.warn("Warning: incremental data timeout")
+        self.incr_data = None
+
+    def reset_incr_data(self):
+        self.incr_data_size = 0
+        self.incr_data_type = None
+        self.incr_data_chunks = None
+        self.incr_data_timer = None
 
 gobject.type_register(ClipboardProxy)

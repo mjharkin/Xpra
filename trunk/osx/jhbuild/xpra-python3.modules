@@ -65,10 +65,11 @@
 	</distutils>
 
 	<distutils id="python3-zeroconf" python3="1">
-		<branch repo="pypi.python.org"
-			module="/packages/bf/e3/acc6e2c2938428afa2450143fc4d3953ec60cb4d859db3a58f03d149ef04/zeroconf-0.19.1.tar.gz"
-			hash="sha256:434eab8da9525ae725d6842aae7e59d9ec6580bdc5ae84f3c225240bc6797f7a"
-			version="0.19.1"/>
+		<branch repo="github.com"
+			module="/jstasiak/python-zeroconf/tar.gz/0.23.0"
+			hash="sha256:e194df93ae5d5158fd62434e395fe73ef9eb9580e5d326aad06d02c56031b31a"
+			checkoutdir="python-zeroconf-0.23.0"
+			version="0.23.0"/>
 		<dependencies>
 			<dep package="python3-enum-compat"/>
 		</dependencies>
@@ -105,9 +106,9 @@
 
 	<distutils id="python3-cffi" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/e7/a7/4cd50e57cc6f436f1cc3a7e8fa700ff9b8b4d471620629074913e3735fb2/cffi-1.11.5.tar.gz"
-			hash="sha256:e90f17980e6ab0f3c2f3730e56d1fe9bcba1891eeea58966e89d352492cc74f4"
-			version="1.11.5"/>
+			module="packages/93/1a/ab8c62b5838722f29f3daffcc8d4bd61844aa9b5f437341cc890ceee483b/cffi-1.12.3.tar.gz"
+			hash="sha256:041c81822e9f84b1d9c401182e174996f0bae9991f33725d059b771744290774"
+			version="1.12.3"/>
 		<dependencies>
 			<dep package="python3"/>
 			<dep package="python3-cparser"/>
@@ -173,9 +174,9 @@
 
 	<distutils id="python3-cryptography" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/07/ca/bc827c5e55918ad223d59d299fff92f3563476c3b00d0a9157d9c0217449/cryptography-2.6.1.tar.gz"
-			hash="sha256:26c821cbeb683facb966045e2064303029d572a87ee69ca5a1bf54bf55f93ca6"
-			version="2.6.1"/>
+			module="/packages/c2/95/f43d02315f4ec074219c6e3124a87eba1d2d12196c2767fadfdc07a83884/cryptography-2.7.tar.gz"
+			hash="sha256:e6347742ac8f35ded4a46ff835c60e68c22a536a8ae5c4422966d06946b6d4c6"
+			version="2.7"/>
 		<dependencies>
 			<dep package="python3"/>
 			<dep package="openssl"/>
@@ -240,9 +241,9 @@
 
 	<distutils id="python3-cython" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/f8/da/c979464858b257b21a6472a85285548c91f5b4dc773cb049cfdfb3ceeb02/Cython-0.29.7.tar.gz"
-			hash="sha256:55d081162191b7c11c7bfcb7c68e913827dfd5de6ecdbab1b99dab190586c1e8"
-			version="0.29.7"/>
+			module="/packages/e7/2e/aee8dfff93c7f5d20461ddcefd1da3d43bab18e1666a7777f4d9dbe94065/Cython-0.29.10.tar.gz"
+			hash="sha256:26229570d6787ff3caa932fe9d802960f51a89239b990d275ae845405ce43857"
+			version="0.29.10"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -253,10 +254,10 @@
 
 	<distutils id="python3-numpy" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/93/48/956b9dcdddfcedb1705839280e02cbfeb2861ed5d7f59241210530867d5b/numpy-1.16.3.zip"
-			checkoutdir="numpy-1.16.3"
-			version="1.16.3"
-			hash="sha256:78a6f89da87eeb48014ec652a65c4ffde370c036d780a995edaeb121d3625621"/>
+			module="/packages/d3/4b/f9f4b96c0b1ba43d28a5bdc4b64f0b9d3fbcf31313a51bc766942866a7c7/numpy-1.16.4.zip"
+			checkoutdir="numpy-1.16.4"
+			version="1.16.4"
+			hash="sha256:7242be12a58fec245ee9734e625964b97cf7e3f2f7d016603f9e56660ce479c7"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -293,9 +294,9 @@
 
 	<distutils id="python3-paramiko" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/a4/57/86681372e7a8d642718cadeef38ead1c24c4a1af21ae852642bf974e37c7/paramiko-2.4.2.tar.gz"
-			hash="sha256:a8975a7df3560c9f1e2b43dc54ebd40fd00a7017392ca5445ce7df409f900fcb"
-			version="2.4.2"/>
+			module="/packages/0e/29/aa6647f283796ff1c46747ee8e69092390116cd86c7c660247ef0d56a146/paramiko-2.5.0.tar.gz"
+			hash="sha256:9f081281064b5180dc0ef60e256224a280ff16f603a99f3dd4ba6334ebb65f7e"
+			version="2.5"/>
 		<dependencies>
 			<dep package="python3"/>
 			<dep package="python3-bcrypt"/>
@@ -376,9 +377,9 @@
 
 	<distutils id="python3-lz4" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/b3/48/ef32029fc6ae23fb37568972216646deeaaf9f833c237afdf37c0d975bff/lz4-2.1.6.tar.gz"
-			hash="sha256:3c03f6b52b136a61b3168e875753a60d171a3efbab3601d66402a78dd20de4d2"
-			version="2.1.6">
+			module="/packages/54/04/0a7b0e168fffb762debac6170062af1a639725b481027e3a834a7aa31b0a/lz4-2.1.9.tar.gz"
+			hash="sha256:d59166050fec4cc2331b9c1279a59b69c169b52533cf35fe7fca26d662382cd2"
+			version="2.1.9">
 		</branch>
 		<dependencies>
 			<dep package="lz4"/>

@@ -77,6 +77,10 @@ def main(script_file, cmdline):
     from xpra.platform import clean as platform_clean, command_error, command_info
     if len(cmdline)==1:
         cmdline.append("gui")
+    #we may have needed this variable to get here,
+    #and we may need to use it again to launch new commands:
+    if "XPRA_ALT_PYTHON_RETRY" in os.environ:
+        del os.environ["XPRA_ALT_PYTHON_RETRY"]
 
     def debug_exc(msg="run_mode error"):
         get_util_logger().debug(msg, exc_info=True)
@@ -352,7 +356,7 @@ def run_mode(script_file, error_cb, options, args, mode, defaults):
                         r = do_run_client(app)
                         from xpra.exit_codes import EXIT_OK, EXIT_FAILURE
                         #OK or got a signal:
-                        NO_RETRY = [EXIT_OK] + range(128, 128+16)
+                        NO_RETRY = [EXIT_OK] + list(range(128, 128+16))
                         if app.completed_startup:
                             #if we had connected to the session,
                             #we can ignore more error codes:

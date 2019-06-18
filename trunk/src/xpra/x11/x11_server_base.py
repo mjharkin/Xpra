@@ -6,9 +6,11 @@
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
+import os
+
 from xpra.os_util import bytestostr, strtobytes, hexstr
 from xpra.util import nonl, typedict, envbool, iround
-from xpra.gtk_common.error import xswallow, xsync
+from xpra.gtk_common.error import xswallow, xsync, xlog
 from xpra.x11.x11_server_core import X11ServerCore, XTestPointerDevice
 from xpra.x11.bindings.keyboard_bindings import X11KeyboardBindings #@UnresolvedImport
 from xpra.log import Logger
@@ -16,6 +18,7 @@ from xpra.log import Logger
 log = Logger("x11", "server")
 mouselog = Logger("x11", "server", "mouse")
 screenlog = Logger("server", "screen")
+dbuslog = Logger("dbus")
 
 X11Keyboard = X11KeyboardBindings()
 
@@ -45,7 +48,8 @@ class X11ServerBase(X11ServerCore):
         (see XpraServer or DesktopServer for actual implementations)
     """
 
-    def __init__(self):
+    def __init__(self, clobber):
+        self.clobber = clobber
         X11ServerCore.__init__(self)
         self._default_xsettings = {}
         self._settings = {}
@@ -55,6 +59,7 @@ class X11ServerBase(X11ServerCore):
         self.default_dpi = 0
         self._xsettings_manager = None
         self._xsettings_enabled = False
+        self.display_pid = 0
 
     def do_init(self, opts):
         X11ServerCore.do_init(self, opts)
@@ -65,12 +70,66 @@ class X11ServerBase(X11ServerCore):
             log("_default_xsettings=%s", self._default_xsettings)
             self.init_all_server_settings()
 
+
+    def init_display_pid(self, pid):
+        if pid:
+            from xpra.scripts.server import _save_int
+            _save_int(b"_XPRA_SERVER_PID", pid)
+        elif self.clobber:
+            from xpra.scripts.server import _get_int
+            pid = _get_int(b"_XPRA_SERVER_PID")
+            if not pid:
+                log.info("xvfb pid not found")
+            else:
+                log.info("xvfb pid=%i", pid)
+        self.display_pid = pid
+
+    def kill_display(self):
+        if self.display_pid:
+            from xpra.server import EXITING_CODE
+            if self._upgrading==EXITING_CODE:
+                log.info("exiting: not cleaning up Xvfb")
+            elif self._upgrading:
+                log.info("upgrading: not cleaning up Xvfb")
+            else:
+                from xpra.x11.vfb_util import kill_xvfb
+                kill_xvfb(self.display_pid)
+
+
+    def do_cleanup(self):
+        X11ServerCore.do_cleanup(self)
+        self.kill_display()
+
+
     def configure_best_screen_size(self):
         root_w, root_h = X11ServerCore.configure_best_screen_size(self)
         if self.touchpad_device:
             self.touchpad_device.root_w = root_w
             self.touchpad_device.root_h = root_h
         return root_w, root_h
+
+
+    def init_dbus(self, dbus_pid, dbus_env):
+        from xpra.server.dbus.dbus_start import (
+            get_saved_dbus_pid, get_saved_dbus_env,
+            save_dbus_pid, save_dbus_env,
+            )
+        super(X11ServerBase, self).init_dbus(dbus_pid, dbus_env)
+        if self.clobber:
+            #get the saved pids and env
+            self.dbus_pid = get_saved_dbus_pid()
+            self.dbus_env = get_saved_dbus_env()
+            dbuslog("retrieved existing dbus attributes: %s, %s", self.dbus_pid, self.dbus_env)
+            if self.dbus_env:
+                os.environ.update(self.dbus_env)
+        else:
+            #now we can save values on the display
+            #(we cannot access gtk3 until dbus has started up)
+            if self.dbus_pid:
+                save_dbus_pid(self.dbus_pid)
+            if self.dbus_env:
+                save_dbus_env(self.dbus_env)
+
 
     def last_client_exited(self):
         self.reset_settings()
@@ -106,7 +165,7 @@ class X11ServerBase(X11ServerCore):
     def verify_uinput_pointer_device(self):
         xtest = XTestPointerDevice()
         ox, oy = 100, 100
-        with xsync:
+        with xlog:
             xtest.move_pointer(0, ox, oy)
         nx, ny = 200, 200
         self.pointer_device.move_pointer(0, nx, ny)
@@ -185,14 +244,14 @@ class X11ServerBase(X11ServerCore):
         #almost like update_all, except we use the default_dpi,
         #since this is called before the first client connects
         self.do_update_server_settings({
-            "resource-manager"  : "",
-            "xsettings-blob"    : (0, [])
+            b"resource-manager"  : b"",
+            b"xsettings-blob"    : (0, [])
             }, reset = True, dpi = self.default_dpi, cursor_size=24)
 
     def update_all_server_settings(self, reset=False):
         self.update_server_settings({
-            "resource-manager"  : "",
-            "xsettings-blob"    : (0, []),
+            b"resource-manager"  : b"",
+            b"xsettings-blob"    : (0, []),
             }, reset=reset)
 
     def update_server_settings(self, settings=None, reset=False):
@@ -225,7 +284,7 @@ class X11ServerBase(X11ServerCore):
         self._settings.update(settings)
         for k, v in settings.items():
             #cook the "resource-manager" value to add the DPI and/or antialias values:
-            if k=="resource-manager" and (dpi>0 or antialias or cursor_size>0):
+            if k==b"resource-manager" and (dpi>0 or antialias or cursor_size>0):
                 value = bytestostr(v)
                 #parse the resources into a dict:
                 values={}
@@ -267,12 +326,12 @@ class X11ServerBase(X11ServerCore):
                 for vk, vv in values.items():
                     value += "%s:\t%s\n" % (vk, vv)
                 #record the actual value used
-                self._settings["resource-manager"] = value
+                self._settings[b"resource-manager"] = value
                 v = value.encode("utf-8")
 
             #cook xsettings to add various settings:
             #(as those may not be present in xsettings on some platforms.. like win32 and osx)
-            if k=="xsettings-blob" and \
+            if k==b"xsettings-blob" and \
             (self.double_click_time>0 or self.double_click_distance!=(-1, -1) or antialias or dpi>0):
                 from xpra.x11.xsettings_prop import XSettingsTypeInteger, XSettingsTypeString
                 def set_xsettings_value(name, value_type, value):
@@ -312,7 +371,9 @@ class X11ServerBase(X11ServerCore):
                     from xpra.x11.gtk_x11.prop import prop_set
                     log("server_settings: setting %s to %s", nonl(p), nonl(v))
                     prop_set(self.root_window, p, "latin1", strtobytes(v).decode("latin1"))
-                if k == "xsettings-blob":
+                if k == b"xsettings-blob":
                     self.set_xsettings(v)
-                elif k == "resource-manager":
+                elif k == b"resource-manager":
                     root_set("RESOURCE_MANAGER")
+                else:
+                    log.warn("Warning: unexpected setting '%s'", bytestostr(k))

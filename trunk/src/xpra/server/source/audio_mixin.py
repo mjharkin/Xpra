@@ -134,34 +134,34 @@ class AudioMixin(StubSourceMixin):
         assert self.hello_sent
         log("start_sending_sound(%s)", codec)
         ss = None
+        if getattr(self, "suspended", False):
+            log.warn("Warning: not starting sound whilst in suspended state")
+            return None
+        if not self.supports_speaker:
+            log.error("Error sending sound: support not enabled on the server")
+            return None
+        if self.sound_source:
+            log.error("Error sending sound: forwarding already in progress")
+            return None
+        if not self.sound_receive:
+            log.error("Error sending sound: support is not enabled on the client")
+            return None
+        if codec is None:
+            codecs = [x for x in self.sound_decoders if x in self.speaker_codecs]
+            if not codecs:
+                log.error("Error sending sound: no codecs in common")
+                return None
+            codec = codecs[0]
+        elif codec not in self.speaker_codecs:
+            log.warn("Warning: invalid codec specified: %s", codec)
+            return None
+        elif (codec not in self.sound_decoders) and not skip_client_codec_check:
+            log.warn("Error sending sound: invalid codec '%s'", codec)
+            log.warn(" is not in the list of decoders supported by the client: %s", csv(self.sound_decoders))
+            return None
+        if not self.audio_loop_check("speaker"):
+            return None
         try:
-            if getattr(self, "suspended", False):
-                log.warn("Warning: not starting sound whilst in suspended state")
-                return None
-            if not self.supports_speaker:
-                log.error("Error sending sound: support not enabled on the server")
-                return None
-            if self.sound_source:
-                log.error("Error sending sound: forwarding already in progress")
-                return None
-            if not self.sound_receive:
-                log.error("Error sending sound: support is not enabled on the client")
-                return None
-            if codec is None:
-                codecs = [x for x in self.sound_decoders if x in self.speaker_codecs]
-                if not codecs:
-                    log.error("Error sending sound: no codecs in common")
-                    return None
-                codec = codecs[0]
-            elif codec not in self.speaker_codecs:
-                log.warn("Warning: invalid codec specified: %s", codec)
-                return None
-            elif (codec not in self.sound_decoders) and not skip_client_codec_check:
-                log.warn("Error sending sound: invalid codec '%s'", codec)
-                log.warn(" is not in the list of decoders supported by the client: %s", csv(self.sound_decoders))
-                return None
-            if not self.audio_loop_check("speaker"):
-                return None
             from xpra.sound.wrapper import start_sending_sound
             plugins = self.sound_properties.strlistget("plugins", [])
             ss = start_sending_sound(plugins, self.sound_source_plugin,
@@ -211,6 +211,7 @@ class AudioMixin(StubSourceMixin):
             ss.cleanup()
 
     def send_eos(self, codec, sequence=0):
+        log("send_eos(%s, %s)", codec, sequence)
         #tell the client this is the end:
         self.send_more("sound-data", codec, "",
                        {
@@ -359,6 +360,7 @@ class AudioMixin(StubSourceMixin):
 
     def do_sound_control_start(self, volume, codec):
         codec = bytestostr(codec)
+        log("do_sound_control_start(%s, %s)", volume, codec)
         if not self.start_sending_sound(codec, volume):
             return "failed to start sound"
         msg = "sound started"

@@ -1,17 +1,53 @@
-v2.5.2 (2019-05-01)
+v2.5.2 (2019-06-07)
 ======================
+	-- fix mmap leak which can cause the client to stop painting
 	-- fix OpenGL crashes: don't try to use it when probing process has crashed
 	-- fix errors in avahi error handler
+	-- fix connection errors when loading ssh public keys
 	-- fix tests being run with the wrong python interpreter version
 	-- fix systemd-run using the wrong python interpreter version
 	-- fix start menu with python3 clients
 	-- fix x264 encoder failing to create a compatible stream for the html5 client
+	-- fix unnecessary xdg menu data in some subcommands
+	-- fix large xdg menu data causing initial packet size errors
+	-- fix packet size warning message format
+	-- fix start menu with python3 clients
+	-- fix html5 client connection error when xdg-menu data is missing
 	-- fix html5 client compatibility with buggy x264 encoders (as above)
+	-- fix html5 client clipboard packet format
 	-- fix session info graphs start values
 	-- fix colour channels swapped with some window icons and desktop servers
 	-- fix slower compression code path wrongly used when av-sync is disabled
 	-- fix icon type attribute (remove dot)
+	-- fix signal forwarding with python3 servers
 	-- fix system tray forwarding with python3 servers
+	-- fix socket attributes name lookup for xpra info
+	-- fix handling proxy server info requests
+	-- fix proxy server info errors trying to enumerate sessions
+	-- fix automatic MTU adjustements with UDP transport
+	-- fix NVENC compatiblity with library soname found in newer installers
+	-- fix invalid python2 DEB dependency in main meta package
+	-- fix default config value for opengl attribute
+	-- fix HTML5 client authentication issue when going through a proxy server
+	-- fix socket errors on startup with bind-ssl
+	-- fix server dbus service attribute accessor methods
+	-- fix network jitter injector
+	-- fix avahi mdns publisher test tool
+	-- fix zeroconf error when service info is not available
+	-- fix remote ssh failures with python3-only installations
+	-- fix automatic interpreter version switching when re-executing
+	-- fix start-via-proxy exit code handler
+	-- fix socket-permissions option not being honoured
+	-- fix error in the codec loader if the first codec attempted fails
+	-- fix error in the codec instantiation leak detection code
+	-- fix exit hooks not being called with 'exit-with-client'
+	-- fix RandR build errors with older versions of Cython (ie: Xenial)
+	-- fix GTK3 build of the keyboard test tool on MS Windows
+	-- fix errors parsing xresources
+	-- fix handling of xsettings with python3 servers 
+	-- fix font hinting detection with python3
+	-- fix errors during cleanup if server initialization or startup had failed
+	-- fix pure python3 builds cairo headers used
 	-- updated package dependencies: recommend python-dns for sshfp support
 
 

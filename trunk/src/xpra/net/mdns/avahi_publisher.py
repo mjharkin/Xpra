@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # This file is part of Xpra.
-# Copyright (C) 2013, 2014 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2013-2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -10,7 +10,7 @@ import avahi
 import dbus
 try:
     from dbus.exceptions import DBusException
-except:
+except ImportError:
     #not available in all versions of the bindings?
     DBusException = Exception
 
@@ -52,7 +52,7 @@ class AvahiPublishers(object):
     and to convert the text dict into a TXT string.
     """
 
-    def __init__(self, listen_on, service_name, service_type=XPRA_MDNS_TYPE, text_dict={}):
+    def __init__(self, listen_on, service_name, service_type=XPRA_MDNS_TYPE, text_dict=None):
         log("AvahiPublishers%s", (listen_on, service_name, service_type, text_dict))
         self.publishers = []
         try:
@@ -64,7 +64,7 @@ class AvahiPublishers(object):
         for host, port in listen_on:
             iface_index = get_interface_index(host)
             log("iface_index(%s)=%s", host, iface_index)
-            td = text_dict
+            td = text_dict or {}
             if SHOW_INTERFACE and if_indextoname and iface_index is not None:
                 td = text_dict.copy()
                 td["iface"] = if_indextoname(iface_index)
@@ -87,8 +87,8 @@ class AvahiPublishers(object):
                         if fqdn:
                             fqdn += ".local"
                         log("cannot find a fully qualified domain name for '%s', using: %s", host, fqdn)
-                except:
-                    pass
+                except (OSError, IOError, IndexError):
+                    log("failed to get hostbyaddr", exc_info=True)
             self.publishers.append(AvahiPublisher(bus, service_name, port, service_type, domain="", host=fqdn, text=txt, interface=iface_index))
 
     def start(self):
@@ -108,10 +108,14 @@ class AvahiPublishers(object):
         for publisher in self.publishers:
             publisher.stop()
 
+    def update_txt(self, txt):
+        for publisher in self.publishers:
+            publisher.update_txt(txt)
+
 
 class AvahiPublisher(object):
 
-    def __init__(self, bus, name, port, stype=XPRA_MDNS_TYPE, domain="", host="", text=[], interface=avahi.IF_UNSPEC):
+    def __init__(self, bus, name, port, stype=XPRA_MDNS_TYPE, domain="", host="", text=(), interface=avahi.IF_UNSPEC):
         log("AvahiPublisher%s", (bus, name, port, stype, domain, host, text, interface))
         self.bus = bus
         self.name = name
@@ -156,12 +160,17 @@ class AvahiPublisher(object):
                 log.error(" %s", error)
             self.stop()
             return False
-        elif state == avahi.SERVER_RUNNING:
+        if state == avahi.SERVER_RUNNING:
             self.add_service()
             return True
-        else:
-            log.warn("Warning: unknown avahi server state '%s'", state)
-            return False
+        state_str = "unknown"
+        for const in ("INVALID", "REGISTERING", "COLLISION", "FAILURE"):
+            val = getattr(avahi, "SERVER_%s" % const, None)
+            if val is not None and val==state:
+                state_str = const
+                break
+        log.warn("Warning: server state changed to '%s'", state_str)
+        return False
 
     def add_service(self):
         if not self.group:
@@ -203,6 +212,24 @@ class AvahiPublisher(object):
         self.server = None
 
 
+    def update_txt(self, txt):
+        if not self.group:
+            log.warn("Warning: cannot update mdns record")
+            log.warn(" publisher has already been stopped")
+            return
+        def reply_handler(*args):
+            log("reply_handler%s", args)
+            log("update_txt(%s) done", txt)
+        def error_handler(*args):
+            log("error_handler%s", args)
+            log.warn("Warning: failed to update mDNS TXT record")
+        txt_array = avahi.dict_to_txt_array(txt)
+        self.group.UpdateServiceTxt(self.interface,
+            avahi.PROTO_UNSPEC, dbus.UInt32(0), self.name, self.stype, self.domain,
+            txt_array, reply_handler=reply_handler,
+            error_handler=error_handler)
+
+
 def main():
     from xpra.gtk_common.gobject_compat import import_glib
     glib = import_glib()
@@ -212,9 +239,14 @@ def main():
     host = ""
     name = "test service"
     bus = init_system_bus()
-    publisher = AvahiPublisher(bus, name, port, stype=XPRA_MDNS_TYPE, host=host, text=["somename:somevalue"])
+    publisher = AvahiPublisher(bus, name, port, stype=XPRA_MDNS_TYPE, host=host, text=("somename=somevalue",))
     assert publisher
-    glib.idle_add(publisher.start)
+    def update_rec():
+        publisher.update_txt({b"hello" : b"world"})
+    glib.timeout_add(5*1000, update_rec)
+    def start():
+        publisher.start()
+    glib.idle_add(start)
     signal.signal(signal.SIGTERM, exit)
     glib.MainLoop().run()
 

@@ -1,24 +1,22 @@
 # This file is part of Xpra.
-# Copyright (C) 2017 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2017-2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import os.path
 import socket
 
-from xpra.scripts.config import InitException
-from xpra.os_util import getuid, get_username_for_uid, get_groups, get_group_id, path_permission_info, monotonic_time, umask_context, WIN32, OSX, POSIX
+from xpra.scripts.config import InitException, TRUE_OPTIONS
+from xpra.os_util import (
+    getuid, get_username_for_uid, get_groups, get_group_id,
+    path_permission_info, monotonic_time, umask_context, WIN32, OSX, POSIX,
+    )
 from xpra.util import envint, envbool, csv, DEFAULT_PORT
 from xpra.platform.dotxpra import DotXpra, norm_makepath
 
 #what timeout value to use on the socket probe attempt:
 WAIT_PROBE_TIMEOUT = envint("XPRA_WAIT_PROBE_TIMEOUT", 6)
 GROUP = os.environ.get("XPRA_GROUP", "xpra")
-
-
-def add_cleanup(f):
-    from xpra.scripts import server
-    server.add_cleanup(f)
 
 
 network_logger = None
@@ -125,12 +123,11 @@ def setup_tcp_socket(host, iport, socktype="tcp"):
             tcp_socket.close()
         except (OSError, IOError):
             pass
-    add_cleanup(cleanup_tcp_socket)
     if iport==0:
         iport = tcp_socket.getsockname()[1]
         log.info("allocated %s port %i on %s", socktype, iport, host)
     log("%s: %s:%s : %s", socktype, host, iport, socket)
-    return socktype, tcp_socket, (host, iport)
+    return socktype, tcp_socket, (host, iport), cleanup_tcp_socket
 
 def create_udp_socket(host, iport):
     if host.find(":")<0:
@@ -157,12 +154,11 @@ def setup_udp_socket(host, iport, socktype="udp"):
             udp_socket.close()
         except (OSError, IOError):
             pass
-    add_cleanup(cleanup_udp_socket)
     if iport==0:
         iport = udp_socket.getsockname()[1]
         log.info("allocated UDP port %i for %s", iport, host)
     log("%s: %s:%s : %s", socktype, host, iport, socket)
-    return socktype, udp_socket, (host, iport)
+    return socktype, udp_socket, (host, iport), cleanup_udp_socket
 
 
 def parse_bind_ip(bind_ip, default_port=DEFAULT_PORT):
@@ -200,8 +196,7 @@ def setup_vsock_socket(cid, iport):
             vsock_socket.close()
         except (OSError, IOError):
             pass
-    add_cleanup(cleanup_vsock_socket)
-    return "vsock", vsock_socket, (cid, iport)
+    return "vsock", vsock_socket, (cid, iport), cleanup_vsock_socket
 
 def parse_bind_vsock(bind_vsock):
     vsock_sockets = set()
@@ -210,6 +205,16 @@ def parse_bind_vsock(bind_vsock):
         for spec in bind_vsock:
             vsock_sockets.add(parse_vsock(spec))
     return vsock_sockets
+
+def setup_sd_listen_socket(stype, sock, addr):
+    log = get_network_logger()
+    def cleanup_sd_listen_socket():
+        log.info("closing sd listen socket %s", addr)
+        try:
+            sock.close()
+        except (OSError, IOError):
+            pass
+    return stype, sock, addr, cleanup_sd_listen_socket
 
 
 def normalize_local_display_name(local_display_name):
@@ -226,7 +231,7 @@ def normalize_local_display_name(local_display_name):
     return local_display_name
 
 
-def setup_local_sockets(bind, socket_dir, socket_dirs, display_name, clobber, mmap_group=False, socket_permissions="600", username="", uid=0, gid=0):
+def setup_local_sockets(bind, socket_dir, socket_dirs, display_name, clobber, mmap_group="auto", socket_permissions="600", username="", uid=0, gid=0):
     if not bind:
         return []
     if not socket_dir and (not socket_dirs or (len(socket_dirs)==1 and not socket_dirs[0])):
@@ -276,7 +281,7 @@ def setup_local_sockets(bind, socket_dir, socket_dirs, display_name, clobber, mm
             for sockpath in sockpaths:
                 npl = NamedPipeListener(sockpath)
                 log.info("created named pipe: %s", sockpath)
-                defs.append((("named-pipe", npl, sockpath), npl.stop))
+                defs.append(("named-pipe", npl, sockpath, npl.stop))
         else:
             def checkstate(sockpath, state):
                 if state not in (DotXpra.DEAD, DotXpra.UNKNOWN):
@@ -353,7 +358,7 @@ def setup_local_sockets(bind, socket_dir, socket_dirs, display_name, clobber, mm
                     except (OSError, IOError):
                         pass
                 #socket permissions:
-                if mmap_group:
+                if mmap_group.lower() in TRUE_OPTIONS:
                     #when using the mmap group option, use '660'
                     sperms = 0o660
                 else:
@@ -374,7 +379,7 @@ def setup_local_sockets(bind, socket_dir, socket_dirs, display_name, clobber, mm
                     try:
                         sock, cleanup_socket = create_unix_domain_socket(sockpath, sperms)
                         log.info("created unix domain socket: %s", sockpath)
-                        defs.append((("unix-domain", sock, sockpath), cleanup_socket))
+                        defs.append(("unix-domain", sock, sockpath, cleanup_socket))
                     except Exception as e:
                         handle_socket_error(sockpath, sperms, e)
                         del e
@@ -429,16 +434,13 @@ MDNS_WARNING = False
 def mdns_publish(display_name, mode, listen_on, text_dict=None):
     global MDNS_WARNING
     if MDNS_WARNING is True:
-        return
+        return None
     try:
         from xpra.net import mdns
         assert mdns
         from xpra.net.mdns import XPRA_MDNS_TYPE, RFB_MDNS_TYPE
-        PREFER_PYBONJOUR = envbool("XPRA_PREFER_PYBONJOUR", False) or WIN32 or OSX
-        PREFER_ZEROCONF = envbool("XPRA_PREFER_ZEROCONF", False)
-        if PREFER_PYBONJOUR:
-            from xpra.net.mdns.pybonjour_publisher import BonjourPublishers as MDNSPublishers, get_interface_index
-        elif PREFER_ZEROCONF:
+        PREFER_ZEROCONF = envbool("XPRA_PREFER_ZEROCONF", False) or WIN32 or OSX
+        if PREFER_ZEROCONF:
             from xpra.net.mdns.zeroconf_publisher import ZeroconfPublishers as MDNSPublishers, get_interface_index
         else:
             from xpra.net.mdns.avahi_publisher import AvahiPublishers as MDNSPublishers, get_interface_index
@@ -455,7 +457,7 @@ def mdns_publish(display_name, mode, listen_on, text_dict=None):
         log.warn(" %s", einfo)
         log.warn(" either install the 'python-avahi' module")
         log.warn(" or use the 'mdns=no' option")
-        return
+        return None
     d = dict(text_dict or {})
     d["mode"] = mode
     #ensure we don't have duplicate interfaces:
@@ -471,7 +473,4 @@ def mdns_publish(display_name, mode, listen_on, text_dict=None):
     if mode not in ("tcp", "rfb"):
         name += " (%s)" % mode
     service_type = {"rfb" : RFB_MDNS_TYPE}.get(mode, XPRA_MDNS_TYPE)
-    ap = MDNSPublishers(f_listen_on.values(), name, service_type=service_type, text_dict=d)
-    from xpra.scripts.server import add_when_ready
-    add_when_ready(ap.start)
-    add_cleanup(ap.stop)
+    return MDNSPublishers(f_listen_on.values(), name, service_type=service_type, text_dict=d)

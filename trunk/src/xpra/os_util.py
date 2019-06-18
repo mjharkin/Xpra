@@ -267,6 +267,8 @@ def is_distribution_variant(variant=b"Debian", os_file="/etc/os-release"):
     if not POSIX:
         return False
     try:
+        if b"RedHat"==variant and get_linux_distribution()[0].startswith(variant):
+            return True
         if get_linux_distribution()[0]==variant:
             return True
     except:
@@ -658,7 +660,7 @@ def setbinarymode(fd):
         #turn on binary mode:
         try:
             import msvcrt
-            msvcrt.setmode(fd, os.O_BINARY)         #@UndefinedVariable
+            msvcrt.setmode(fd, os.O_BINARY)         #@UndefinedVariable pylint: disable=no-member
         except (OSError, IOError):
             get_util_logger().error("setting stdin to binary mode failed", exc_info=True)
 
@@ -682,7 +684,7 @@ def find_lib_ldconfig(libname):
     p = subprocess.Popen([ldconfig, "-p"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
     data = bytestostr(p.communicate()[0])
 
-    libpath = re.search(pattern, data, re.MULTILINE)
+    libpath = re.search(pattern, data, re.MULTILINE)        #@UndefinedVariable
     if libpath:
         libpath = libpath.group(1)
     return libpath

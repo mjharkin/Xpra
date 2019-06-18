@@ -13,16 +13,19 @@
 %define CFLAGS -O2
 %define DEFAULT_BUILD_ARGS --with-Xdummy --without-enc_x265	--pkg-config-path=%{_libdir}/xpra/pkgconfig --rpath=%{_libdir}/xpra --without-cuda_rebuild
 
-%define update_firewall 1
-%define run_tests 1
-%define with_python3 1
-%define with_selinux 1
+%{!?update_firewall: %define update_firewall 1}
+%{!?run_tests: %define run_tests 1}
+%{!?with_python3: %define with_python3 1}
+%{!?with_selinux: %define with_selinux 1}
 #we only enable CUDA / NVENC with 64-bit builds:
 %ifarch x86_64
-%define with_cuda 1
-%define build_args %{DEFAULT_BUILD_ARGS}
+%{!?with_cuda: %define with_cuda 1}
 %else
 %define with_cuda 0
+%endif
+%if 0%{?with_cuda}
+%define build_args %{DEFAULT_BUILD_ARGS}
+%else
 %define build_args %{DEFAULT_BUILD_ARGS} --without-cuda_kernels --without-nvenc --without-nvfbc
 %endif
 %global selinux_variants mls targeted
@@ -76,10 +79,10 @@ Patch2:             centos7-oldturbojpeg.patch
 %endif
 Requires:			xpra-common = %{version}-%{release}
 Requires:			xpra-html5
-Requires:			python2-xpra-client = %{version}-%{release}
-Requires:			python2-xpra-server = %{version}-%{release}
+Requires:			python3-xpra-client = %{version}-%{release}
+Requires:			python3-xpra-server = %{version}-%{release}
 %if 0%{?fedora}
-Requires:			python2-xpra-audio = %{version}-%{release}
+Requires:			python3-xpra-audio = %{version}-%{release}
 %endif
 %description
 Xpra gives you "persistent remote applications" for X. That is, unlike normal X applications, applications run with xpra are "persistent" -- you can run them remotely, and they don't die if your connection does. You can detach them, and reattach them later -- even from another computer -- with no loss of state. And unlike VNC or RDP, xpra is for remote applications, not remote desktops -- individual applications show up as individual windows on your screen, managed by your window manager. They're not trapped in a box.
@@ -107,11 +110,13 @@ BuildRequires:		desktop-file-utils
 Requires(post):		desktop-file-utils
 Requires(postun):	desktop-file-utils
 %if 0%{?fedora}
-#without this, the system tray is unusable!
+#without this, the system tray is unusable with gnome!
+%if 0%{?fedora}<=28
 Recommends:			gnome-shell-extension-topicons-plus
 %endif
 %if 0%{?fedora}>=29
 Recommends:			python2-appindicator
+%endif
 %endif
 %description common-client
 This package contains the files which are shared between all the xpra client packages.
@@ -133,7 +138,7 @@ Requires(postun):	systemd-units
 %{Recommends}:		libfakeXinerama
 %{Recommends}:		gtk2-immodule-xim
 %{Recommends}:		mesa-dri-drivers
-%if 0%{?fedora}
+%if 0%{?fedora}%{?el8}
 #allows the server to use software opengl:
 %{Recommends}:		mesa-libOSMesa
 %endif
@@ -155,14 +160,14 @@ Summary:			Xpra HTML5 client
 Group:				Networking
 BuildArch:			noarch
 Conflicts:			xpra < 2.1
-%if 0%{?fedora}
+%if 0%{?fedora}%{?el8}
 BuildRequires:		uglify-js
 BuildRequires:		js-jquery
 BuildRequires:		desktop-backgrounds-compat
 Requires:			js-jquery
 %{Recommends}:		desktop-backgrounds-compat
 %endif
-%if 0%{?el7}
+%if 0%{?el7}%{?el8}
 #don't depend on this package,
 #so we can also install on a pure RHEL distro:
 BuildRequires:		centos-logos
@@ -189,7 +194,7 @@ Requires:			x264-xpra
 Requires:			ffmpeg-xpra
 Requires:			turbojpeg
 Requires:			libyuv
-%if 0%{?fedora}
+%if 0%{?fedora}%{?el8}
 Requires:			python2-numpy
 %if 0%{?run_tests}
 BuildRequires:		python2-numpy
@@ -214,7 +219,7 @@ BuildRequires:		gcc
 BuildRequires:		gcc-c++
 BuildRequires:		python2-Cython
 BuildRequires:		python2
-%if 0%{?fedora}
+%if 0%{?fedora}%{?el8}
 Requires:			libwebp
 BuildRequires:		libwebp-devel
 BuildRequires:		python2-setuptools
@@ -277,7 +282,7 @@ Requires:			pygtk2
 Requires:			python2-pyopengl
 Requires:			pygtkglext
 %{Recommends}:		python2-pyu2f
-%if 0%{?fedora}
+%if 0%{?fedora}%{?el8}
 Recommends:         python2-xdg
 Recommends:			python2-xpra-audio
 Recommends:			python2-cups
@@ -304,16 +309,15 @@ Requires:			pygtk2
 %{Recommends}:		python2-pycuda
 %{Recommends}:		python2-pynvml
 %endif
-%if 0%{?fedora}
+%if 0%{?el7}
+Requires:			python-cups
+Requires:			python-setproctitle
+%else
 Recommends:			python2-xpra-audio
 Recommends:			cups-pdf
 Recommends:			python2-cups
 Recommends:			python2-uinput
 Recommends:			python2-setproctitle
-%endif
-%if 0%{?el7}
-Requires:			python-cups
-Requires:			python-setproctitle
 %endif
 BuildRequires:		pam-devel
 BuildRequires:		gcc
@@ -333,22 +337,18 @@ Requires:			python3-pillow
 Requires:			python3-rencode
 Requires:			python3-numpy
 Requires:			libyuv
-%if 0%{?el7}
-Requires:			libvpx-xpra
-%else
 Requires:			libvpx
 Conflicts:			libvpx-xpra
 Obsoletes:          libvpx-xpra
-%endif
 Requires:			x264-xpra
 Requires:			ffmpeg-xpra
 Requires:			python3-cryptography
 Requires:			python3-gobject
+Recommends:			python3-inotify
 Recommends:			python3-netifaces
 Recommends:			python3-dbus
 Recommends:			python3-avahi
 Recommends:			python3-dns
-%if 0%{?fedora}
 Recommends:			python3-paramiko
 #Recommends:			python3-lzo
 Recommends:         python3-kerberos
@@ -358,11 +358,6 @@ Recommends:         python3-ldap3
 Recommends:         python3-brotli
 Requires:			libwebp
 BuildRequires:		libwebp-devel
-%endif
-%if 0%{?el7}
-Requires:			libwebp-xpra
-BuildRequires:		libwebp-xpra-devel
-%endif
 BuildRequires:		libyuv-devel
 BuildRequires:		gcc
 BuildRequires:		gcc-c++
@@ -413,9 +408,13 @@ Recommends:			python3-pyu2f
 Recommends:			python3-xdg
 %if 0%{?fedora}
 #without this, the system tray is unusable!
+%if 0%{?fedora}<=28
 Recommends:			gnome-shell-extension-topicons-plus
 %endif
+%if 0%{?fedora}>=29
 Recommends:			libappindicator-gtk3
+%endif
+%endif
 Suggests:			sshpass
 %if 0%{?run_tests}
 BuildRequires:		xclip

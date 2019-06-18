@@ -5,16 +5,14 @@
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-from xpra.x11.gtk_x11.gdk_display_source import init_gdk_display_source
-init_gdk_display_source()
 from xpra.x11.x11_server_core import X11ServerCore
-from xpra.os_util import monotonic_time
+from xpra.os_util import monotonic_time, is_Wayland
 from xpra.util import envbool, envint
 from xpra.gtk_common.gtk_util import get_xwindow, is_gtk3
 from xpra.server.shadow.gtk_shadow_server_base import GTKShadowServerBase
 from xpra.server.shadow.gtk_root_window_model import GTKImageCapture
 from xpra.x11.bindings.ximage import XImageBindings     #@UnresolvedImport
-from xpra.gtk_common.error import xsync
+from xpra.gtk_common.error import xsync, xlog
 from xpra.log import Logger
 
 log = Logger("x11", "shadow")
@@ -41,6 +39,9 @@ class XImageCapture(object):
         self.xshm = None
         self.xwindow = xwindow
         assert USE_XSHM and XImage.has_XShm(), "no XShm support"
+        if is_Wayland():
+            log.warn("Warning: shadow servers do not support Wayland")
+            log.warn(" switch to X11")
 
     def __repr__(self):
         return "XImageCapture(%#x)" % self.xwindow
@@ -52,7 +53,7 @@ class XImageCapture(object):
         xshm = self.xshm
         if self.xshm:
             self.xshm = None
-            with xsync:
+            with xlog:
                 xshm.cleanup()
 
     def _err(self, e, op="capture pixels"):
@@ -137,11 +138,10 @@ class ShadowX11Server(GTKShadowServerBase, X11ServerCore):
         #don't call init on X11ServerCore,
         #this would call up to GTKServerBase.init(opts) again:
         X11ServerCore.do_init(self, opts)
-        X11ServerCore.features_init(self)
 
     def cleanup(self):
         GTKShadowServerBase.cleanup(self)
-        X11ServerCore.cleanup(self)
+        X11ServerCore.cleanup(self)     #@UndefinedVariable
 
 
     def setup_capture(self):

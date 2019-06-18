@@ -52,7 +52,7 @@ class WebcamForwarder(StubClientMixin):
         self.stop_sending_webcam()
 
 
-    def init(self, opts, _extra_args=[]):
+    def init(self, opts, _extra_args=()):
         self.webcam_option = opts.webcam
         self.webcam_forwarding = self.webcam_option.lower() not in FALSE_OPTIONS
         self.server_webcam = False
@@ -106,7 +106,7 @@ class WebcamForwarder(StubClientMixin):
         try:
             from xpra.platform.webcam import get_virtual_video_devices, get_all_video_devices
             virt_devices = get_virtual_video_devices()
-            all_video_devices = get_all_video_devices()
+            all_video_devices = get_all_video_devices()     #pylint: disable=assignment-from-none
             non_virtual = dict((k,v) for k,v in all_video_devices.items() if k not in virt_devices)
             log("virtual video devices=%s", virt_devices)
             log("all_video_devices=%s", all_video_devices)
@@ -233,7 +233,7 @@ class WebcamForwarder(StubClientMixin):
         try:
             assert self.webcam_device_no>=0, "device number is not set"
             assert self.webcam_device, "no webcam device to capture from"
-            from xpra.codecs.pillow.encode import get_encodings
+            from xpra.codecs.pillow.encoder import get_encodings
             client_webcam_encodings = get_encodings()
             common_encodings = list(set(self.server_webcam_encodings).intersection(client_webcam_encodings))
             log("common encodings (server=%s, client=%s): %s",

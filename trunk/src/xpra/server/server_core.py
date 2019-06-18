@@ -21,6 +21,7 @@ from xpra.version_util import (
     get_platform_info, get_host_info,
     )
 from xpra.scripts.server import deadly_signal
+from xpra.server.server_util import write_pidfile, rm_pidfile
 from xpra.scripts.config import InitException, parse_bool, python_platform, parse_with_unit, FALSE_OPTIONS, TRUE_OPTIONS
 from xpra.net.bytestreams import (
     SocketConnection, SSLSocketConnection,
@@ -32,7 +33,7 @@ from xpra.net.digest import get_salt, gendigest, choose_digest
 from xpra.platform import set_name
 from xpra.platform.paths import get_app_dir
 from xpra.os_util import (
-    filedata_nocrlf, get_machine_id, get_user_uuid, platform_name,
+    filedata_nocrlf, get_machine_id, get_user_uuid, platform_name, get_ssh_port,
     strtobytes, bytestostr, get_hex_uuid,
     getuid, monotonic_time, get_peercred, hexstr,
     WIN32, POSIX, PYTHON3, BITS,
@@ -57,6 +58,7 @@ commandlog = Logger("command")
 authlog = Logger("auth")
 timeoutlog = Logger("timeout")
 dbuslog = Logger("dbus")
+mdnslog = Logger("mdns")
 
 main_thread = threading.current_thread()
 
@@ -65,6 +67,7 @@ SIMULATE_SERVER_HELLO_ERROR = envbool("XPRA_SIMULATE_SERVER_HELLO_ERROR", False)
 SERVER_SOCKET_TIMEOUT = envfloat("XPRA_SERVER_SOCKET_TIMEOUT", "0.1")
 LEGACY_SALT_DIGEST = envbool("XPRA_LEGACY_SALT_DIGEST", True)
 PEEK_TIMEOUT = envint("XPRA_PEEK_TIMEOUT", 1)
+PEEK_TIMEOUT_MS = envint("XPRA_PEEK_TIMEOUT_MS", PEEK_TIMEOUT*1000)
 CHALLENGE_TIMEOUT = envint("XPRA_CHALLENGE_TIMEOUT", 120)
 
 
@@ -173,9 +176,6 @@ def get_thread_info(proto=None, protocols=()):
         log.error("failed to get frame info: %s", e)
     return info
 
-def notimplemented(*_args):
-    raise NotImplementedError()
-
 
 class ServerCore(object):
     """
@@ -192,6 +192,7 @@ class ServerCore(object):
         self.child_reaper = None
         self.original_desktop_display = None
         self.session_type = "unknown"
+        self.display_name = ""
 
         self._closing = False
         self._upgrading = False
@@ -203,7 +204,7 @@ class ServerCore(object):
         self._tcp_proxy_clients = []
         self._tcp_proxy = ""
         self._rfb_upgrade = 0
-        self._ssl_wrap_socket = notimplemented
+        self._ssl_wrap_socket = None
         self._accept_timeout = SOCKET_TIMEOUT + 1
         self.ssl_mode = None
         self._html = False
@@ -219,15 +220,21 @@ class ServerCore(object):
         self._socket_timeout = SERVER_SOCKET_TIMEOUT
         self._ws_timeout = 5
         self._socket_dir = None
+        self.dbus_pid = 0
+        self.dbus_env = {}
         self.dbus_control = False
         self.dbus_server = None
         self.unix_socket_paths = []
         self.touch_timer = None
         self.exec_cwd = os.getcwd()
+        self.pidfile = None
+        self.pidinode = 0
 
         self.session_name = u""
 
         #Features:
+        self.mdns = False
+        self.mdns_publishers = []
         self.encryption = None
         self.encryption_keyfile = None
         self.tcp_encryption = None
@@ -256,6 +263,7 @@ class ServerCore(object):
         raise NotImplementedError()
 
     def init_when_ready(self, callbacks):
+        log("init_when_ready(%s)", callbacks)
         self._when_ready = callbacks
 
 
@@ -281,11 +289,48 @@ class ServerCore(object):
         self.exit_with_client = opts.exit_with_client
         self.server_idle_timeout = opts.server_idle_timeout
         self.readonly = opts.readonly
-        self.ssl_mode = opts.ssl
         self.ssh_upgrade = opts.ssh_upgrade
         self.dbus_control = opts.dbus_control
+        self.pidfile = opts.pidfile
+        self.mdns = opts.mdns
         self.init_html_proxy(opts)
         self.init_auth(opts)
+        self.init_ssl(opts)
+        if self.pidfile:
+            self.pidinode = write_pidfile(self.pidfile)
+
+
+    def init_ssl(self, opts):
+        self.ssl_mode = opts.ssl
+        if self.ssl_mode.lower() in FALSE_OPTIONS:
+            return
+        need_ssl = False
+        if self.ssl_mode in TRUE_OPTIONS or opts.bind_ssl or opts.bind_wss:
+            need_ssl = True
+        elif opts.bind_tcp or opts.bind_ws:
+            if self.ssl_mode=="auto" and opts.ssl_cert:
+                need_ssl = True
+            elif self.ssl_mode=="tcp" and opts.bind_tcp:
+                need_ssl = True
+            elif self.ssl_mode=="www":
+                need_ssl = True
+        if not need_ssl:
+            return
+        from xpra.scripts.main import ssl_wrap_socket_fn
+        try:
+            self._ssl_wrap_socket = ssl_wrap_socket_fn(opts, server_side=True)
+            log("init_ssl() wrap_socket_fn=%s", self._ssl_wrap_socket)
+        except Exception as e:
+            log("SSL error", exc_info=True)
+            cpaths = csv("'%s'" % x for x in (opts.ssl_cert, opts.ssl_key) if x)
+            raise InitException("cannot create SSL sockets, check your certificate paths (%s): %s" % (cpaths, e))
+
+    def server_ready(self):
+        return True
+
+    def server_init(self):
+        self.mdns_publish()
+        self.start_listen_sockets()
 
     def setup(self):
         self.init_packet_handlers()
@@ -363,8 +408,8 @@ class ServerCore(object):
         self.idle_add(self.reset_server_timeout)
         self.idle_add(self.server_is_ready)
         self.do_run()
-        log("run() returning %s", self._upgrading)
-        return self._upgrading
+        log("run()")
+        return 0
 
     def server_is_ready(self):
         log.info("xpra is ready.")
@@ -379,6 +424,7 @@ class ServerCore(object):
             p.quit()
         netlog("cleanup will disconnect: %s", self._potential_protocols)
         self.cancel_touch_timer()
+        self.mdns_cleanup()
         if self._upgrading:
             reason = SERVER_UPGRADE
         else:
@@ -389,16 +435,51 @@ class ServerCore(object):
         self.cleanup_protocols(protocols, reason, True)
         self._potential_protocols = []
         self.cleanup_udp_listeners()
+        self.cleanup_sockets()
         self.cleanup_dbus_server()
+        if not self._upgrading:
+            self.stop_dbus_server()
+        if self.pidfile:
+            self.pidinode = rm_pidfile(self.pidfile, self.pidinode)
 
     def do_cleanup(self):
         #allow just a bit of time for the protocol packet flush
         sleep(0.1)
 
 
+    def cleanup_sockets(self):
+        si = self._socket_info
+        self._socket_info = ()
+        for socktype, _, info, cleanup in si:
+            log("cleanup_sockets() calling %s for %s %s", cleanup, socktype, info)
+            try:
+                cleanup()
+            except Exception:
+                log("cleanup error on %s", cleanup, exc_info=True)
+
+
     ######################################################################
     # dbus:
+    def init_dbus(self, dbus_pid, dbus_env):
+        if not POSIX:
+            return
+        self.dbus_pid = dbus_pid
+        self.dbus_env = dbus_env
+
+    def stop_dbus_server(self):
+        dbuslog("stop_dbus_server() dbus_pid=%s", self.dbus_pid)
+        if not self.dbus_pid:
+            return
+        try:
+            os.kill(self.dbus_pid, signal.SIGINT)
+        except Exception as e:
+            dbuslog("os.kill(%i, SIGINT)", self.dbus_pid, exc_info=True)
+            dbuslog.warn("Warning: error trying to stop dbus with pid %i:", self.dbus_pid)
+            dbuslog.warn(" %s", e)
+
     def init_dbus_server(self):
+        if not POSIX:
+            return
         dbuslog("init_dbus_server() dbus_control=%s", self.dbus_control)
         dbuslog("init_dbus_server() env: %s", dict((k,v) for k,v in os.environ.items()
                                                if bytestostr(k).startswith("DBUS_")))
@@ -419,7 +500,7 @@ class ServerCore(object):
             ds.cleanup()
             self.dbus_server = None
 
-    def make_dbus_server(self):
+    def make_dbus_server(self):     #pylint: disable=useless-return
         dbuslog("make_dbus_server() no dbus server for %s", self)
         return None
 
@@ -647,9 +728,101 @@ class ServerCore(object):
     # sockets / connections / packets:
     def init_sockets(self, sockets):
         self._socket_info = sockets
+
+
+    def mdns_publish(self):
+        if not self.mdns:
+            return
+        from xpra.scripts.server import hosts
+        #find all the records we want to publish:
+        mdns_recs = {}
+        for socktype, _, info, _ in self._socket_info:
+            socktypes = self.get_mdns_socktypes(socktype)
+            mdnslog("mdns_publish() info=%s, socktypes(%s)=%s", info, socktype, socktypes)
+            for st in socktypes:
+                recs = mdns_recs.setdefault(st, [])
+                if socktype=="unix-domain":
+                    assert st=="ssh"
+                    host = "*"
+                    iport = get_ssh_port()
+                else:
+                    host, iport = info
+                for h in hosts(host):
+                    rec = (h, iport)
+                    if rec not in recs:
+                        recs.append(rec)
+                mdnslog("mdns_publish() recs[%s]=%s", st, recs)
+        from xpra.server.socket_util import mdns_publish
+        mdns_info = self.get_mdns_info()
+        self.mdns_publishers = []
+        for mdns_mode, listen_on in mdns_recs.items():
+            ap = mdns_publish(self.display_name, mdns_mode, listen_on, mdns_info)
+            if ap:
+                ap.start()
+                self.mdns_publishers.append(ap)
+
+    def get_mdns_socktypes(self, socktype):
+        #for a given socket type,
+        #what socket types we should expose via mdns
+        if socktype in ("vsock", "named-pipe"):
+            #cannot be accessed remotely
+            return ()
+        ssh_access = get_ssh_port()>0   #and opts.ssh.lower().strip() not in FALSE_OPTIONS
+        ssl = bool(self._ssl_wrap_socket)
+        #only available with the RFBServer
+        rfb_upgrades = getattr(self, "_rfb_upgrade", False)
+        socktypes = [socktype]
+        if socktype=="tcp":
+            if ssl:
+                socktypes.append("ssl")
+            if self._html:
+                socktypes.append("ws")
+            if self._html and ssl:
+                socktypes.append("wss")
+            if self.ssh_upgrade:
+                socktypes.append("ssh")
+            if rfb_upgrades:
+                socktypes.append("rfb")
+        elif socktype=="ws":
+            if ssl:
+                socktypes.append("wss")
+        elif socktype=="unix-domain":
+            if ssh_access:
+                socktypes = ["ssh"]
+        return socktypes
+
+    def get_mdns_info(self):
+        from xpra.platform.info import get_username
+        mdns_info = {
+            "display"  : self.display_name,
+            "username" : get_username(),
+            "uuid"     : self.uuid,
+            "platform" : sys.platform,
+            "type"     : self.session_type,
+            }
+        MDNS_EXPOSE_NAME = envbool("XPRA_MDNS_EXPOSE_NAME", True)
+        if MDNS_EXPOSE_NAME and self.session_name:
+            mdns_info["name"] = self.session_name
+        return mdns_info
+
+    def mdns_cleanup(self):
+        mp = self.mdns_publishers
+        self.mdns_publishers = []
+        for ap in mp:
+            ap.stop()
+
+    def mdns_update(self):
+        if not self.mdns:
+            return
+        txt = self.get_mdns_info()
+        for mdns_publisher in self.mdns_publishers:
+            mdns_publisher.update_txt(txt)
+
+
+    def start_listen_sockets(self):
         ### All right, we're ready to accept customers:
-        for socktype, sock, info in sockets:
-            netlog("init_sockets(%s) will add %s socket %s (%s)", sockets, socktype, sock, info)
+        for socktype, sock, info, _ in self._socket_info:
+            netlog("init_sockets(%s) will add %s socket %s (%s)", self._socket_info, socktype, sock, info)
             self.socket_info[sock] = info
             self.idle_add(self.add_listen_socket, socktype, sock)
             if socktype=="unix-domain" and info:
@@ -798,11 +971,11 @@ class ServerCore(object):
                      args=(conn, sock, address, socktype, peername, socket_info))
         return True
 
-    def peek_connection(self, conn, timeout=1):
+    def peek_connection(self, conn, timeout=PEEK_TIMEOUT_MS):
         PEEK_SIZE = 8192
         start = monotonic_time()
         peek_data = b""
-        while not peek_data and monotonic_time()-start<timeout:
+        while not peek_data and int(1000*(monotonic_time()-start))<timeout:
             try:
                 peek_data = conn.peek(PEEK_SIZE)
             except (OSError, IOError):
@@ -810,7 +983,7 @@ class ServerCore(object):
             except ValueError:
                 log("peek_connection(%s, %i) failed", conn, timeout, exc_info=True)
                 break
-            sleep(timeout/4.0)
+            sleep(timeout/4000.0)
         line1 = b""
         netlog("socket %s peek: got %i bytes", conn, len(peek_data))
         if peek_data:
@@ -866,9 +1039,11 @@ class ServerCore(object):
         peek_data, line1 = None, None
         #rfb does not send any data, waits for a server packet
         if socktype!="rfb":
-            peek_data, line1 = self.peek_connection(conn, PEEK_TIMEOUT)
+            peek_data, line1 = self.peek_connection(conn)
 
         def ssl_wrap():
+            if not self._ssl_wrap_socket:
+                raise Exception("no ssl support")
             ssl_sock = self._ssl_wrap_socket(sock)
             ssllog("ssl wrapped socket(%s)=%s", sock, ssl_sock)
             if ssl_sock is None:
@@ -905,7 +1080,7 @@ class ServerCore(object):
                     http = True
                 else:
                     ssl_conn.enable_peek()
-                    peek_data, line1 = self.peek_connection(ssl_conn, PEEK_TIMEOUT)
+                    peek_data, line1 = self.peek_connection(ssl_conn)
                     http = line1.find("HTTP/")>0
             if http and self._html:
                 self.start_http_socket(socktype, ssl_conn, True, peek_data)
@@ -1124,7 +1299,7 @@ class ServerCore(object):
                     http = True
                 else:
                     conn.enable_peek()
-                    peek_data, line1 = self.peek_connection(conn, PEEK_TIMEOUT)
+                    peek_data, line1 = self.peek_connection(conn)
                     http = line1.find(b"HTTP/")>0
             is_ssl = True
         else:
@@ -1193,11 +1368,12 @@ class ServerCore(object):
         #we start a new thread,
         #only so that the websocket handler thread is named correctly:
         start_thread(self.start_http, "%s-for-%s" % (tname, frominfo),
-                     daemon=True, args=(socktype, conn, is_ssl, req_info, conn.remote))
+                     daemon=True, args=(socktype, conn, is_ssl, req_info, line1, conn.remote))
 
-    def start_http(self, socktype, conn, is_ssl, req_info, frominfo):
-        httplog("start_http(%s, %s, %s, %s, %s) www dir=%s, headers dir=%s",
-                socktype, conn, is_ssl, req_info, frominfo, self._www_dir, self._http_headers_dir)
+    def start_http(self, socktype, conn, is_ssl, req_info, line1, frominfo):
+        httplog("start_http(%s, %s, %s, %s, %s, %s) www dir=%s, headers dir=%s",
+                socktype, conn, is_ssl, req_info, line1, frominfo,
+                self._www_dir, self._http_headers_dir)
         try:
             from xpra.net.websockets.handler import WebSocketRequestHandler
             sock = conn._socket
@@ -1221,6 +1397,7 @@ class ServerCore(object):
                 l = httplog.error
             l("Error: %s request failure", req_info)
             l(" for client %s:", pretty_socket(frominfo))
+            l(" request: '%s'", nonl(bytestostr(line1)))
             l(" %s", e)
         except Exception as e:
             wslog.error("Error: %s request failure for client %s:", req_info, pretty_socket(frominfo), exc_info=True)
@@ -1354,10 +1531,17 @@ class ServerCore(object):
         i = str(reasons[0])
         if len(reasons)>1:
             i += " (%s)" % csv(reasons[1:])
+        proto_info = " %s" % protocol
         try:
-            proto_info = " %s" % (protocol._conn.get_info()["endpoint"],)
+            conn = protocol._conn
+            info = conn.get_info()
+            endpoint = info.get("endpoint")
+            if endpoint:
+                proto_info = " %s" % (endpoint,)
+            else:
+                proto_info = " %s" % (conn.local,)
         except (KeyError, AttributeError):
-            proto_info = " %s" % protocol
+            pass
         self._log_disconnect(protocol, "Disconnecting client%s:", proto_info)
         self._log_disconnect(protocol, " %s", i)
         self.cancel_verify_connection_accepted(protocol)
@@ -1828,6 +2012,11 @@ class ServerCore(object):
             "executable"        : sys.executable,
             "idle-timeout"      : int(self.server_idle_timeout),
             })
+        if self.pidfile:
+            si["pidfile"] = {
+                "path"  : self.pidfile,
+                "inode" : self.pidinode,
+                }
         if POSIX:
             si["load"] = tuple(int(x*1000) for x in os.getloadavg())
         if self.original_desktop_display:
@@ -1880,7 +2069,7 @@ class ServerCore(object):
 
     def get_socket_info(self):
         si = {}
-        for socktype, _, info in self._socket_info:
+        for socktype, _, info, _ in self._socket_info:
             if info:
                 si.setdefault(socktype, {}).setdefault("listeners", []).append(info)
         for socktype, auth_classes in self.auth_classes.items():

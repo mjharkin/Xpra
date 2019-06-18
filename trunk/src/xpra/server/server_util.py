@@ -1,5 +1,5 @@
 # This file is part of Xpra.
-# Copyright (C) 2017-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2017-2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -7,14 +7,10 @@ import sys
 import os.path
 
 from xpra.util import envbool
-from xpra.os_util import OSX, POSIX, shellsub, getuid, getgid, get_util_logger, osexpand, umask_context
+from xpra.os_util import OSX, shellsub, getuid, get_util_logger, osexpand, umask_context
 from xpra.platform.dotxpra import norm_makepath
 from xpra.scripts.config import InitException
 
-
-def add_cleanup(fn):
-    from xpra.scripts.server import add_cleanup as ac
-    ac(fn)
 
 def sh_quotemeta(s):
     return "'" + s.replace("'", "'\\''") + "'"
@@ -31,6 +27,11 @@ def xpra_runner_shell_script(xpra_file, starting_dir, socket_dir):
             continue
         #XPRA_SOCKET_DIR is a special case, it is handled below
         if var=="XPRA_SOCKET_DIR":
+            continue
+        if var=="XPRA_ALT_PYTHON_RETRY":
+            #the environment might have changed,
+            #and we may need to retry with a different interpreter
+            #different from the one that created this script
             continue
         if var.startswith("BASH_FUNC"):
             #some versions of bash will apparently generate functions
@@ -222,9 +223,10 @@ def daemonize():
         os._exit(0)
 
 
-def write_pidfile(pidfile, uid, gid):
+def write_pidfile(pidfile):
     log = get_util_logger()
     pidstr = str(os.getpid())
+    inode = 0
     try:
         with open(pidfile, "w") as f:
             os.fchmod(f.fileno(), 0o600)
@@ -232,32 +234,30 @@ def write_pidfile(pidfile, uid, gid):
             try:
                 inode = os.fstat(f.fileno()).st_ino
             except (OSError, IOError):
-                inode = -1
-            if POSIX and uid!=getuid() or gid!=getgid():
-                try:
-                    os.fchown(f.fileno(), uid, gid)
-                except (OSError, IOError):
-                    pass
+                inode = 0
         log.info("wrote pid %s to '%s'", pidstr, pidfile)
-        def cleanuppidfile():
-            #verify this is the right file!
-            log("cleanuppidfile: inode=%i", inode)
-            if inode>0:
-                try:
-                    i = os.stat(pidfile).st_ino
-                    log("cleanuppidfile: current inode=%i", i)
-                    if i!=inode:
-                        return
-                except (OSError, IOError):
-                    pass
-            try:
-                os.unlink(pidfile)
-            except (OSError, IOError):
-                pass
-        add_cleanup(cleanuppidfile)
     except Exception as e:
         log.error("Error: failed to write pid %i to pidfile '%s':", os.getpid(), pidfile)
         log.error(" %s", e)
+    return inode
+
+def rm_pidfile(pidfile, inode):
+    #verify this is the right file!
+    log = get_util_logger()
+    log("cleanuppidfile(%s, %s)", pidfile, inode)
+    if inode>0:
+        try:
+            i = os.stat(pidfile).st_ino
+            log("cleanuppidfile: current inode=%i", i)
+            if i!=inode:
+                return 0
+        except (OSError, IOError):
+            pass
+    try:
+        os.unlink(pidfile)
+    except (OSError, IOError):
+        log("rm_pidfile(%s, %s)", pidfile, inode, exc_info=True)
+    return 0
 
 
 def get_uinput_device_path(device):

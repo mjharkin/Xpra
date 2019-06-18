@@ -8,7 +8,7 @@ import sys
 
 from xpra.util import (
     nonl, sorted_nicely, print_nested_dict, envint, flatten_dict,
-    disconnect_is_an_error, repr_ellipsized, DONE,
+    disconnect_is_an_error, repr_ellipsized, DONE, first_time,
     )
 from xpra.os_util import bytestostr, get_hex_uuid, PYTHON3, POSIX, OSX
 from xpra.client.client_base import XpraClientBase, EXTRA_TIMEOUT
@@ -31,7 +31,7 @@ def errwrite(msg):
     try:
         sys.stderr.write(msg)
         sys.stderr.flush()
-    except:
+    except (IOError, OSError, AttributeError):
         pass
 
 
@@ -223,8 +223,9 @@ class ScreenshotXpraClient(CommandConnectClient):
     def _process_screenshot(self, packet):
         (w, h, encoding, _, img_data) = packet[1:6]
         assert encoding==b"png", "expected png screenshot data but got %s" % bytestostr(encoding)
-        if len(img_data)==0:
-            self.warn_and_quit(EXIT_OK, "screenshot is empty and has not been saved (maybe there are no windows or they are not currently shown)")
+        if not img_data:
+            self.warn_and_quit(EXIT_OK,
+                               "screenshot is empty and has not been saved (maybe there are no windows or they are not currently shown)")
             return
         with open(self.screenshot_filename, 'wb') as f:
             f.write(img_data)
@@ -264,12 +265,12 @@ class InfoXpraClient(CommandConnectClient):
                         #we assume that all strings we get are utf-8,
                         #and fallback to the bytestostr hack if that fails
                         def fixvalue(w):
-                            if type(w)==bytes:
+                            if isinstance(w, bytes):
                                 try:
                                     return w.decode("utf-8")
                                 except:
                                     return bytestostr(w)
-                            elif type(w) in (tuple,list):
+                            elif isinstance(w, (tuple,list)):
                                 return type(w)([fixvalue(x) for x in w])
                             return w
                         v = fixvalue(v)
@@ -424,7 +425,8 @@ class PrintClient(SendCommandConnectClient):
         self.command = command[1:]
         #TODO: load as needed...
         def sizeerr(size):
-            self.warn_and_quit(EXIT_FILE_TOO_BIG, "the file is too large: %iMB (the file size limit is %iMB)" % (size//1024//1024, self.file_size_limit))
+            self.warn_and_quit(EXIT_FILE_TOO_BIG,
+                               "the file is too large: %iMB (the file size limit is %iMB)" % (size//1024//1024, self.file_size_limit))
             return
         if self.filename=="-":
             #replace with filename proposed
@@ -542,9 +544,16 @@ class RequestStartClient(HelloRequestClient):
         errwrite(".")
         return self.server_capabilities is None
 
+    def _process_connection_lost(self, packet):
+        errwrite("\n")
+        HelloRequestClient._process_connection_lost(self, packet)
+
     def hello_request(self):
-        errwrite("requesting new session, please wait")
-        self.timeout_add(5*1000, self.dots)
+        if first_time("hello-request"):
+            #this can be called again if we receive a challenge,
+            #but only print this message once:
+            errwrite("requesting new session, please wait")
+        self.timeout_add(1*1000, self.dots)
         return {
             "start-new-session" : self.start_new_session,
             #tells proxy servers we don't want to connect to the real / new instance:
@@ -556,19 +565,19 @@ class RequestStartClient(HelloRequestClient):
         log("server_connection_established() exit_code=%s", self.exit_code)
         display = self.server_capabilities.get("display")
         if display:
+            mode = self.server_capabilities.get("mode")
+            session_type = {
+                "start"         : "seamless ",
+                "start-desktop" : "desktop ",
+                "shadow"        : "shadow ",
+                }.get(mode, "")
             try:
-                mode = self.server_capabilities.get("mode")
-                session_type = {
-                    "start"         : "seamless ",
-                    "start-desktop" : "desktop ",
-                    "shadow"        : "shadow ",
-                    }.get(mode, "")
                 errwrite("\n%ssession now available on display %s\n" % (session_type, display))
                 if POSIX and not OSX and self.displayfd>0 and display and display.startswith(b":"):
                     from xpra.platform.displayfd import write_displayfd
                     log("writing display %s to displayfd=%s", display, self.displayfd)
                     write_displayfd(self.displayfd, display[1:])
-            except:
+            except (IOError, OSError):
                 log("server_connection_established()", exc_info=True)
         if not self.exit_code:
             self.quit(0)
@@ -578,5 +587,5 @@ class RequestStartClient(HelloRequestClient):
         HelloRequestClient.__init__(self, conn, opts)
         try:
             self.displayfd = int(opts.displayfd)
-        except:
+        except (ValueError, TypeError):
             self.displayfd = 0

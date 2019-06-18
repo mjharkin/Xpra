@@ -95,7 +95,7 @@ if SAVE_VIDEO_FRAMES not in ("png", "jpeg", None):
     log.warn(" only 'png' or 'jpeg' are allowed")
     SAVE_VIDEO_FRAMES = None
 
-FAST_ORDER = tuple(["jpeg", "rgb32", "rgb24", "png"] + list(PREFERED_ENCODING_ORDER))
+FAST_ORDER = tuple(["jpeg", "rgb32", "rgb24", "webp", "png"] + list(PREFERED_ENCODING_ORDER))
 
 
 class WindowVideoSource(WindowSource):
@@ -391,7 +391,7 @@ class WindowVideoSource(WindowSource):
         self.non_video_encodings = [x for x in PREFERED_ENCODING_ORDER if x in nv_common]
         try:
             self.edge_encoding = [x for x in EDGE_ENCODING_ORDER if x in self.non_video_encodings][0]
-        except:
+        except IndexError:
             self.edge_encoding = None
         log("do_set_client_properties(%s) full_csc_modes=%s, video_scaling=%s, video_subregion=%s, non_video_encodings=%s, edge_encoding=%s, scaling_control=%s",
             properties, self.full_csc_modes, self.supports_video_scaling, self.video_subregion.supported, self.non_video_encodings, self.edge_encoding, self.scaling_control)
@@ -496,7 +496,7 @@ class WindowVideoSource(WindowSource):
                 return nonvideo(quality+30, "not enough pixels")
         return current_encoding
 
-    def get_best_nonvideo_encoding(self, ww, wh, speed, quality, current_encoding=None, options=[]):
+    def get_best_nonvideo_encoding(self, ww, wh, speed, quality, current_encoding=None, options=()):
         #if we're here, then the window has no alpha (or the client cannot handle alpha)
         #and we can ignore the current encoding
         options = options or self.non_video_encodings
@@ -1357,7 +1357,7 @@ class WindowVideoSource(WindowSource):
                     continue
                 if width*num/den<=max_w and height*num/den<=max_h:
                     return (num, den)
-            raise Exception("BUG: failed to find a scaling value for window size %sx%s", width, height)
+            raise Exception("BUG: failed to find a scaling value for window size %sx%s" % (width, height))
         if not SCALING or not self.supports_video_scaling:
             #not supported by client or disabled by env
             if (width>max_w or height>max_h) and first_time("scaling-required"):
@@ -1525,7 +1525,14 @@ class WindowVideoSource(WindowSource):
         #but to make the code less dense:
         ve = self._video_encoder
         csce = self._csc_encoder
-        if ve is None or ve.is_closed() or (csce and csce.is_closed()):
+        if ve is None:
+            videolog("do_check_pipeline: no current video encoder")
+            return False
+        if ve.is_closed():
+            videolog("do_check_pipeline: current video encoder %s is closed", ve)
+            return False
+        if csce and csce.is_closed():
+            videolog("do_check_pipeline: csc %s is closed", csce)
             return False
 
         if csce:
@@ -1736,8 +1743,10 @@ class WindowVideoSource(WindowSource):
         scrolllog("may_use_scrolling(%s, %s) supports_scrolling=%s, has_pixels=%s, content_type=%s, non-video encodings=%s",
                   image, options, self.supports_scrolling, image.has_pixels, self.content_type, self.non_video_encodings)
         if not self.supports_scrolling:
+            scrolllog("no scrolling: not supported")
             return False
         if options.get("scroll") is True:
+            scrolllog("no scrolling: detection has already been used on this image")
             #we've already checked
             return False
         #don't download the pixels if we have a GPU buffer,
@@ -1745,13 +1754,16 @@ class WindowVideoSource(WindowSource):
         if not image.has_pixels():
             return False
         if self.content_type=="video" or not self.non_video_encodings:
+            scrolllog("no scrolling: content is video")
             return False
         x, y, w, h = image.get_geometry()[:4]
         if w<MIN_SCROLL_IMAGE_SIZE or h<MIN_SCROLL_IMAGE_SIZE:
+            scrolllog("no scrolling: image size %ix%i is too small, minimum is %ix%i",
+                      w, h, MIN_SCROLL_IMAGE_SIZE, MIN_SCROLL_IMAGE_SIZE)
             return False
         scroll_data = self.scroll_data
         if self.b_frame_flush_timer and scroll_data:
-            scrolllog("not testing scrolling: b_frame_flush_timer=%s", self.b_frame_flush_timer)
+            scrolllog("no scrolling: b_frame_flush_timer=%s", self.b_frame_flush_timer)
             self.scroll_data = None
             return False
         try:
@@ -1952,7 +1964,7 @@ class WindowVideoSource(WindowSource):
             return None
         return fallback_encodings[0]
 
-    def get_video_fallback_encoding(self, order=PREFERED_ENCODING_ORDER):
+    def get_video_fallback_encoding(self, order=FAST_ORDER):
         return self.get_fallback_encoding(self.non_video_encodings, order)
 
     def video_fallback(self, image, options, order=None, warn=False):
@@ -2055,6 +2067,9 @@ class WindowVideoSource(WindowSource):
         ve = self._video_encoder
         if not ve:
             return self.video_fallback(image, options, warn=True)
+        if not ve.is_ready():
+            log("video encoder %s is not ready yet, using temporary fallback", ve)
+            return self.video_fallback(image, options, order=FAST_ORDER, warn=False)
 
         #we're going to use the video encoder,
         #so make sure we don't time it out:

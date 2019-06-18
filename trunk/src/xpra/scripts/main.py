@@ -35,7 +35,7 @@ from xpra.scripts.config import (
     OPTION_TYPES, TRUE_OPTIONS, CLIENT_OPTIONS, NON_COMMAND_LINE_OPTIONS, CLIENT_ONLY_OPTIONS,
     START_COMMAND_OPTIONS, BIND_OPTIONS, PROXY_START_OVERRIDABLE_OPTIONS, OPTIONS_ADDED_SINCE_V1, OPTIONS_COMPAT_NAMES,
     InitException, InitInfo, InitExit,
-    fixup_options, dict_to_validated_config,
+    fixup_options, dict_to_validated_config, get_xpra_defaults_dirs, get_defaults, read_xpra_conf,
     make_defaults_struct, parse_bool, has_sound_support, name_to_field,
     )
 from xpra.log import is_debug_enabled, Logger
@@ -77,6 +77,10 @@ def main(script_file, cmdline):
     from xpra.platform import clean as platform_clean, command_error, command_info
     if len(cmdline)==1:
         cmdline.append("gui")
+    #we may have needed this variable to get here,
+    #and we may need to use it again to launch new commands:
+    if "XPRA_ALT_PYTHON_RETRY" in os.environ:
+        del os.environ["XPRA_ALT_PYTHON_RETRY"]
 
     def debug_exc(msg="run_mode error"):
         get_util_logger().debug(msg, exc_info=True)
@@ -352,7 +356,7 @@ def run_mode(script_file, error_cb, options, args, mode, defaults):
                         r = do_run_client(app)
                         from xpra.exit_codes import EXIT_OK, EXIT_FAILURE
                         #OK or got a signal:
-                        NO_RETRY = [EXIT_OK] + range(128, 128+16)
+                        NO_RETRY = [EXIT_OK] + list(range(128, 128+16))
                         if app.completed_startup:
                             #if we had connected to the session,
                             #we can ignore more error codes:
@@ -373,9 +377,11 @@ def run_mode(script_file, error_cb, options, args, mode, defaults):
                         else:
                             err = EXIT_STR.get(r, r)
                     except Exception as e:
+                        log = Logger("proxy")
+                        log("failed to start via proxy", exc_info=True)
                         err = str(e)
                     if start_via_proxy is True:
-                        raise InitException("failed to start-via-proxy: %s" % err)
+                        raise InitException("failed to start-via-proxy: %s" % (err,))
                     #warn and fall through to regular server start:
                     warn("Warning: cannot use the system proxy for '%s' subcommand," % (mode, ))
                     warn(" %s" % (err,))
@@ -479,6 +485,8 @@ def run_mode(script_file, error_cb, options, args, mode, defaults):
             return 0
         elif mode == "showconfig":
             return run_showconfig(options, args)
+        elif mode == "showsetting":
+            return run_showsetting(options, args)
         else:
             error_cb("invalid mode '%s'" % mode)
             return 1
@@ -525,7 +533,7 @@ def find_session_by_name(opts, session_name):
 
 def parse_ssh_string(ssh_setting):
     if is_debug_enabled("ssh"):
-        get_util_logger().info("parse_ssh_string(%s)" % ssh_setting)
+        get_util_logger().debug("parse_ssh_string(%s)" % ssh_setting)
     ssh_cmd = ssh_setting
     from xpra.platform.features import DEFAULT_SSH_COMMAND
     if ssh_setting=="auto":
@@ -1624,10 +1632,14 @@ def get_start_new_session_dict(opts, mode, extra_args):
            }
     if len(extra_args)==1:
         sns["display"] = extra_args[0]
+    from xpra.scripts.config import dict_to_config
+    defaults = dict_to_config(get_defaults())
+    fixup_options(defaults)
     for x in PROXY_START_OVERRIDABLE_OPTIONS:
         fn = x.replace("-", "_")
         v = getattr(opts, fn)
-        if v:
+        dv = getattr(defaults, fn, None)
+        if v and v!=dv:
             sns[x] = v
     #make sure the server will start in the same path we were called from:
     #(despite being started by a root owned process from a different directory)
@@ -2006,7 +2018,8 @@ def start_server_subprocess(script_file, args, mode, opts, username="", uid=getu
 
 def get_start_server_args(opts, uid=getuid(), gid=getgid(), compat=False):
     defaults = make_defaults_struct(uid=uid, gid=gid)
-    fixup_options(defaults)
+    fdefaults = defaults.clone()
+    fixup_options(fdefaults)
     args = []
     for x, ftype in OPTION_TYPES.items():
         if x in NON_COMMAND_LINE_OPTIONS or x in CLIENT_ONLY_OPTIONS:
@@ -2016,7 +2029,12 @@ def get_start_server_args(opts, uid=getuid(), gid=getgid(), compat=False):
         fn = x.replace("-", "_")
         ov = getattr(opts, fn)
         dv = getattr(defaults, fn)
-        if ov==dv:
+        fv = getattr(fdefaults, fn)
+        if ftype==list:
+            #compare lists using their csv representation:
+            if csv(ov)==csv(dv) or csv(ov)==csv(fv):
+                continue
+        if ov in (dv, fv):
             continue    #same as the default
         argname = "--%s=" % x
         if compat:
@@ -2442,13 +2460,6 @@ def run_showconfig(options, args):
             HIDDEN += ["lpadmin", "daemon", "use-display", "mmap-group", "mdns"]
         if not OSX:
             HIDDEN += ["dock-icon", "swap-keys"]
-    def vstr(v):
-        #just used to quote all string values
-        if isinstance(v, str):
-            return "'%s'" % nonl(v)
-        if isinstance(v, (tuple, list)) and v:
-            return csv(vstr(x) for x in v)
-        return str(v)
     for opt in sorted(OPTION_TYPES.keys()):
         if opt in VIRTUAL:
             continue
@@ -2468,6 +2479,49 @@ def run_showconfig(options, args):
             w("%-20s (default) = %-32s  %s", opt, vstr(dv), type(dv))
         else:
             i("%-20s           = %s", opt, vstr(cv))
+
+def vstr(v):
+    #just used to quote all string values
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return "'%s'" % nonl(v)
+    if isinstance(v, (tuple, list)):
+        return csv(vstr(x) for x in v)
+    return str(v)
+
+def run_showsetting(options, args):
+    if not args:
+        raise InitException("specify a setting to display")
+
+    log = get_util_logger()
+
+    settings = []
+    for arg in args:
+        otype = OPTION_TYPES.get(arg)
+        if not otype:
+            log.warn("'%s' is not a valid setting", arg)
+        else:
+            settings.append(arg)
+
+    from xpra.platform import get_username
+    dirs = get_xpra_defaults_dirs(username=get_username(), uid=getuid(), gid=getgid())
+
+    #default config:
+    config = get_defaults()
+    def show_settings():
+        for setting in settings:
+            value = config.get(setting)
+            log.info("%-20s: %-40s (%s)", setting, vstr(value), type(value))
+
+    log.info("* default config:")
+    show_settings()
+    for d in dirs:
+        config.clear()
+        config.update(read_xpra_conf(d))
+        log.info("* '%s':", d)
+        show_settings()
+    return 0
 
 
 if __name__ == "__main__":

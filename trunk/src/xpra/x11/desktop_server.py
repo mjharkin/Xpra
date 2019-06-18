@@ -34,7 +34,7 @@ from xpra.x11.gtk_x11.window_damage import WindowDamageHandler
 from xpra.x11.bindings.keyboard_bindings import X11KeyboardBindings #@UnresolvedImport
 from xpra.x11.bindings.randr_bindings import RandRBindings #@UnresolvedImport
 from xpra.x11.x11_server_base import X11ServerBase, mouselog
-from xpra.gtk_common.error import xsync
+from xpra.gtk_common.error import xsync, xlog
 from xpra.gtk_common.gobject_compat import import_gobject
 from xpra.log import Logger
 
@@ -128,7 +128,7 @@ class DesktopModel(WindowModelStub, WindowDamageHandler):
 
     def update_wm_name(self):
         try:
-            wm_name = get_wm_name()
+            wm_name = get_wm_name()     #pylint: disable=assignment-from-none
         except Exception:
             wm_name = ""
         iconlog("update_wm_name() wm-name=%s", wm_name)
@@ -137,7 +137,7 @@ class DesktopModel(WindowModelStub, WindowDamageHandler):
     def update_icon(self):
         icons = None
         try:
-            wm_name = get_wm_name()
+            wm_name = get_wm_name()     #pylint: disable=assignment-from-none
             if not wm_name:
                 return
             icon_name = get_icon_filename(wm_name.lower()+".png")
@@ -291,9 +291,11 @@ class XpraDesktopServer(DesktopServerBaseClass):
         "xpra-motion-event"     : one_arg_signal,
         }
 
-    def __init__(self):
+    def __init__(self, clobber=False):
+        X11ServerBase.__init__(self, clobber)
         for c in DESKTOPSERVER_BASES:
-            c.__init__(self)
+            if c!=X11ServerBase:
+                c.__init__(self)
         self.session_type = "desktop"
         self.resize_timer = None
         self.resize_value = None
@@ -302,6 +304,13 @@ class XpraDesktopServer(DesktopServerBaseClass):
         for c in DESKTOPSERVER_BASES:
             if c!=gobject.GObject:
                 c.init(self, opts)
+
+    def server_init(self):
+        X11ServerBase.server_init(self)
+        if self.randr:
+            from xpra.x11.vfb_util import set_initial_resolution, DEFAULT_DESKTOP_VFB_RESOLUTION
+            with xlog:
+                set_initial_resolution(DEFAULT_DESKTOP_VFB_RESOLUTION)
 
     def x11_init(self):
         X11ServerBase.x11_init(self)
@@ -318,11 +327,11 @@ class XpraDesktopServer(DesktopServerBaseClass):
 
     def do_cleanup(self):
         self.cancel_resize_timer()
-        X11ServerBase.do_cleanup(self)
         remove_catchall_receiver("xpra-motion-event", self)
         cleanup_x11_filter()
         with xswallow:
             cleanup_all_event_receivers()
+        X11ServerBase.do_cleanup(self)
 
 
     def notify_dpi_warning(self, body):
@@ -593,7 +602,7 @@ class XpraDesktopServer(DesktopServerBaseClass):
                 #TODO: just like shadow server, adjust for window position
                 pass
         with xsync:
-            X11ServerBase._move_pointer(self, wid, pos, -1, *args)
+            super(XpraDesktopServer, self)._move_pointer(self, wid, pos, -1, *args)
 
 
     def _process_close_window(self, proto, packet):

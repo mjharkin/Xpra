@@ -25,7 +25,7 @@ import xpra
 from xpra.os_util import (
     get_status_output, getUbuntuVersion,
     PYTHON3, BITS, WIN32, OSX, LINUX, POSIX, NETBSD, FREEBSD, OPENBSD,
-    is_Ubuntu, is_Debian, is_Raspbian, is_Fedora, is_CentOS,
+    is_Ubuntu, is_Debian, is_Raspbian, is_Fedora, is_CentOS, is_RedHat,
     )
 
 if sys.version<'2.7':
@@ -655,7 +655,7 @@ def exec_pkgconfig(*pkgs_options, **ekw):
 
     #for distros that don't patch distutils,
     #we have to add the python cflags:
-    if not (is_Fedora() or is_Debian() or is_CentOS()):
+    if not (is_Fedora() or is_Debian() or is_CentOS() or is_RedHat()):
         import shlex
         import sysconfig
         for cflag in shlex.split(sysconfig.get_config_var('CFLAGS') or ''):
@@ -1539,7 +1539,7 @@ else:
         if scripts_ENABLED:
             scripts += ["scripts/xpra_udev_product_version", "scripts/xpra_signal_listener"]
         libexec_scripts = []
-        if is_Fedora() or is_CentOS():
+        if is_Fedora() or is_CentOS() or is_RedHat():
             libexec = "libexec"
         else:
             libexec = "lib"
@@ -1938,13 +1938,9 @@ elif gtk3_ENABLED or (gtk_x11_ENABLED and PYTHON3):
 
 if client_ENABLED and gtk3_ENABLED:
     #cairo workaround:
-    if OSX or is_Ubuntu() or is_Debian():
-        pycairo = "py3cairo"
-    else:
-        pycairo = "pycairo"
     cython_add(Extension("xpra.client.gtk3.cairo_workaround",
                 ["xpra/client/gtk3/cairo_workaround.pyx"],
-                **pkgconfig(pycairo)
+                **pkgconfig("py3cairo")
                 ))
 
 if client_ENABLED or server_ENABLED:

@@ -1,5 +1,6 @@
+# -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -11,19 +12,17 @@
 import sys
 import os.path
 import atexit
-import signal
 import traceback
-from subprocess import Popen, PIPE
 
-from xpra.scripts.main import info, warn, error, no_gtk, validate_encryption, parse_env, configure_env
-from xpra.scripts.config import InitException, TRUE_OPTIONS, FALSE_OPTIONS
+from xpra.scripts.main import info, warn, no_gtk, validate_encryption, parse_env, configure_env
+from xpra.scripts.config import InitException, FALSE_OPTIONS
 from xpra.os_util import (
-    SIGNAMES, POSIX, PYTHON3, WIN32, OSX, is_Wayland,
-    FDChangeCaptureContext, close_fds, get_ssh_port,
+    SIGNAMES, POSIX, WIN32, OSX,
+    FDChangeCaptureContext,
     get_username_for_uid, get_home_for_uid, get_shell_for_uid, getuid, setuidgid,
     get_hex_uuid, get_status_output, strtobytes, bytestostr, get_util_logger, osexpand,
     )
-from xpra.util import envbool, csv, nonl
+from xpra.util import envbool, csv
 from xpra.platform.dotxpra import DotXpra
 
 
@@ -35,7 +34,7 @@ def run_cleanups():
     for c in cleanups:
         try:
             c()
-        except:
+        except Exception:
             print("error running cleanup %s" % c)
             traceback.print_exception(*sys.exc_info())
 
@@ -46,9 +45,6 @@ def add_when_ready(f):
 
 def add_cleanup(f):
     _cleanups.append(f)
-
-def insert_cleanup(f):
-    _cleanups.insert(0, f)
 
 
 def deadly_signal(signum):
@@ -97,58 +93,12 @@ def save_xvfb_pid(pid):
 def get_xvfb_pid():
     return _get_int(b"_XPRA_SERVER_PID")
 
-def save_dbus_pid(pid):
-    _save_int(b"_XPRA_DBUS_PID", pid)
-
-def get_dbus_pid():
-    return _get_int(b"_XPRA_DBUS_PID")
 
 def save_uinput_id(uuid):
     _save_str(b"_XPRA_UINPUT_ID", (uuid or b"").decode())
 
 #def get_uinput_id():
 #    return _get_str("_XPRA_UINPUT_ID")
-
-def get_dbus_env():
-    env = {}
-    for n,load in (
-            ("ADDRESS",     _get_str),
-            ("PID",         _get_int),
-            ("WINDOW_ID",   _get_int)):
-        k = "DBUS_SESSION_BUS_%s" % n
-        try:
-            v = load(k)
-            if v:
-                env[k] = bytestostr(v)
-        except Exception as e:
-            error("failed to load dbus environment variable '%s':\n" % k)
-            error(" %s\n" % e)
-    return env
-
-def save_dbus_env(env):
-    #DBUS_SESSION_BUS_ADDRESS=unix:abstract=/tmp/dbus-B8CDeWmam9,guid=b77f682bd8b57a5cc02f870556cbe9e9
-    #DBUS_SESSION_BUS_PID=11406
-    #DBUS_SESSION_BUS_WINDOWID=50331649
-    def u(s):
-        try:
-            return s.decode("latin1")
-        except:
-            return str(s)
-    for n,conv,save in (
-            ("ADDRESS",     u,    _save_str),
-            ("PID",         int,    _save_int),
-            ("WINDOW_ID",   int,    _save_int)):
-        k = "DBUS_SESSION_BUS_%s" % n
-        v = env.get(k)
-        if v is None:
-            continue
-        try:
-            tv = conv(v)
-            save(k, tv)
-        except Exception as e:
-            get_util_logger().debug("save_dbus_env(%s)", env, exc_info=True)
-            error("failed to save dbus environment variable '%s' with value '%s':\n" % (k, v))
-            error(" %s\n" % e)
 
 
 def validate_pixel_depth(pixel_depth, starting_desktop=False):
@@ -182,33 +132,6 @@ def display_name_check(display_name):
             warn(" just to avoid any confusion and this warning message.")
     except IOError:
         pass
-
-def close_gtk_display():
-    # Close our display(s) first, so the server dying won't kill us.
-    # (if gtk has been loaded)
-    gdk_mod = sys.modules.get("gtk.gdk") or sys.modules.get("gi.repository.Gdk")
-    if gdk_mod and envbool("XPRA_CLOSE_GTK_DISPLAY", True):
-        from xpra.gtk_common.gobject_compat import import_gdk, is_gtk3
-        gdk = import_gdk()
-        if is_gtk3():
-            displays = gdk.DisplayManager.get().list_displays()
-        else:
-            displays = gdk.display_manager_get().list_displays()
-        for d in displays:
-            d.close()
-
-def kill_xvfb(xvfb_pid):
-    log = get_util_logger()
-    log.info("killing xvfb with pid %s", xvfb_pid)
-    try:
-        os.kill(xvfb_pid, signal.SIGTERM)
-    except OSError as e:
-        log.info("failed to kill xvfb process with pid %s:", xvfb_pid)
-        log.info(" %s", e)
-    from xpra.x11.vfb_util import PRIVATE_XAUTH
-    xauthority = os.environ.get("XAUTHORITY")
-    if PRIVATE_XAUTH and xauthority and os.path.exists(xauthority):
-        os.unlink(xauthority)
 
 
 def print_DE_warnings():
@@ -333,60 +256,6 @@ def guess_xpra_display(socket_dir, socket_dirs):
     return live[0]
 
 
-def start_dbus(dbus_launch):
-    if not dbus_launch or dbus_launch.lower() in FALSE_OPTIONS:
-        return 0, {}
-    from xpra.log import Logger
-    dbuslog = Logger("dbus")
-    try:
-        def preexec():
-            assert POSIX
-            os.setsid()
-            close_fds()
-        env = dict((k,v) for k,v in os.environ.items() if k in (
-            "PATH",
-            "SSH_CLIENT", "SSH_CONNECTION",
-            "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE", "XDG_RUNTIME_DIR",
-            "SHELL", "LANG", "USER", "LOGNAME", "HOME",
-            "DISPLAY", "XAUTHORITY", "CKCON_X11_DISPLAY",
-            ))
-        import shlex
-        cmd = shlex.split(dbus_launch)
-        dbuslog("start_dbus(%s) env=%s", dbus_launch, env)
-        proc = Popen(cmd, stdin=PIPE, stdout=PIPE, shell=False, env=env, preexec_fn=preexec)
-        out = proc.communicate()[0]
-        assert proc.poll()==0, "exit code is %s" % proc.poll()
-        #parse and add to global env:
-        dbus_env = {}
-        dbuslog("out(%s)=%s", cmd, nonl(out))
-        for l in bytestostr(out).splitlines():
-            if l.startswith("export "):
-                continue
-            sep = "="
-            if l.startswith("setenv "):
-                l = l[len("setenv "):]
-                sep = " "
-            if l.startswith("set "):
-                l = l[len("set "):]
-            parts = l.split(sep, 1)
-            if len(parts)!=2:
-                continue
-            k,v = parts
-            if v.startswith("'") and v.endswith("';"):
-                v = v[1:-2]
-            elif v.endswith(";"):
-                v = v[:-1]
-            dbus_env[k] = v
-        dbus_pid = int(dbus_env.get("DBUS_SESSION_BUS_PID", 0))
-        dbuslog("dbus-env=%s", dbus_env)
-        return dbus_pid, dbus_env
-    except Exception as e:
-        dbuslog("start_dbus(%s)", dbus_launch, exc_info=True)
-        dbuslog.error("dbus-launch failed to start using command '%s':\n" % dbus_launch)
-        dbuslog.error(" %s\n" % e)
-        return 0, {}
-
-
 def show_encoding_help(opts):
     #avoid errors and warnings:
     opts.encoding = ""
@@ -451,9 +320,9 @@ def set_server_features(opts):
     server_features.rfb             = b(opts.rfb_upgrade) and impcheck("server.rfb")
 
 
-def make_desktop_server():
+def make_desktop_server(clobber):
     from xpra.x11.desktop_server import XpraDesktopServer
-    return XpraDesktopServer()
+    return XpraDesktopServer(clobber)
 
 def make_server(clobber):
     from xpra.x11.server import XpraServer
@@ -478,16 +347,11 @@ def hosts(host_str):
         return ["0.0.0.0", "::"]
     return [host_str]
 
-def add_mdns(mdns_recs, socktype, host_str, port):
-    recs = mdns_recs.setdefault(socktype.lower(), [])
-    for host in hosts(host_str):
-        rec = (host, port)
-        if rec not in recs:
-            recs.append(rec)
 
 def create_sockets(opts, error_cb):
     from xpra.server.socket_util import (
-        parse_bind_ip, parse_bind_vsock, get_network_logger, setup_tcp_socket, setup_udp_socket, setup_vsock_socket,
+        parse_bind_ip, parse_bind_vsock, get_network_logger,
+        setup_tcp_socket, setup_udp_socket, setup_vsock_socket, setup_sd_listen_socket,
         )
     log = get_network_logger()
 
@@ -500,32 +364,7 @@ def create_sockets(opts, error_cb):
     bind_rfb = parse_bind_ip(opts.bind_rfb, 5900)
     bind_vsock = parse_bind_vsock(opts.bind_vsock)
 
-    mdns_recs = {}
     sockets = []
-
-    rfb_upgrades = int(opts.rfb_upgrade)>0
-    #SSL sockets:
-    wrap_socket_fn = None
-    need_ssl = False
-    ssl_opt = opts.ssl.lower()
-    if ssl_opt in TRUE_OPTIONS or bind_ssl or bind_wss:
-        need_ssl = True
-    if opts.bind_tcp or opts.bind_ws:
-        if ssl_opt=="auto" and opts.ssl_cert:
-            need_ssl = True
-        elif ssl_opt=="tcp" and opts.bind_tcp:
-            need_ssl = True
-        elif ssl_opt=="www":
-            need_ssl = True
-    if need_ssl:
-        from xpra.scripts.main import ssl_wrap_socket_fn
-        try:
-            wrap_socket_fn = ssl_wrap_socket_fn(opts, server_side=True)
-            log("wrap_socket_fn=%s", wrap_socket_fn)
-        except Exception as e:
-            log("SSL error", exc_info=True)
-            cpaths = csv("'%s'" % x for x in (opts.ssl_cert, opts.ssl_key) if x)
-            raise InitException("cannot create SSL socket, check your certificate paths (%s): %s" % (cpaths, e))
 
     min_port = int(opts.min_port)
     def add_tcp_socket(socktype, host_str, iport):
@@ -535,7 +374,6 @@ def create_sockets(opts, error_cb):
             socket = setup_tcp_socket(host, iport, socktype)
             host, iport = socket[2]
             sockets.append(socket)
-            add_mdns(mdns_recs, socktype, host, iport)
     def add_udp_socket(socktype, host_str, iport):
         if iport!=0 and iport<min_port:
             error_cb("invalid %s port number %i (minimum value is %i)" % (socktype, iport, min_port))
@@ -543,11 +381,9 @@ def create_sockets(opts, error_cb):
             socket = setup_udp_socket(host, iport, socktype)
             host, iport = socket[2]
             sockets.append(socket)
-            add_mdns(mdns_recs, socktype, host, iport)
     # Initialize the TCP sockets before the display,
     # That way, errors won't make us kill the Xvfb
     # (which may not be ours to kill at that point)
-    ws_upgrades = opts.html and (os.path.isabs(opts.html) or opts.html.lower() in list(TRUE_OPTIONS)+["auto"])
     ssh_upgrades = opts.ssh_upgrade
     if ssh_upgrades:
         try:
@@ -564,62 +400,42 @@ def create_sockets(opts, error_cb):
     log("setting up SSL sockets: %s", csv(bind_ssl))
     for host, iport in bind_ssl:
         add_tcp_socket("ssl", host, iport)
-        if ws_upgrades:
-            add_tcp_socket("wss", host, iport)
     log("setting up SSH sockets: %s", csv(bind_ssh))
     for host, iport in bind_ssh:
         add_tcp_socket("ssh", host, iport)
     log("setting up https / wss (secure websockets): %s", csv(bind_wss))
     for host, iport in bind_wss:
         add_tcp_socket("wss", host, iport)
-    tcp_ssl = ssl_opt in TRUE_OPTIONS or (ssl_opt=="auto" and opts.ssl_cert)
     log("setting up TCP sockets: %s", csv(bind_tcp))
     for host, iport in bind_tcp:
         add_tcp_socket("tcp", host, iport)
-        if tcp_ssl:
-            add_mdns(mdns_recs, "ssl", host, iport)
-        if ws_upgrades:
-            add_mdns(mdns_recs, "ws", host, iport)
-        if ws_upgrades and tcp_ssl:
-            add_mdns(mdns_recs, "wss", host, iport)
-        if ssh_upgrades:
-            add_mdns(mdns_recs, "ssh", host, iport)
-        if rfb_upgrades:
-            add_mdns(mdns_recs, "rfb", host, iport)
     log("setting up UDP sockets: %s", csv(bind_udp))
     for host, iport in bind_udp:
         add_udp_socket("udp", host, iport)
     log("setting up http / ws (websockets): %s", csv(bind_ws))
     for host, iport in bind_ws:
         add_tcp_socket("ws", host, iport)
-        if tcp_ssl:
-            add_mdns(mdns_recs, "wss", host, iport)
     log("setting up rfb sockets: %s", csv(bind_rfb))
     for host, iport in bind_rfb:
         add_tcp_socket("rfb", host, iport)
-        add_mdns(mdns_recs, "rfb", host, iport)
     log("setting up vsock sockets: %s", csv(bind_vsock))
     for cid, iport in bind_vsock:
         socket = setup_vsock_socket(cid, iport)
         sockets.append(socket)
-        #add_mdns(mdns_recs, "vsock", str(cid), iport)
 
     # systemd socket activation:
     if POSIX:
         try:
             from xpra.platform.xposix.sd_listen import get_sd_listen_sockets
-        except ImportError:
-            pass
+        except ImportError as e:
+            log("no systemd socket activation: %s", e)
         else:
             sd_sockets = get_sd_listen_sockets()
             log("systemd sockets: %s", sd_sockets)
             for stype, socket, addr in sd_sockets:
-                sockets.append((stype, socket, addr))
+                sockets.append(setup_sd_listen_socket(stype, socket, addr))
                 log("%s : %s", (stype, [addr]), socket)
-                if stype=="tcp":
-                    host, iport = addr
-                    add_mdns(mdns_recs, "tcp", host, iport)
-    return sockets, mdns_recs, wrap_socket_fn
+    return sockets
 
 def run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=None):
     #add finally hook to ensure we will run the cleanups
@@ -633,6 +449,12 @@ def run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=None
 
 
 def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=None):
+    assert mode in (
+        "start", "start-desktop",
+        "upgrade", "upgrade-desktop",
+        "shadow", "proxy",
+        )
+
     try:
         cwd = os.getcwd()
     except OSError:
@@ -642,11 +464,13 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
     if opts.encoding=="help" or "help" in opts.encodings:
         return show_encoding_help(opts)
 
-    assert mode in (
-        "start", "start-desktop",
-        "upgrade", "upgrade-desktop",
-        "shadow", "proxy",
-        )
+    #remove anything pointing to dbus from the current env
+    #(so we only detect a dbus instance started by pam,
+    # and override everything else)
+    for k in tuple(os.environ.keys()):
+        if k.startswith("DBUS_"):
+            del os.environ[k]
+
     starting  = mode == "start"
     starting_desktop = mode == "start-desktop"
     upgrading = mode == "upgrade"
@@ -656,8 +480,15 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
     clobber   = upgrading or upgrading_desktop or opts.use_display
     start_vfb = not (shadowing or proxying or clobber)
 
-    if shadowing and is_Wayland():
-        warn("shadow servers do not support Wayland, switch to X11")
+    if proxying or upgrading or upgrading_desktop:
+        #when proxying or upgrading, don't exec any plain start commands:
+        opts.start = opts.start_child = []
+    elif opts.exit_with_children:
+        assert opts.start_child, "exit-with-children was specified but start-child is missing!"
+    elif opts.start_child:
+        warn("Warning: the 'start-child' option is used,")
+        warn(" but 'exit-with-children' is not enabled,")
+        warn(" use 'start' instead")
 
     if opts.bind_rfb and (proxying or starting):
         get_util_logger().warn("Warning: bind-rfb sockets cannot be used with '%s' mode" % mode)
@@ -722,7 +553,6 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
     from xpra.server.server_util import (
         xpra_runner_shell_script,
         write_runner_shell_scripts,
-        write_pidfile,
         find_log_dir,
         create_input_devices,
         )
@@ -821,9 +651,6 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
         #with the value supplied by the user:
         protected_env["XDG_RUNTIME_DIR"] = xrd
 
-    if opts.pidfile:
-        write_pidfile(opts.pidfile, uid, gid)
-
     if POSIX and not ROOT:
         # Write out a shell-script so that we can start our proxy in a clean
         # environment:
@@ -849,7 +676,7 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
             if ROOT and (uid>0 or gid>0):
                 try:
                     os.fchown(logfd, uid, gid)
-                except:
+                except (OSError, IOError):
                     pass
             stdout, stderr = redirect_std_to_log(logfd, *protected_fds)
             try:
@@ -864,9 +691,7 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
     if (starting or starting_desktop) and desktop_display and opts.notifications and not opts.dbus_launch:
         print_DE_warnings()
 
-    from xpra.log import Logger
-    log = Logger("server")
-    sockets, mdns_recs, wrap_socket_fn = create_sockets(opts, error_cb)
+    sockets = create_sockets(opts, error_cb)
 
     sanitize_env()
     if POSIX:
@@ -885,6 +710,8 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
         except KeyError:
             pass
     os.environ.update(protected_env)
+    from xpra.log import Logger
+    log = Logger("server")
     log("env=%s", os.environ)
 
     UINPUT_UUID_LEN = 12
@@ -931,33 +758,16 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
     if POSIX and not OSX and displayfd>0:
         from xpra.platform.displayfd import write_displayfd
         try:
-            display = display_name[1:]
-            log("writing display='%s' to displayfd=%i", display, displayfd)
-            assert write_displayfd(displayfd, display), "timeout"
+            display_no = display_name[1:]
+            #ensure it is a string containing the number:
+            display_no = str(int(display_no))
+            log("writing display_no='%s' to displayfd=%i", display_no, displayfd)
+            assert write_displayfd(displayfd, display_no), "timeout"
         except Exception as e:
             log.error("write_displayfd failed", exc_info=True)
             log.error("Error: failed to write '%s' to fd=%s", display_name, displayfd)
             log.error(" %s", str(e) or type(e))
             del e
-        try:
-            os.fsync(displayfd)
-        except (IOError, OSError):
-            log("os.fsync(%i)", displayfd, exc_info=True)
-        if displayfd>2:
-            try:
-                os.close(displayfd)
-            except (IOError, OSError):
-                log("os.close(%i)", displayfd, exc_info=True)
-
-    if not proxying:
-        add_cleanup(close_gtk_display)
-    if not proxying and not shadowing:
-        def kill_display():
-            if xvfb_pid:
-                kill_xvfb(xvfb_pid)
-        add_cleanup(kill_display)
-    else:
-        kill_display = None
 
     if opts.daemon:
         def noerr(fn, *args):
@@ -1032,35 +842,14 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
     if opts.chdir:
         os.chdir(opts.chdir)
 
-    dbus_pid = 0
-    dbus_env = {}
-    kill_dbus = None
+    dbus_pid, dbus_env = 0, {}
     if not shadowing and POSIX and not clobber:
         no_gtk()
-        dbuslog = Logger("dbus")
         assert starting or starting_desktop or proxying
-        bus_address = protected_env.get("DBUS_SESSION_BUS_ADDRESS")
-        dbuslog("dbus_launch=%s, current DBUS_SESSION_BUS_ADDRESS=%s", opts.dbus_launch, bus_address)
-        if opts.dbus_launch and not bus_address:
-            #start a dbus server:
-            def _kill_dbus():
-                dbuslog("kill_dbus: dbus_pid=%s" % dbus_pid)
-                if dbus_pid<=0:
-                    return
-                try:
-                    os.kill(dbus_pid, signal.SIGINT)
-                except Exception as e:
-                    dbuslog("os.kill(%i, SIGINT)", dbus_pid, exc_info=True)
-                    dbuslog.warn("Warning: error trying to stop dbus with pid %i:", dbus_pid)
-                    dbuslog.warn(" %s", e)
-            kill_dbus = _kill_dbus
-            add_cleanup(kill_dbus)
-            #this also updates os.environ with the dbus attributes:
-            dbus_pid, dbus_env = start_dbus(opts.dbus_launch)
-            dbuslog("dbus attributes: pid=%s, env=%s", dbus_pid, dbus_env)
-            if dbus_env:
-                os.environ.update(dbus_env)
-                os.environ.update(protected_env)
+        from xpra.server.dbus.dbus_start import start_dbus
+        dbus_pid, dbus_env = start_dbus(opts.dbus_launch)
+        if dbus_env:
+            os.environ.update(dbus_env)
 
     display = None
     if not proxying:
@@ -1071,10 +860,8 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
                 from xpra.x11.vfb_util import verify_display_ready
                 if not verify_display_ready(xvfb, display_name, shadowing):
                     return 1
-                if not PYTHON3:
-                    from xpra.x11.gtk2.gdk_display_util import verify_gdk_display       #@UnusedImport
-                else:
-                    from xpra.x11.gtk3.gdk_display_util import verify_gdk_display       #@Reimport
+                no_gtk()
+                from xpra.x11.gtk_x11.gdk_display_source import verify_gdk_display
                 display = verify_gdk_display(display_name)
                 if not display:
                     return 1
@@ -1095,178 +882,90 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
                                         opts.mmap_group, opts.socket_permissions,
                                         username, uid, gid)
     netlog("setting up local sockets: %s", local_sockets)
-    ssh_port = get_ssh_port()
-    ssh_access = ssh_port>0 and opts.ssh.lower().strip() not in FALSE_OPTIONS
-    for rec, cleanup_socket in local_sockets:
-        socktype, socket, sockpath = rec
-        #ie: ("unix-domain", sock, sockpath), cleanup_socket
-        sockets.append(rec)
+    for socktype, socket, sockpath, cleanup_socket in local_sockets:
+        sockets.append((socktype, socket, sockpath, cleanup_socket))
         netlog("%s %s : %s", socktype, sockpath, socket)
-        add_cleanup(cleanup_socket)
-        if opts.mdns and ssh_access:
-            netlog("ssh %s:%s : %s", "", ssh_port, socket)
-            add_mdns(mdns_recs, "ssh", "", ssh_port)
+    if POSIX and (starting or upgrading or starting_desktop or upgrading_desktop):
+        #all unix domain sockets:
+        ud_paths = [sockpath for stype, _, sockpath, _ in local_sockets if stype=="unix-domain"]
+        if ud_paths:
+            #choose one so our xdg-open override script can use to talk back to us:
+            if opts.forward_xdg_open:
+                for x in ("/usr/libexec/xpra", "/usr/lib/xpra"):
+                    xdg_override = os.path.join(x, "xdg-open")
+                    if os.path.exists(xdg_override):
+                        os.environ["PATH"] = x+os.pathsep+os.environ.get("PATH", "")
+                        os.environ["XPRA_SERVER_SOCKET"] = ud_paths[0]
+                        break
+        else:
+            log.warn("Warning: no local server sockets,")
+            if opts.forward_xdg_open:
+                log.warn(" forward-xdg-open cannot be enabled")
+            log.warn(" non-embedded ssh connections will not be available")
 
     set_server_features(opts)
+
+    if not proxying and POSIX:
+        if not check_xvfb():
+            return  1
+        from xpra.x11.gtk_x11.gdk_display_source import init_gdk_display_source
+        init_gdk_display_source()
+        #(now we can access the X11 server)
+        if uinput_uuid:
+            save_uinput_id(uinput_uuid)
 
     if shadowing:
         app = make_shadow_server()
     elif proxying:
         app = make_proxy_server()
     else:
-        if not check_xvfb():
-            return  1
-        assert starting or starting_desktop or upgrading or upgrading_desktop
-        from xpra.x11.gtk_x11.gdk_display_source import init_gdk_display_source, close_gdk_display_source
-        init_gdk_display_source()
-        insert_cleanup(close_gdk_display_source)
-        #(now we can access the X11 server)
-
-        #make sure the pid we save is the real one:
-        if not check_xvfb():
-            return  1
-
-        #now we can save values on the display
-        #(we cannot access gtk3 until dbus has started up)
-        if not clobber:
-            if xvfb_pid:
-                save_xvfb_pid(xvfb_pid)
-            if dbus_pid:
-                save_dbus_pid(dbus_pid)
-            if dbus_env:
-                save_dbus_env(dbus_env)
-        else:
-            #get the saved pids and env
-            dbus_pid = get_dbus_pid()
-            dbus_env = get_dbus_env()
-            dbuslog = Logger("dbus")
-            dbuslog("retrieved existing dbus attributes: %s, %s", dbus_pid, dbus_env)
-            if dbus_env:
-                os.environ.update(dbus_env)
-        save_uinput_id(uinput_uuid)
-
-        if POSIX:
-            #all unix domain sockets:
-            ud_paths = [sockpath for (stype, _, sockpath), _ in local_sockets if stype=="unix-domain"]
-            if ud_paths:
-                #choose one so our xdg-open override script can use to talk back to us:
-                if opts.forward_xdg_open:
-                    for x in ("/usr/libexec/xpra", "/usr/lib/xpra"):
-                        xdg_override = os.path.join(x, "xdg-open")
-                        if os.path.exists(xdg_override):
-                            os.environ["PATH"] = x+os.pathsep+os.environ.get("PATH", "")
-                            os.environ["XPRA_SERVER_SOCKET"] = ud_paths[0]
-                            break
-            else:
-                log.warn("Warning: no local server sockets,")
-                if opts.forward_xdg_open:
-                    log.warn(" forward-xdg-open cannot be enabled")
-                log.warn(" ssh connections will not be available")
-
-        log("env=%s", os.environ)
-        try:
-            # This import is delayed because the module depends on gtk:
-            from xpra.x11.bindings.window_bindings import X11WindowBindings
-            X11Window = X11WindowBindings()
-            if (starting or starting_desktop) and not clobber and opts.resize_display:
-                from xpra.x11.vfb_util import set_initial_resolution
-                set_initial_resolution(starting_desktop)
-        except ImportError as e:
-            log.error("Failed to load Xpra server components, check your installation: %s" % e)
-            return 1
         if starting or upgrading:
-            if not X11Window.displayHasXComposite():
-                log.error("Xpra 'start' subcommand runs as a compositing manager")
-                log.error(" it cannot use a display which lacks the XComposite extension!")
-                return 1
-            if starting:
-                #check for an existing window manager:
-                from xpra.x11.gtk_x11.wm_check import wm_check
-                if not wm_check(display, opts.wm_name, upgrading):
-                    return 1
-            log("XShape=%s", X11Window.displayHasXShape())
             app = make_server(clobber)
         else:
             assert starting_desktop or upgrading_desktop
-            app = make_desktop_server()
+            app = make_desktop_server(clobber)
         app.init_virtual_devices(devices)
 
-    if proxying or upgrading or upgrading_desktop:
-        #when proxying or upgrading, don't exec any plain start commands:
-        opts.start = opts.start_child = []
-    elif opts.exit_with_children:
-        assert opts.start_child, "exit-with-children was specified but start-child is missing!"
-    elif opts.start_child:
-        log.warn("Warning: the 'start-child' option is used,")
-        log.warn(" but 'exit-with-children' is not enabled,")
-        log.warn(" use 'start' instead")
-
     try:
-        app._ssl_wrap_socket = wrap_socket_fn
-        app.original_desktop_display = desktop_display
         app.exec_cwd = opts.chdir or cwd
+        app.display_name = display_name
         app.init(opts)
+        app.init_sockets(sockets)
+        app.init_dbus(dbus_pid, dbus_env)
+        if xvfb_pid or clobber:
+            app.init_display_pid(xvfb_pid)
+        app.original_desktop_display = desktop_display
+        del opts
+        if not app.server_ready():
+            return 1
+        app.server_init()
         app.setup()
+        app.init_when_ready(_when_ready)
     except InitException as e:
         log.error("xpra server initialization error:")
         log.error(" %s", e)
+        app.cleanup()
         return 1
     except Exception as e:
         log.error("Error: cannot start the %s server", app.session_type, exc_info=True)
         log.error(str(e))
         log.info("")
+        app.cleanup()
         return 1
 
-    #publish mdns records:
-    if opts.mdns:
-        from xpra.platform.info import get_username
-        from xpra.server.socket_util import mdns_publish
-        mdns_info = {
-                     "display"  : display_name,
-                     "username" : get_username(),
-                     "uuid"     : app.uuid,
-                     "platform" : sys.platform,
-                     "type"     : app.session_type,
-                     }
-        MDNS_EXPOSE_NAME = envbool("XPRA_MDNS_EXPOSE_NAME", True)
-        if MDNS_EXPOSE_NAME and app.session_name:
-            mdns_info["name"] = app.session_name
-        for mdns_mode, listen_on in mdns_recs.items():
-            mdns_publish(display_name, mdns_mode, listen_on, mdns_info)
-
-    del opts
-
-    log("%s(%s)", app.init_sockets, sockets)
-    app.init_sockets(sockets)
-    log("%s(%s)", app.init_when_ready, _when_ready)
-    app.init_when_ready(_when_ready)
-
     try:
-        #from here on, we own the vfb, even if we inherited one:
-        if (starting or starting_desktop or upgrading or upgrading_desktop) and clobber:
-            #and it will be killed if exit cleanly:
-            xvfb_pid = get_xvfb_pid()
-
         log("running %s", app.run)
         r = app.run()
         log("%s()=%s", app.run, r)
     except KeyboardInterrupt:
         log.info("stopping on KeyboardInterrupt")
+        app.cleanup()
         return 0
     except Exception:
         log.error("server error", exc_info=True)
+        app.cleanup()
         return -128
     else:
         if r>0:
-            # Upgrading/exiting, so leave X and dbus servers running
-            if kill_display:
-                _cleanups.remove(kill_display)
-            if kill_dbus:
-                _cleanups.remove(kill_dbus)
-            from xpra.server import EXITING_CODE
-            if r==EXITING_CODE:
-                log.info("exiting: not cleaning up Xvfb")
-            else:
-                log.info("upgrading: not cleaning up Xvfb")
             r = 0
     return r

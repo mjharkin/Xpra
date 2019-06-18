@@ -133,6 +133,12 @@ class Win32Clipboard(ClipboardTimeoutHelper):
             return _filter_targets(data)
         return ClipboardTimeoutHelper._munge_wire_selection_to_raw(self, encoding, dtype, dformat, data)
 
+    def _munge_raw_selection_to_wire(self, target, dtype, dformat, data):
+        if dtype=="ATOM":
+            assert isinstance(data, (tuple, list))
+            return "atoms", _filter_targets(data)
+        return ClipboardTimeoutHelper._munge_raw_selection_to_wire(self, target, dtype, dformat, data)
+
 
 class Win32ClipboardProxy(ClipboardProxyCore):
     def __init__(self, window, selection, send_clipboard_request_handler, send_clipboard_token_handler):
@@ -146,6 +152,7 @@ class Win32ClipboardProxy(ClipboardProxyCore):
 
     def with_clipboard_lock(self, success_callback, failure_callback, retries=5, delay=5):
         r = OpenClipboard(self.window)
+        log("OpenClipboard(%#x)=%s", self.window, r)
         if r:
             try:
                 success_callback()
@@ -155,6 +162,7 @@ class Win32ClipboardProxy(ClipboardProxyCore):
         if GetLastError()!=ERROR_ACCESS_DENIED:
             failure_callback()
             return
+        log("clipboard lock: access denied")
         if retries<=0:
             failure_callback()
             return
@@ -179,14 +187,19 @@ class Win32ClipboardProxy(ClipboardProxyCore):
         self.send_clipboard_token_handler(self)
 
     def get_contents(self, target, got_contents):
+        if target=="TARGETS":
+            #we only support text at the moment:
+            got_contents("ATOM", 32, ["text/plain", "text/plain;charset=utf-8", "UTF8_STRING"])
+            return
         def got_text(text):
-            log("got_text(%s)", repr_ellipsized(str(text)))
-            got_contents("bytes", 8, text)
+            log("got_text(%s)", repr_ellipsized(bytestostr(text)))
+            got_contents("text/plain", 8, text)
         def errback(error_text):
             log.error("Error: failed to get clipboard data")
             log.error(" %s", error_text)
-            got_contents("bytes", 8, b"")
+            got_contents("text/plain", 8, b"")
         self.get_clipboard_text(got_text, errback)
+
 
     def got_token(self, targets, target_data=None, claim=True, _synchronous_client=False):
         # the remote end now owns the clipboard
@@ -260,46 +273,74 @@ class Win32ClipboardProxy(ClipboardProxyCore):
                 GlobalUnlock(data)
         self.with_clipboard_lock(get_text, errback)
 
-    def set_clipboard_text(self, text):
+    def set_err(self, msg):
+        log.warn("Warning: cannot set clipboard value")
+        log.warn(" %s", msg)
+
+    def set_clipboard_text(self, text, retry=5):
+        log("set_clipboard_text(%s, %i)", text, retry)
+        r = self.do_set_clipboard_text(text)
+        if not r:
+            if retry>0:
+                glib.timeout_add(5, self.set_clipboard_text, text, retry-1)
+            else:
+                self.set_err("failed to set clipboard buffer")
+
+
+    def do_set_clipboard_text(self, text):
         #convert to wide char
         #get the length in wide chars:
-        log("set_clipboard_text(%s)", text)
         wlen = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, len(text), None, 0)
         if not wlen:
-            return
+            self.set_err("failed to prepare to convert to wide char")
+            return False
         log("MultiByteToWideChar wlen=%i", wlen)
         #allocate some memory for it:
-        buf = GlobalAlloc(GMEM_MOVEABLE, (wlen+1)*2)
+        l = (wlen+1)*2
+        buf = GlobalAlloc(GMEM_MOVEABLE, l)
         if not buf:
-            return
+            self.set_err("failed to allocate %i bytes of global memory" % l)
+            return False
         log("GlobalAlloc buf=%#x", buf)
         locked = GlobalLock(buf)
         if not locked:
+            self.set_err("failed to lock buffer %#x" % buf)
             GlobalFree(buf)
-            return
+            return False
         try:
             locked_buf = cast(locked, LPWSTR)
             r = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, len(text), locked_buf, wlen)
             if not r:
-                return
+                self.set_err("failed to convert to wide char")
+                return False
         finally:
             GlobalUnlock(locked)
-
-        def do_set_data():
-            try:
-                self._block_owner_change = True
-                log("SetClipboardData(..) block_owner_change=%s", self._block_owner_change)
-                EmptyClipboard()
-                if not SetClipboardData(win32con.CF_UNICODETEXT, buf):
-                    return
-                #done!
-            finally:
-                GlobalFree(buf)
-                glib.idle_add(self.remove_block)
-        def set_error():
+        #we're going to alter the clipboard ourselves,
+        #ignore messages until we're done:
+        self._block_owner_change = True
+        #def empty_error():
+        #    self.set_err("failed to empty the clipboard")
+        #self.with_clipboard_lock(EmptyClipboard, empty_error)
+        def cleanup():
             GlobalFree(buf)
+            glib.idle_add(self.remove_block)
+        ret = [False]
+        def do_set_data():
+            if not EmptyClipboard():
+                self.set_err("failed to empty the clipboard")
+            if not SetClipboardData(win32con.CF_UNICODETEXT, buf):
+                #no need to warn here
+                #set_clipboard_text() will try again
+                return
+            log("SetClipboardData(..) done")
+            cleanup()
+            ret[0] = True
+        def set_error():
             log.error("Error: failed to set clipboard data")
+            cleanup()
         self.with_clipboard_lock(do_set_data, set_error)
+        return ret[0]
+
 
     def __repr__(self):
         return "Win32ClipboardProxy"

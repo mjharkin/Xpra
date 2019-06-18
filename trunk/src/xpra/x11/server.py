@@ -31,7 +31,7 @@ from xpra.x11.gtk_x11.gdk_bindings import (
 from xpra.x11.bindings.window_bindings import X11WindowBindings #@UnresolvedImport
 from xpra.x11.bindings.keyboard_bindings import X11KeyboardBindings #@UnresolvedImport
 from xpra.x11.x11_server_base import X11ServerBase
-from xpra.gtk_common.error import xsync, xswallow
+from xpra.gtk_common.error import xsync, xswallow, xlog
 from xpra.gtk_common.gobject_compat import import_gtk, import_gdk, import_glib, import_gobject, is_gtk3
 from xpra.log import Logger
 
@@ -196,16 +196,17 @@ class XpraServer(gobject.GObject, X11ServerBase):
         }
 
     def __init__(self, clobber):
-        self.clobber = clobber
         self.root_overlay = None
         self.repaint_root_overlay_timer = None
         self.configure_damage_timers = {}
         self._tray = None
+        self._has_grab = 0
+        self._has_focus = 0
         self._wm = None
         self.last_raised = None
         self.system_tray = False
         gobject.GObject.__init__(self)
-        X11ServerBase.__init__(self)
+        X11ServerBase.__init__(self, clobber)
         self.session_type = "seamless"
 
     def init(self, opts):
@@ -218,6 +219,24 @@ class XpraServer(gobject.GObject, X11ServerBase):
             eventlog("server-event: %s", event)
         self.connect("server-event", log_server_event)
 
+    def server_init(self):
+        X11ServerBase.server_init(self)
+        if not self.clobber and self.randr:
+            from xpra.x11.vfb_util import set_initial_resolution, DEFAULT_VFB_RESOLUTION
+            with xlog:
+                set_initial_resolution(DEFAULT_VFB_RESOLUTION)
+
+    def server_ready(self):
+        if not X11Window.displayHasXComposite():
+            log.error("Xpra 'start' subcommand runs as a compositing manager")
+            log.error(" it cannot use a display which lacks the XComposite extension!")
+            return False
+        #check for an existing window manager:
+        from xpra.x11.gtk_x11.wm_check import wm_check
+        if not wm_check(self.wm_name, self.clobber):
+            return False
+        return True
+
     def setup(self):
         X11ServerBase.setup(self)
         if self.system_tray:
@@ -227,8 +246,6 @@ class XpraServer(gobject.GObject, X11ServerBase):
         X11ServerBase.x11_init(self)
         assert init_x11_filter() is True
 
-        self._has_grab = 0
-        self._has_focus = 0
         self._focus_history = deque(maxlen=100)
         # Do this before creating the Wm object, to avoid clobbering its
         # selecting SubstructureRedirect.
@@ -278,7 +295,6 @@ class XpraServer(gobject.GObject, X11ServerBase):
                 X11Window.XCompositeReleaseOverlayWindow(self.root_overlay)
             self.root_overlay = None
         self.cancel_all_configure_damage()
-        X11ServerBase.do_cleanup(self)
         cleanup_x11_filter()
         cleanup_all_event_receivers()
         if self._wm:
@@ -289,6 +305,7 @@ class XpraServer(gobject.GObject, X11ServerBase):
             #but at this point in the cleanup, we probably won't, so force set it:
             self._has_grab = 0
             self.X11_ungrab()
+        X11ServerBase.do_cleanup(self)
 
 
     def last_client_exited(self):
@@ -542,6 +559,7 @@ class XpraServer(gobject.GObject, X11ServerBase):
         window.managed_connect("ungrab", self._window_ungrab)
         window.managed_connect("bell", self._bell_signaled)
         window.managed_connect("motion", self._motion_signaled)
+        window.managed_connect("x11-property-changed", self._x11_property_changed)
         if not window.is_tray():
             window.managed_connect("raised", self._raised_window)
             window.managed_connect("initiate-moveresize", self._initiate_moveresize)
@@ -553,6 +571,17 @@ class XpraServer(gobject.GObject, X11ServerBase):
                 pass    #this can fail if the window disappears
                 #but we don't really care, it will get cleaned up soon enough
         return wid
+
+
+    def _x11_property_changed(self, window, event):
+        #name, dtype, dformat, value = event
+        metadata = {"x11-property" : event}
+        wid = self._window_to_id[window]
+        for ss in self._server_sources.values():
+            ms = getattr(ss, "metadata_supported", ())
+            if "x11-property" in ms:
+                ss.send("window-metadata", wid, metadata)
+
 
     def _add_new_window(self, window):
         self._add_new_window_common(window)

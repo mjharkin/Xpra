@@ -13,7 +13,7 @@ import sys
 import glob
 from io import BytesIO
 
-from xpra.util import envbool, print_nested_dict
+from xpra.util import envbool, envint, print_nested_dict, first_time
 from xpra.os_util import load_binary_file, OSEnvContext, PYTHON3
 from xpra.log import Logger, add_debug_category
 
@@ -21,6 +21,7 @@ log = Logger("exec", "menu")
 
 LOAD_GLOB = envbool("XPRA_XDG_LOAD_GLOB", True)
 EXPORT_ICONS = envbool("XPRA_XDG_EXPORT_ICONS", True)
+MAX_ICON_SIZE = envint("XPRA_XDG_MAX_ICON_SIZE", 32768)
 DEBUG_COMMANDS = os.environ.get("XPRA_XDG_DEBUG_COMMANDS", "").split(",")
 if PYTHON3:
     unicode = str           #@ReservedAssignment
@@ -72,6 +73,7 @@ def export(entry, properties):
     return props
 
 def load_icon_from_file(filename):
+    log("load_icon_from_file(%s)", filename)
     if filename.endswith("xpm"):
         try:
             from xpra.gtk_common.gobject_compat import import_pixbufloader
@@ -105,6 +107,9 @@ def load_icon_from_file(filename):
     if not icondata:
         return None
     log("got icon data from '%s': %i bytes", filename, len(icondata))
+    if len(icondata)>MAX_ICON_SIZE and first_time("icon-size-warning-%s" % filename):
+        log.warn("Warning: icon is quite large (%i KB):", len(icondata)//1024)
+        log.warn(" '%s'", filename)
     return icondata, os.path.splitext(filename)[1].lstrip(".")
 
 def load_icon_from_theme(icon_name, theme=None):
@@ -211,11 +216,24 @@ def load_xdg_menu(submenu):
                 log.error(" %s", e)
     return submenu_data
 
+def remove_icons(menu_data):
+    def noicondata(d):
+        return dict((k,v) for k,v in d.items() if k!="IconData")
+    filt = {}
+    for category, cdef in menu_data.items():
+        fcdef = dict(cdef)
+        entries = dict(fcdef.get("Entries", {}))
+        for entry, edef in tuple(entries.items()):
+            entries[entry] = noicondata(edef)
+        fcdef["Entries"] = entries
+        filt[category] = fcdef
+    return filt
+
 
 xdg_menu_data = None
-def load_xdg_menu_data():
+def load_xdg_menu_data(force_reload=False):
     global xdg_menu_data
-    if not xdg_menu_data:
+    if not xdg_menu_data or force_reload:
         xdg_menu_data = do_load_xdg_menu_data()
     return xdg_menu_data
 
@@ -278,5 +296,5 @@ def main():
     return 0
 
 if __name__ == "__main__":
-    v = main()
-    sys.exit(v)
+    r = main()
+    sys.exit(r)

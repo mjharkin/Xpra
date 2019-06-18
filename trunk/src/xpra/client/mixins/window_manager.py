@@ -1117,21 +1117,27 @@ class WindowClient(StubClientMixin):
         window = self._id_to_window.get(wid)
         if window:
             if window.is_OR() and self.modal_windows:
-                #re-enable modal windows if there are no other OR windows left:
-                orwids = tuple(wid for wid, w in self._id_to_window.items() if w.is_OR() and w!=window)
-                if not orwids:
-                    for wid, w in self._id_to_window.items():
-                        if w.is_OR() or w.is_tray():
-                            continue
-                        if w._metadata.boolget("modal") and not w.get_modal():
-                            metalog("re-enabling modal flag on %s", wid)
-                            window.set_modal(True)
+                self.may_reenable_modal_windows(window)
             del self._id_to_window[wid]
             del self._window_to_id[window]
             self.destroy_window(wid, window)
         if not self._id_to_window:
             log("last window gone, clearing key repeat")
         self.set_tray_icon()
+
+    def may_reenable_modal_windows(self, window):
+        orwids = tuple(wid for wid, w in self._id_to_window.items() if w.is_OR() and w!=window)
+        if orwids:
+            #there are other OR windows left, don't do anything
+            return
+        for wid, w in self._id_to_window.items():
+            if w.is_OR() or w.is_tray():
+                #trays and OR windows cannot be made modal
+                continue
+            if w._metadata.boolget("modal") and not w.get_modal():
+                metalog("re-enabling modal flag on %s", wid)
+                window.set_modal(True)
+
 
     def destroy_window(self, wid, window):
         log("destroy_window(%s, %s)", wid, window)
@@ -1383,11 +1389,10 @@ class WindowClient(StubClientMixin):
                 if coding==b"mmap":
                     assert self.mmap_enabled
                     from xpra.net.mmap_pipe import int_from_buffer
-                    def free_mmap_area():
-                        #we need to ack the data to free the space!
-                        data_start = int_from_buffer(self.mmap, 0)
-                        offset, length = data[-1]
-                        data_start.value = offset+length
+                    #we need to ack the data to free the space!
+                    data_start = int_from_buffer(self.mmap, 0)
+                    offset, length = data[-1]
+                    data_start.value = offset+length
                     #clear the mmap area via idle_add so any pending draw requests
                     #will get a chance to run first (preserving the order)
                 self.send_damage_sequence(wid, packet_sequence, width, height, -1)

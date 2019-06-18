@@ -40,7 +40,7 @@ class ServerTestUtil(unittest.TestCase):
         from xpra.server.server_util import find_log_dir
         cls.xauthority_temp = tempfile.NamedTemporaryFile(prefix="xpra-test.", suffix=".xauth", delete=False)
         cls.xauthority_temp.close()
-        os.environ["XAUTHORITY"] = os.path.expanduser(cls.xauthority_temp.name)
+        #os.environ["XAUTHORITY"] = os.path.expanduser(cls.xauthority_temp.name)
         os.environ["XPRA_LOG_DIR"] = find_log_dir()
         os.environ["XPRA_NOTTY"] = "1"
         os.environ["XPRA_WAIT_FOR_INPUT"] = "0"
@@ -135,7 +135,7 @@ class ServerTestUtil(unittest.TestCase):
 
     def run_command(self, command, env=None, **kwargs):
         if env is None:
-            env = self.get_run_env()
+            env = kwargs.get("env") or self.get_run_env()
         kwargs["env"] = env
         stdout_file = stderr_file = None
         if isinstance(command, str):
@@ -245,20 +245,18 @@ class ServerTestUtil(unittest.TestCase):
         assert POSIX
         if display is None:
             display = self.find_free_display()
+        env = {}
         for x in list(os.environ.keys()):
             if x in (
 				"LOGNAME", "USER", "PATH", "LANG", "TERM",
 				"HOME", "USERNAME", "PYTHONPATH", "HOSTNAME",
+                #"XAUTHORITY",
 				):    #DBUS_SESSION_BUS_ADDRESS
                 #keep it
-                continue
-            try:
-                del os.environ[x]
-            except KeyError:
-                pass
-        if len(screens)>1:
-            cmd = ["Xvfb", "+extension", "Composite", "-nolisten", "tcp", "-noreset",
-                    "-auth", self.default_env["XAUTHORITY"]]
+                env[x] = os.environ.get(x)
+        if len(screens)>1 or True:
+            cmd = ["Xvfb", "+extension", "Composite", "-nolisten", "tcp", "-noreset"]
+                    #"-auth", self.default_env["XAUTHORITY"]]
             for i, screen in enumerate(screens):
                 (w, h) = screen
                 cmd += ["-screen", "%i" % i, "%ix%ix24+32" % (w, h)]
@@ -274,8 +272,8 @@ class ServerTestUtil(unittest.TestCase):
             if i>0 and os.path.exists("./etc/xpra/xorg.conf"):
                 cmd[i] = "./etc/xpra/xorg.conf"
         cmd.append(display)
-        os.environ["DISPLAY"] = display
-        os.environ["XPRA_LOG_DIR"] = "/tmp"
+        env["DISPLAY"] = display
+        env["XPRA_LOG_DIR"] = "/tmp"
         cmd_expanded = [osexpand(v) for v in cmd]
         cmdstr = " ".join("'%s'" % x for x in cmd_expanded)
         if SHOW_XORG_OUTPUT:
@@ -286,7 +284,7 @@ class ServerTestUtil(unittest.TestCase):
             log("stdout=%s for %s", stdout.name, cmd)
             stderr = self._temp_file(prefix="Xorg-stderr-")
             log("stderr=%s for %s", stderr.name, cmd)
-        xvfb = self.run_command(cmd_expanded, stdout=stdout, stderr=stderr)
+        xvfb = self.run_command(cmd_expanded, env=env, stdout=stdout, stderr=stderr)
         time.sleep(1)
         log("xvfb(%s)=%s" % (cmdstr, xvfb))
         if pollwait(xvfb, XVFB_TIMEOUT) is not None:

@@ -38,7 +38,7 @@ class ZeroconfListener(object):
         log("add_service%s", (zeroconf, stype, name))
         info = zeroconf.get_service_info(stype, name)
         log("service info: %s", info)
-        if self.mdns_add:
+        if self.mdns_add and info:
             interface = 0
             protocol = 0
             name = info.name
@@ -60,14 +60,14 @@ class ZeroconfListener(object):
             self.browser = None
             try:
                 b.cancel()
-            except:
+            except Exception:
                 pass
         zc = self.zeroconf
         if zc:
             self.zeroconf = None
             try:
                 zc.close()
-            except:
+            except Exception:
                 pass
 
 

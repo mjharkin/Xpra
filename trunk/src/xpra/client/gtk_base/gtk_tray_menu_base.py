@@ -1262,7 +1262,7 @@ class GTKTrayMenuBase(object):
             webcamlog("populate_webcam_menu()")
             for x in menu.get_children():
                 menu.remove(x)
-            all_video_devices = get_all_video_devices()
+            all_video_devices = get_all_video_devices()     #pylint: disable=assignment-from-none
             off_label = "Off"
             if all_video_devices is None:
                 #None means that this platform cannot give us the device names,
@@ -1564,44 +1564,52 @@ class GTKTrayMenuBase(object):
 
     def make_startmenuitem(self):
         start_menu_item = self.handshake_menuitem("Start", "start.png")
-
-        def start_menu_init(*args):
+        start_menu_item.show()
+        def update_menu_data():
             if not self.client.server_start_new_commands:
                 set_sensitive(start_menu_item, False)
                 start_menu_item.set_tooltip_text("This server does not support starting new commands")
                 return
-            if not self.client.xdg_menu:
+            if not self.client.server_xdg_menu:
                 set_sensitive(start_menu_item, False)
                 start_menu_item.set_tooltip_text("This server does not provide start menu data")
                 return
-            menu = gtk.Menu()
+            set_sensitive(start_menu_item, True)
+            menu = self.build_start_menu()
             start_menu_item.set_submenu(menu)
-            self.popup_menu_workaround(menu)
-            for category, category_props in sorted(self.client.xdg_menu.items()):
-                log("start_menu_init() category: %s", category)
-                #log("category_props(%s)=%s", category, category_props)
-                if isinstance(category_props, dict):
-                    entries = category_props.get(b"Entries", {})
-                else:
-                    #TODO: remove this,
-                    #only useful for compatibility with early 2.5 beta:
-                    entries = category_props
-                if not entries:
-                    continue
-                icondata = category_props.get(b"IconData")
-                category_menu_item = self.start_menuitem(category.decode("utf-8"), icondata)
-                cat_menu = gtk.Menu()
-                category_menu_item.set_submenu(cat_menu)
-                self.popup_menu_workaround(cat_menu)
-                menu.append(category_menu_item)
-                for app_name, command_props in sorted(entries.items()):
-                    log("start_menu_init() app_name=%s", app_name)
-                    app_menu_item = self.make_applaunch_menu_item(app_name, command_props)
-                    cat_menu.append(app_menu_item)
-            menu.show_all()
-        start_menu_item.show()
+        def start_menu_init():
+            update_menu_data()
+            def on_xdg_menu_changed(setting, value):
+                log("on_xdg_menu_changed(%s, %s)", setting, repr_ellipsized(str(value)))
+                update_menu_data()
+            self.client.on_server_setting_changed("xdg-menu", on_xdg_menu_changed)
         self.client.after_handshake(start_menu_init)
         return start_menu_item
+
+    def build_start_menu(self):
+        menu = gtk.Menu()
+        self.popup_menu_workaround(menu)
+        log("build_start_menu() %i menu items", len(self.client.server_xdg_menu))
+        for category, category_props in sorted(self.client.server_xdg_menu.items()):
+            log("build_start_menu() category: %s", category)
+            #log("category_props(%s)=%s", category, category_props)
+            if not isinstance(category_props, dict):
+                continue
+            entries = category_props.get(b"Entries", {})
+            if not entries:
+                continue
+            icondata = category_props.get(b"IconData")
+            category_menu_item = self.start_menuitem(category.decode("utf-8"), icondata)
+            cat_menu = gtk.Menu()
+            category_menu_item.set_submenu(cat_menu)
+            self.popup_menu_workaround(cat_menu)
+            menu.append(category_menu_item)
+            for app_name, command_props in sorted(entries.items()):
+                log("build_start_menu() app_name=%s", app_name)
+                app_menu_item = self.make_applaunch_menu_item(app_name, command_props)
+                cat_menu.append(app_menu_item)
+        menu.show_all()
+        return menu
 
     def get_appimage(self, app_name, icondata=None):
         pixbuf = None

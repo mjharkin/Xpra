@@ -93,7 +93,7 @@ class ClientWindowBase(ClientWidgetBase):
                 #client properties override application specified workspace value on init only:
                 metadata["workspace"] = int(workspace)
         self._window_workspace = WORKSPACE_UNSET        #will get set in set_metadata if present
-        self._desktop_workspace = self.get_desktop_workspace()
+        self._desktop_workspace = self.get_desktop_workspace()  #pylint: disable=assignment-from-none
         def wn(w):
             return WORKSPACE_NAMES.get(w, w)
         workspacelog("init_window(..) workspace=%s, current workspace=%s",
@@ -395,6 +395,12 @@ class ClientWindowBase(ClientWidgetBase):
         if b"command" in metadata:
             self.set_command(metadata.strget("command"))
 
+        if b"x11-property" in metadata:
+            self.set_x11_property(*metadata.listget("x11-property"))
+
+
+    def set_x11_property(self, *x11_property):
+        pass
 
     def set_command(self, command):
         pass

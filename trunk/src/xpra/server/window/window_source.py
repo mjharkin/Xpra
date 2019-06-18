@@ -1944,7 +1944,7 @@ class WindowSource(WindowIconSource):
         if self.can_refresh() and regions and ret>0:
             now = monotonic_time()
             options = self.get_refresh_options()
-            refresh_exclude = self.get_refresh_exclude()
+            refresh_exclude = self.get_refresh_exclude()    #pylint: disable=assignment-from-none
             refreshlog("timer_full_refresh() after %ims, auto_refresh_encodings=%s, options=%s, regions=%s, refresh_exclude=%s",
                        1000.0*(monotonic_time()-ret), self.auto_refresh_encodings, options, regions, refresh_exclude)
             WindowSource.do_send_delayed_regions(self, now, regions, self.auto_refresh_encodings[0], options, exclude_region=refresh_exclude, get_best_encoding=self.get_refresh_encoding)
@@ -2361,10 +2361,10 @@ class WindowSource(WindowIconSource):
                 v = data.data
             except AttributeError:
                 v = data
-            md5 = hashlib.md5(v).hexdigest()
-            client_options["z.md5"] = md5
+            chksum = hashlib.sha1().hexdigest()
+            client_options["z.sha1"] = chksum
             client_options["z.len"] = len(data)
-            log("added len and hash of compressed data integrity %19s: %8i / %s", type(v), len(v), md5)
+            log("added len and hash of compressed data integrity %19s: %8i / %s", type(v), len(v), chksum)
         #actual network packet:
         if self.supports_flush and flush not in (None, 0):
             client_options["flush"] = flush

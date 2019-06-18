@@ -245,7 +245,7 @@ var Utilities = {
 		  }
 	},
 	isIE : function() {
-		return navigator.userAgent.includes("MSIE");
+		return navigator.userAgent.includes("MSIE") || navigator.userAgent.includes("Trident/");
 	},
 
 	getSimpleUserAgentString : function() {

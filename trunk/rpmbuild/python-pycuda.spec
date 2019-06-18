@@ -1,5 +1,5 @@
 # This file is part of Xpra.
-# Copyright (C) 2014-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2014-2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -15,15 +15,14 @@
 %global debug_package %{nil}
 
 Name:           python2-pycuda
-Version:        2018.1.1
-Release:        3
+Version:        2019.1
+Release:        1
 URL:            http://mathema.tician.de/software/pycuda
 Summary:        Python wrapper CUDA
 License:        MIT
 Group:          Development/Libraries/Python
-Source:        	https://files.pythonhosted.org/packages/09/69/333ff751d1012f7add7488c91352e08a364b1534a5a33b278c9590415d27/pycuda-%{version}.tar.gz
+Source:        	https://files.pythonhosted.org/packages/4d/29/5a3eb66c2f1a4adc681f6c8131e9ed677af31b0c8a78726d540bd44b3403/pycuda-%{version}.tar.gz
 BuildRoot:      %{_tmppath}/%{name}-%{version}-build
-Patch0:         python-pycuda-threading.patch
 Provides:       python-pycuda
 Obsoletes:      python-pycuda
 Conflicts:      python-pycuda
@@ -41,7 +40,7 @@ BuildRequires:  python-setuptools
 BuildRequires:  python-distribute
 %endif
 BuildRequires:  numpy
-BuildRequires:  boost-devel
+BuildRequires:  boost-python2-devel
 BuildRequires:  cuda
 
 %description
@@ -63,7 +62,7 @@ BuildRequires:  gcc-c++
 BuildRequires:  python3-devel
 BuildRequires:  python3-setuptools
 BuildRequires:  python3-numpy
-BuildRequires:  boost-devel
+BuildRequires:  boost-python3-devel
 BuildRequires:  cuda
 
 %description -n python3-pycuda
@@ -72,7 +71,6 @@ Python3 version.
 
 %prep
 %setup -q -n pycuda-%{version}
-%patch0 -p1
 %if 0%{?fedora}
 rm -fr %{py3dir}
 cp -a . %{py3dir}
@@ -86,8 +84,8 @@ cp -a . %{py3dir}
 	--cudadrv-lib-dir=%{_libdir} \
 	--boost-inc-dir=%{_includedir} \
 	--boost-lib-dir=%{_libdir} \
-	--no-cuda-enable-curand
-#	--boost-python-libname=boost_python-mt \
+	--no-cuda-enable-curand \
+	--boost-python-libname=boost_python27
 #	--boost-thread-libname=boost_thread
 %{__python2} setup.py build
 %if 0%{?fedora}
@@ -100,8 +98,8 @@ rm -f siteconf.py
 	--cudadrv-lib-dir=%{_libdir} \
 	--boost-inc-dir=%{_includedir} \
 	--boost-lib-dir=%{_libdir} \
-	--no-cuda-enable-curand
-#	--boost-python-libname=boost_python-mt \
+	--no-cuda-enable-curand \
+	--boost-python-libname=boost_python37
 #	--boost-thread-libname=boost_thread
 %{__python3} setup.py build
 popd
@@ -132,6 +130,10 @@ rm -rf %{buildroot}
 %endif
 
 %changelog
+* Mon May 20 2019 Antoine Martin <antoine@xpra.org> - 2019.1-1
+- new upstream release
+- remove patch which has been merged
+
 * Sun Jan 13 2019 Antoine Martin <antoine@xpra.org> - 2018.1.1-3
 - add patch for releasing the GIL during init and make_context
 

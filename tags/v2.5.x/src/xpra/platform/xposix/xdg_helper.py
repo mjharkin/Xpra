@@ -210,6 +210,19 @@ def load_xdg_menu(submenu):
                 log.error(" %s", e)
     return submenu_data
 
+def remove_icons(menu_data):
+    def noicondata(d):
+        return dict((k,v) for k,v in d.items() if k!="IconData")
+    filt = {}
+    for category, cdef in menu_data.items():
+        fcdef = dict(cdef)
+        entries = dict(fcdef.get("Entries", {}))
+        for entry, edef in tuple(entries.items()):
+            entries[entry] = noicondata(edef)
+        fcdef["Entries"] = entries
+        filt[category] = fcdef
+    return filt
+
 
 xdg_menu_data = None
 def load_xdg_menu_data():

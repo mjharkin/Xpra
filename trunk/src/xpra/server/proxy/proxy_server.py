@@ -228,7 +228,7 @@ class ProxyServer(ServerCore):
             log.error("Error: the proxy server requires an authentication mode,")
             try:
                 log.error(" client connection '%s' does not specify one", client_proto._conn.socktype)
-            except Exception:
+            except AttributeError:
                 pass
             log.error(" use 'none' to disable authentication")
             disconnect(SESSION_NOT_FOUND, "no sessions found")
@@ -458,10 +458,16 @@ class ProxyServer(ServerCore):
                 log("start_new_session: override option %s", k, exc_info=True)
                 log.warn("Warning: ignoring invalid value %s for %s (%s)", v, k, vt)
                 continue
-            log("start override: %s=%s", k, v)
             if v is not None:
                 fn = k.replace("-", "_")
-                setattr(opts, fn, v)
+                curr = getattr(opts, fn, None)
+                if curr!=v:
+                    log("start override: %24s=%-24s (default=%s)", k, v, curr)
+                    setattr(opts, fn, v)
+                else:
+                    log("start override: %24s=%-24s (unchanged)", k, v)
+            else:
+                log("start override: %24s=%-24s (invalid, unchanged)", k, v)
         opts.attach = False
         opts.start_via_proxy = False
         env = self.get_proxy_env()

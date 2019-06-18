@@ -312,9 +312,9 @@ def get_antialias_info():
                     "hintmedium"    : 1600,
                     "hintfull"      : 2200}.get(value)
         for prop_name, name, convert in (
-                                         ("Xft/HintStyle",  "hintstyle",    str),
+                                         ("Xft/HintStyle",  "hintstyle",    bytestostr),
                                          ("Xft/HintStyle",  "contrast",     get_contrast),
-                                         ("Xft/RGBA",       "orientation",  lambda x : str(x).upper())
+                                         ("Xft/RGBA",       "orientation",  lambda x : bytestostr(x).upper())
                                          ):
             if prop_name in d:
                 value_type, value = d.get(prop_name)
@@ -417,11 +417,10 @@ def _get_xresources():
             from xpra.x11.gtk_x11.prop import prop_get
             from xpra.gtk_common.gtk_util import get_default_root_window
             root = get_default_root_window()
-            v = prop_get(root, "RESOURCE_MANAGER", "latin1", ignore_errors=True)
+            value = prop_get(root, "RESOURCE_MANAGER", "latin1", ignore_errors=True)
             log("RESOURCE_MANAGER=%s", v)
-            if v is None:
+            if value is None:
                 return None
-            value = v.decode("utf-8")
             #parse the resources into a dict:
             values={}
             options = value.split("\n")

@@ -23,12 +23,22 @@ def get_interface_index(host):
     return get_iface(host)
 
 
+def inet_ton(af, addr):
+    if af==socket.AF_INET:
+        return socket.inet_aton(addr)
+    inet_pton = getattr(socket, "inet_pton", None)
+    if not inet_pton:
+        #no ipv6 support with python2 on win32:
+        return None
+    return inet_pton(af, addr)   #@UndefinedVariable
+        
+
 class ZeroconfPublishers(object):
     """
     Expose services via python zeroconf
     """
 
-    def __init__(self, listen_on, service_name, service_type=XPRA_MDNS_TYPE, text_dict={}):
+    def __init__(self, listen_on, service_name, service_type=XPRA_MDNS_TYPE, text_dict=None):
         log("ZeroconfPublishers%s", (listen_on, service_name, service_type, text_dict))
         self.zeroconf = None
         self.services = []
@@ -38,9 +48,9 @@ class ZeroconfPublishers(object):
         all_listen_on = []
         for host_str, port in listen_on:
             if host_str=="":
-                hosts = ["127.0.0.1", "::"]
+                hosts = ("127.0.0.1", "::")
             else:
-                hosts = [host_str]
+                hosts = (host_str,)
             for host in hosts:
                 if host in ("0.0.0.0", "::", ""):
                     #annoying: we have to enumerate all interfaces
@@ -51,28 +61,31 @@ class ZeroconfPublishers(object):
                                 if addr:
                                     try:
                                         addr_str = addr.split("%", 1)[0]
-                                        address = socket.inet_pton(af, addr_str)
+                                        address = inet_ton(af, addr_str)
+                                        if address:
+                                            all_listen_on.append((addr_str, port, address))
                                     except OSError as e:
                                         log("socket.inet_pton '%s'", addr_str, exc_info=True)
                                         log.error("Error: cannot parse IP address '%s'", addr_str)
                                         log.error(" %s", e)
                                         continue
-                                    all_listen_on.append((addr_str, port, address))
                     continue
                 try:
                     if host.find(":")>=0:
-                        address = socket.inet_pton(socket.AF_INET6, host)
+                        af = socket.AF_INET6
                     else:
-                        address = socket.inet_pton(socket.AF_INET, host)
+                        af = socket.AF_INET
+                    address = inet_ton(af, host)
+                    if address:
+                        all_listen_on.append((host, port, address))
                 except OSError as e:
                     log("socket.inet_pton '%s'", host, exc_info=True)
                     log.error("Error: cannot parse IP address '%s'", host)
                     log.error(" %s", e)
                     continue
-                all_listen_on.append((host, port, address))
         log("will listen on: %s", all_listen_on)
         for host, port, address in all_listen_on:
-            td = text_dict
+            td = text_dict or {}
             iface = get_iface(host)
             if iface is not None and SHOW_INTERFACE:
                 td = text_dict.copy()
@@ -110,6 +123,11 @@ class ZeroconfPublishers(object):
         self.zeroconf = None
 
 
+    def update_txt(self, txt):
+        #TODO: use stop / start to update?
+        pass
+
+
 def main():
     import random
     port = int(20000*random.random())+10000
@@ -122,6 +140,21 @@ def main():
     glib = import_glib()
     glib.idle_add(publisher.start)
     loop = glib.MainLoop()
+    def update_rec():
+        log("update_rec()")
+        from zeroconf import DNSText, _CLASS_ANY, _DNS_OTHER_TTL, current_time_millis
+        import struct
+        int2byte = struct.Struct(">B").pack
+        item = b"key=value"
+        txt_data = b"".join((int2byte(len(item)), item))
+        for service in publisher.services:
+            rec = DNSText(service.name, service.type, _CLASS_ANY, _DNS_OTHER_TTL, txt_data)
+            #service.update_record(time.time(), rec)
+            #service._set_properties({"hello" : "world"})
+            publisher.zeroconf.update_record(current_time_millis(), rec)
+        #publisher.zeroconf.notify_all()
+        return False
+    glib.timeout_add(10*1000, update_rec)
     try:
         loop.run()
     except KeyboardInterrupt:

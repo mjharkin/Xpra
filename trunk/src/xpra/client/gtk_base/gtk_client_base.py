@@ -320,7 +320,11 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         color_str = color_str.replace(":off", "")
         if color_str in ("auto", ""):
             from hashlib import md5
-            m = md5()
+            try:
+                m = md5()
+            except ValueError:
+                from hashlib import sha1
+                m = sha1()
             for x in extra_args:
                 m.update(strtobytes(x))
             color_str = "#%s" % m.hexdigest()[:6]
@@ -371,7 +375,9 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             from xpra.client.gtk_base.start_new_command import getStartNewCommand
             def run_command_cb(command, sharing=True):
                 self.send_start_command(command, command, False, sharing)
-            self.start_new_command = getStartNewCommand(run_command_cb, self.server_sharing and self.server_window_filters, self.xdg_menu)
+            self.start_new_command = getStartNewCommand(run_command_cb,
+                                                        self.server_sharing and self.server_window_filters,
+                                                        self.server_xdg_menu)
         self.start_new_command.show()
 
 
@@ -588,7 +594,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         #try native platform code first:
         x, y = window.get_position()
         w, h = window.get_size()
-        v = get_window_frame_size(x, y, w, h)
+        v = get_window_frame_size(x, y, w, h)   #pylint: disable=assignment-from-none
         framelog("get_window_frame_size%s=%s", (x, y, w, h), v)
         if v:
             #(OSX does give us these values via Quartz API)
@@ -609,7 +615,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             v = self.get_frame_extents(self.frame_request_window)
             if v:
                 try:
-                    wm_name = get_wm_name()
+                    wm_name = get_wm_name() #pylint: disable=assignment-from-none
                 except Exception:
                     wm_name = None
                 try:
@@ -675,6 +681,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
     def make_hello(self):
         capabilities = UIXpraClient.make_hello(self)
         capabilities["named_cursors"] = len(cursor_types)>0
+        capabilities["transparency"] = self.has_transparency()
         capabilities.update(flatten_dict(get_gtk_version_info()))
         if EXPORT_ICON_DATA:
             #tell the server which icons GTK can use
@@ -715,8 +722,10 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             #this is only really supported on X11, but posix is easier to check for..
             #"strut" and maybe even "fullscreen-monitors" could also be supported on other platforms I guess
             ms += ["shaded", "bypass-compositor", "strut", "fullscreen-monitors"]
-        if HAS_X11_BINDINGS and XSHAPE:
-            ms += ["shape"]
+        if HAS_X11_BINDINGS:
+            ms += ["x11-property"]
+            if XSHAPE:
+                ms += ["shape"]
         #figure out if we can handle the "global menu" stuff:
         if POSIX and not OSX:
             try:

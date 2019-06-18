@@ -19,6 +19,7 @@ from xpra.log import Logger
 log = Logger("exec")
 
 TERMINATE_DELAY = envint("XPRA_TERMINATE_DELAY", 1000)/1000.0
+MENU_RELOAD_DELAY = envint("XPRA_MENU_RELOAD_DELAY", 5)
 
 
 """
@@ -47,6 +48,9 @@ class ChildCommandServer(StubServerMixin):
         self.children_started = []
         self.child_reaper = None
         self.reaper_exit = self.reaper_exit_check
+        self.watch_manager = None
+        self.watch_notifier = None
+        self.xdg_menu_reload_timer = None
 
     def init(self, opts):
         self.exit_with_children = opts.exit_with_children
@@ -72,6 +76,42 @@ class ChildCommandServer(StubServerMixin):
             self.child_reaper.set_quit_callback(self.reaper_exit)
             self.child_reaper.check()
         self.idle_add(set_reaper_callback)
+        if not POSIX or OSX:
+            return
+        try:
+            import pyinotify
+        except ImportError as e:
+            log.warn("Warning: cannot watch for application menu changes without pyinotify:")
+            log.warn(" %s", e)
+            return
+        self.watch_manager = pyinotify.WatchManager()
+        def menu_data_updated(create, pathname):
+            log("menu_data_updated(%s, %s)", create, pathname)
+            self.schedule_xdg_menu_reload()
+        class EventHandler(pyinotify.ProcessEvent):
+            def process_IN_CREATE(self, event):
+                menu_data_updated(True, event.pathname)
+            def process_IN_DELETE(self, event):
+                menu_data_updated(False, event.pathname)
+        mask = pyinotify.IN_DELETE | pyinotify.IN_CREATE  #@UndefinedVariable pylint: disable=no-member
+        handler = EventHandler()
+        self.watch_notifier = pyinotify.ThreadedNotifier(self.watch_manager, handler)
+        self.watch_notifier.setDaemon(True)
+        data_dirs = os.environ.get("XDG_DATA_DIRS", "/usr/share/applications:/usr/local/share/applications").split(":")
+        watched = []
+        for data_dir in data_dirs:
+            menu_dir = os.path.join(data_dir, "applications")
+            if not os.path.exists(menu_dir):
+                continue
+            wdd = self.watch_manager.add_watch(menu_dir, mask)
+            watched.append(menu_dir)
+            log("watch_notifier=%s, watch=%s", self.watch_notifier, wdd)
+        self.watch_notifier.start()
+        if watched:
+            log.info("watching for applications menu changes in:")
+            for wd in watched:
+                log.info(" '%s'", wd)
+
 
     def cleanup(self):
         if self.terminate_children and self._upgrading!=EXITING_CODE:
@@ -80,6 +120,21 @@ class ChildCommandServer(StubServerMixin):
             pass
         self.reaper_exit = noop
         reaper_cleanup()
+        xmrt = self.xdg_menu_reload_timer
+        if xmrt:
+            self.xdg_menu_reload_timer = None
+            self.source_remove(xmrt)
+        wn = self.watch_notifier
+        if wn:
+            self.watch_notifier = None
+            wn.stop()
+        watch_manager = self.watch_manager
+        if watch_manager:
+            self.watch_manager = None
+            try:
+                watch_manager.close()
+            except (OSError, IOError):
+                log("error closing watch manager %s", watch_manager, exc_info=True)
 
 
     def get_server_features(self, _source):
@@ -88,15 +143,53 @@ class ChildCommandServer(StubServerMixin):
             "exit-with-children"        : self.exit_with_children,
             "server-commands-signals"   : COMMAND_SIGNALS,
             "server-commands-info"      : not WIN32 and not OSX,
+            "xdg-menu-update"           : POSIX and not OSX,
             }
 
-    def get_caps(self, _source):
+
+    def _get_xdg_menu_data(self, force_reload=False):
+        if not self.start_new_commands or not POSIX or OSX:
+            return None
+        from xpra.platform.xposix.xdg_helper import load_xdg_menu_data
+        return load_xdg_menu_data(force_reload)
+
+    def get_caps(self, source):
         caps = {}
-        if self.start_new_commands and POSIX and not OSX:
-            from xpra.platform.xposix.xdg_helper import load_xdg_menu_data
-            caps["xdg-menu"] = load_xdg_menu_data()
+        if source.wants_features:
+            xdg_menu = self._get_xdg_menu_data()
+            if xdg_menu:
+                if source.xdg_menu_update:
+                    caps["xdg-menu"] = {}
+                else:
+                    l = len(str(xdg_menu))
+                    #arbitrary: don't use more than half
+                    #of the maximum size of the hello packet:
+                    if l>2*1024*1024:
+                        from xpra.platform.xposix.xdg_helper import remove_icons
+                        xdg_menu = remove_icons(xdg_menu)
+                        log.info("removed icons to reduce the size of the xdg menu data")
+                        log.info("size reduced from %i to %i", l, len(str(xdg_menu)))
+                    caps["xdg-menu"] = xdg_menu
         return caps
 
+    def send_initial_data(self, ss, caps, send_ui, share_count):
+        xdg_menu = self._get_xdg_menu_data()
+        if ss.xdg_menu_update:
+            ss.send_setting_change("xdg-menu", xdg_menu or {})
+
+    def schedule_xdg_menu_reload(self):
+        xmrt = self.xdg_menu_reload_timer
+        if xmrt:
+            self.source_remove(xmrt)
+        self.xdg_menu_reload_timer = self.timeout_add(MENU_RELOAD_DELAY*1000, self.xdg_menu_reload)
+
+    def xdg_menu_reload(self):
+        self.xdg_menu_reload_timer = None
+        log("xdg_menu_reload()")
+        xdg_menu = self._get_xdg_menu_data(True)
+        for source in tuple(self._server_sources.values()):
+            if source.xdg_menu_update:
+                source.send_setting_change("xdg-menu", xdg_menu or {})
 
     def get_info(self, _proto):
         info = {
@@ -250,7 +343,10 @@ class ChildCommandServer(StubServerMixin):
                 cmd_names.append(bcmd)
         log("guess_session_name() commands=%s", cmd_names)
         if cmd_names:
-            self.session_name = csv(cmd_names)
+            new_name = csv(cmd_names)
+            if self.session_name!=new_name:
+                self.session_name = new_name
+                self.mdns_update()
 
 
     def _process_start_command(self, proto, packet):
@@ -272,7 +368,7 @@ class ChildCommandServer(StubServerMixin):
 
     def _process_command_signal(self, _proto, packet):
         pid = packet[1]
-        signame = packet[2]
+        signame = bytestostr(packet[2])
         if signame not in COMMAND_SIGNALS:
             log.warn("Warning: invalid signal received: '%s'", signame)
             return

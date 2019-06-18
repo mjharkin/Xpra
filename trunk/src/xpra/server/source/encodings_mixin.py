@@ -14,7 +14,7 @@ from xpra.server.window.batch_config import DamageBatchConfig
 from xpra.server.server_core import ClientException
 from xpra.codecs.video_helper import getVideoHelper
 from xpra.codecs.codec_constants import video_spec
-from xpra.net.compression import compressed_wrapper, Compressed, use_lz4, use_lzo, use_brotli
+from xpra.net.compression import use_lz4, use_lzo, use_brotli
 from xpra.os_util import monotonic_time, strtobytes
 from xpra.server.background_worker import add_work_item
 from xpra.util import csv, typedict, envint
@@ -107,17 +107,6 @@ class EncodingsMixin(StubSourceMixin):
         return caps
 
 
-    def compressed_wrapper(self, datatype, data, min_saving=128):
-        if self.zlib or self.lz4 or self.lzo:
-            cw = compressed_wrapper(datatype, data, zlib=self.zlib, lz4=self.lz4, lzo=self.lzo, can_inline=False)
-            if len(cw)+min_saving<=len(data):
-                #the compressed version is smaller, use it:
-                return cw
-            #skip compressed version: fall through
-        #we can't compress, so at least avoid warnings in the protocol layer:
-        return Compressed(datatype, data, can_inline=True)
-
-
     def recalculate_delays(self):
         """ calls update_averages() on ServerSource.statistics (GlobalStatistics)
             and WindowSource.statistics (WindowPerformanceStatistics) for each window id in calculate_window_ids,
@@ -149,7 +138,7 @@ class EncodingsMixin(StubSourceMixin):
             self.calculate_window_ids.remove(wid)
             try:
                 del self.calculate_window_pixels[wid]
-            except:
+            except KeyError:
                 pass
             ws = self.window_sources.get(wid)
             if ws is None:
@@ -160,7 +149,7 @@ class EncodingsMixin(StubSourceMixin):
                                          len(fullscreen_wids)>0 and wid not in fullscreen_wids,
                                          len(maximized_wids)>0 and wid not in maximized_wids)
                 ws.reconfigure()
-            except:
+            except Exception:
                 log.error("error on window %s", wid, exc_info=True)
             if self.is_closed():
                 return
@@ -330,7 +319,7 @@ class EncodingsMixin(StubSourceMixin):
             #enabling video proxy:
             try:
                 self.parse_proxy_video()
-            except:
+            except Exception:
                 proxylog.error("failed to parse proxy video", exc_info=True)
 
         sc = self.encoding_options.get("scaling.control", self.scaling_control)

@@ -20,7 +20,7 @@ from xpra.util import (
     std, envbool, envint, typedict, updict, repr_ellipsized,
     XPRA_AUDIO_NOTIFICATION_ID, XPRA_DISCONNECT_NOTIFICATION_ID,
     )
-from xpra.exit_codes import EXIT_FAILURE, EXIT_OK
+from xpra.exit_codes import EXIT_CONNECTION_FAILED, EXIT_OK, EXIT_CONNECTION_LOST
 from xpra.version_util import get_version_info_full, get_platform_info
 from xpra.client import mixin_features
 from xpra.log import Logger
@@ -104,7 +104,7 @@ class UIXpraClient(ClientBaseClass):
             log.info(" running on %s", osinfo)
         except:
             log("platform name error:", exc_info=True)
-        wm = get_wm_name()
+        wm = get_wm_name()      #pylint: disable=assignment-from-none
         if wm:
             log.info(" window manager is '%s'", wm)
 
@@ -121,7 +121,7 @@ class UIXpraClient(ClientBaseClass):
         self.readonly = False
         self.xsettings_enabled = False
         self.server_start_new_commands = False
-        self.xdg_menu = {}
+        self.server_xdg_menu = None
         self.start_new_commands  = []
         self.start_child_new_commands  = []
 
@@ -194,7 +194,7 @@ class UIXpraClient(ClientBaseClass):
             self.init_opengl(opts.opengl)
 
         if ClientExtras is not None:
-            self.client_extras = ClientExtras(self, opts)
+            self.client_extras = ClientExtras(self, opts)   #pylint: disable=not-callable
 
         if opts.start or opts.start_child:
             from xpra.scripts.main import strip_defaults_start_child
@@ -306,12 +306,19 @@ class UIXpraClient(ClientBaseClass):
     # trigger notifications on disconnection,
     # and wait before actually exiting so the notification has a chance of being seen
     def server_disconnect_warning(self, reason, *info):
-        body = "\n".join(info)
-        self.may_notify(XPRA_DISCONNECT_NOTIFICATION_ID,
-                        "Xpra Session Disconnected: %s" % reason, body, icon_name="disconnected")
-        self.exit_code = EXIT_FAILURE
-        delay = NOTIFICATION_EXIT_DELAY*mixin_features.notifications
-        self.timeout_add(delay*1000, XpraClientBase.server_disconnect_warning, self, reason, *info)
+        if self.exit_code is None:
+            body = "\n".join(info)
+            if self.server_capabilities:
+                title = "Xpra Session Disconnected: %s" % reason
+                self.exit_code = EXIT_CONNECTION_LOST
+            else:
+                title = "Connection Failed: %s" % reason
+                self.exit_code = EXIT_CONNECTION_FAILED
+            self.may_notify(XPRA_DISCONNECT_NOTIFICATION_ID,
+                            title, body, icon_name="disconnected")
+            #show text notification then quit:
+            delay = NOTIFICATION_EXIT_DELAY*mixin_features.notifications
+            self.timeout_add(delay*1000, XpraClientBase.server_disconnect_warning, self, reason, *info)
         self.cleanup()
 
     def server_disconnect(self, reason, *info):
@@ -340,6 +347,7 @@ class UIXpraClient(ClientBaseClass):
                 pass
         for x in (#generic feature flags:
             "notify-startup-complete", "wants_events", "setting-change",
+            "xdg-menu-update",
             ):
             caps[x] = True
         #FIXME: the messy bits without proper namespace:
@@ -391,7 +399,7 @@ class UIXpraClient(ClientBaseClass):
         self.server_pointer = c.boolget("pointer", True)
         self.server_start_new_commands = c.boolget("start-new-commands")
         if self.server_start_new_commands:
-            self.xdg_menu = c.dictget("xdg-menu")
+            self.server_xdg_menu = c.dictget("xdg-menu", None)
         if self.start_new_commands or self.start_child_new_commands:
             if self.server_start_new_commands:
                 self.after_handshake(self.send_start_new_commands)
@@ -499,12 +507,16 @@ class UIXpraClient(ClientBaseClass):
             "sharing", "sharing-toggle", "lock", "lock-toggle",
             "start-new-commands", "client-shutdown", "webcam",
             "bandwidth-limit", "clipboard-limits",
+            "xdg-menu",
             ):
             setattr(self, "server_%s" % setting.replace("-", "_"), value)
         else:
-            log.info("unknown server setting changed: %s=%s", setting, value)
+            log.info("unknown server setting changed: %s=%s", setting, repr_ellipsized(str(value)))
             return
-        log.info("server setting changed: %s=%s", setting, value)
+        log("_process_setting_change: %s=%s", setting, value)
+        #xdg-menu is too big to log
+        if setting not in ("xdg-menu", ):
+            log.info("server setting changed: %s=%s", setting, repr_ellipsized(str(value)))
         self.server_setting_changed(setting, value)
 
     def server_setting_changed(self, setting, value):

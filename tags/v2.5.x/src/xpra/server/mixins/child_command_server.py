@@ -89,11 +89,20 @@ class ChildCommandServer(StubServerMixin):
             "server-commands-info"      : not WIN32 and not OSX,
             }
 
-    def get_caps(self, _source):
+    def get_caps(self, source):
         caps = {}
-        if self.start_new_commands and POSIX and not OSX:
-            from xpra.platform.xposix.xdg_helper import load_xdg_menu_data
-            caps["xdg-menu"] = load_xdg_menu_data()
+        if self.start_new_commands and POSIX and not OSX and source.wants_features:
+            from xpra.platform.xposix.xdg_helper import load_xdg_menu_data, remove_icons
+            xdg_menu = load_xdg_menu_data()
+            if xdg_menu:
+                l = len(str(xdg_menu))
+                #arbitrary: don't use more than half
+                #of the maximum size of the hello packet:
+                if l>2*1024*1024:
+                    xdg_menu = remove_icons(xdg_menu)
+                    log.info("removed icons to reduce the size of the xdg menu data")
+                    log.info("size reduced from %i to %i", l, len(str(xdg_menu)))
+                caps["xdg-menu"] = xdg_menu
         return caps
 
 
@@ -271,7 +280,7 @@ class ChildCommandServer(StubServerMixin):
 
     def _process_command_signal(self, _proto, packet):
         pid = packet[1]
-        signame = packet[2]
+        signame = bytestostr(packet[2])
         if signame not in COMMAND_SIGNALS:
             log.warn("Warning: invalid signal received: '%s'", signame)
             return

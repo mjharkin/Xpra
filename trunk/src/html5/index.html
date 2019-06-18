@@ -79,7 +79,7 @@
 							<li class="-hasSubmenu">
 								<a href="#" data-icon="kitchen">Server</a>
 								<ul>
-									<li><a href="#" data-icon="access_time" onclick="return false" id="clock_menu_text"></a></li>
+									<li id="clock_menu_entry"><a href="#" data-icon="access_time" onclick="return false" id="clock_menu_text"></a></li>
 									<li><a href="#" data-icon="cloud_upload" onclick="upload_file(event); return false">Upload file</a></li>
 									<li><a href="#" data-icon="exit_to_app" onclick="confirm_shutdown_server(event); return false">Shutdown Server</a></li>
 								</ul>
@@ -104,7 +104,7 @@
 						</ul>
 					</li>
 					<li class="-hasSubmenu -noChevron">
-						<a href="#"   title="Open Windows" data-icon="filter"></a>
+						<a href="#" title="Open Windows" data-icon="filter"></a>
 						<ul id="open_windows_list">
 						</ul>
 					</li>
@@ -112,11 +112,10 @@
 						<a href="#" id="fullscreen_button" title="Fullscreen" data-icon="fullscreen"></a>
 					</li>
 					<li class="-hasSubmenu -noChevron">
-						<a href="#" id="sound_button"  title="Sound" data-icon="volume_off"></a>
-						</ul>
+						<a href="#" id="sound_button" title="Audio" data-icon="volume_off"></a>
 					</li>
-					<div id="float_tray"  class="menu-divright"></div>
 				</ul>
+				<div id="float_tray"  class="menu-divright"></div>
 			</div>
 		</div>
 
@@ -202,9 +201,9 @@
 			</form>
 		</div>
 
-	    <div>
+		<div>
 			<textarea id="pasteboard" style="display: block; position: absolute; left: -99em;"></textarea>
-	    </div>
+		</div>
 
 		<script>
 			var getparam = Utilities.getparam;
@@ -274,7 +273,7 @@
 					$("#pasteboard").focus();
 				}
 			});
-		    <!--  <textarea id="pasteboard" onblur="this.focus()" autofocus style="display: block; position: absolute; left: -99em;"></textarea> -->
+			<!--  <textarea id="pasteboard" onblur="this.focus()" autofocus style="display: block; position: absolute; left: -99em;"></textarea> -->
 
 			function show_about(event) {
 				$('.menu-content').slideUp();
@@ -330,8 +329,8 @@
 					$("#client_latency").html(client.client_ping_latency);
 				//TODO:
 				// * add packet counter to Protocol.js
-	  	        //"Packets Received"
-	  	        //"Encoding + Compression"
+	  			//"Packets Received"
+	  			//"Encoding + Compression"
 				}, false);
 
 
@@ -363,9 +362,20 @@
 				var zip = new JSZip();
 				zip.file("Summary.txt", ""+$("#bugreport_summary").val()+"\n\n"+$("#bugreport_description").val());
 				zip.file("Server-Info.txt", ""+JSON.stringify(client.server_last_info));
+				//screenshot:
+				var canvas = document.createElement('canvas')
+				canvas.width = client.desktop_width;
+				canvas.height = client.desktop_height;
+				var ctx = canvas.getContext('2d')
+				for (var i in client.id_to_window) {
+					var iwin = client.id_to_window[i];
+					ctx.drawImage(iwin.draw_canvas, iwin.x, iwin.y);
+				}
+				var png_base64 = canvas.toDataURL("image/png");
+				zip.file("screenshot.png", Utilities.convertDataURIToBinary(png_base64));
 				zip.generateAsync({type:"blob"})
 				.then(function(content) {
-				    saveAs(content, "bugreport.zip");
+					saveAs(content, "bugreport.zip");
 				});
 				hide_bugreport();
 			}
@@ -403,7 +413,7 @@
 				// look at url parameters
 				var username = getparam("username") || null;
 				var password = getparam("password") || null;
-				var sound = getboolparam("sound") || null;
+				var sound = getboolparam("sound", true) || null;
 				var audio_codec = getparam("audio_codec") || null;
 				var encoding = getparam("encoding") || null;
 				var bandwidth_limit = getparam("bandwidth_limit") || 0;
@@ -489,39 +499,39 @@
 				client.debug_categories = debug_categories;
 				client.remote_logging = remote_logging;
 				client.sharing = sharing;
-		    	client.insecure = insecure;
-		    	client.clipboard_enabled = clipboard;
-		    	client.printing = printing;
-		    	client.file_transfer = file_transfer;
-		    	client.bandwidth_limit = bandwidth_limit;
-		    	client.steal = steal;
-		    	client.reconnect = reconnect;
-		    	client.swap_keys = swap_keys;
-		    	client.on_connection_progress = connection_progress;
-		    	//example overrides:
-		    	//client.HELLO_TIMEOUT = 3600000;
-		    	//client.PING_TIMEOUT = 60000;
-		    	//client.PING_GRACE = 30000;
-		    	//client.PING_FREQUENCY = 15000;
+				client.insecure = insecure;
+				client.clipboard_enabled = clipboard;
+				client.printing = printing;
+				client.file_transfer = file_transfer;
+				client.bandwidth_limit = bandwidth_limit;
+				client.steal = steal;
+				client.reconnect = reconnect;
+				client.swap_keys = swap_keys;
+				client.on_connection_progress = connection_progress;
+				//example overrides:
+				//client.HELLO_TIMEOUT = 3600000;
+				//client.PING_TIMEOUT = 60000;
+				//client.PING_GRACE = 30000;
+				//client.PING_FREQUENCY = 15000;
 
-		    	if (debug) {
-		    		//example of client event hooks:
-			    	client.on_open = function() {
-			    		cdebug("network", "connection open");
-			    	};
-			    	client.on_connect = function() {
-			    		cdebug("network", "connection established");
-			    	};
-			    	client.on_first_ui_event = function() {
-			    		cdebug("network", "first ui event");
-			    	};
-			    	client.on_last_window = function() {
-			    		cdebug("network", "last window disappeared");
-			    	};
-		    	}
+				if (debug) {
+					//example of client event hooks:
+					client.on_open = function() {
+						cdebug("network", "connection open");
+					};
+					client.on_connect = function() {
+						cdebug("network", "connection established");
+					};
+					client.on_first_ui_event = function() {
+						cdebug("network", "first ui event");
+					};
+					client.on_last_window = function() {
+						cdebug("network", "last window disappeared");
+					};
+				}
 
-			    // mediasource video
-			    if(video) {
+				// mediasource video
+				if(video) {
 					client.supported_encodings.push("h264");
 					if (JSMpeg && JSMpeg.Renderer && JSMpeg.Decoder) {
 						client.supported_encodings.push("mpeg1");
@@ -529,151 +539,150 @@
 					if(mediasource_video) {
 						client.supported_encodings.push("vp8+webm", "h264+mp4", "mpeg4+mp4");
 					}
-			    }
-			    else if(encoding && (encoding !== "auto")) {
+				}
+				else if(encoding && (encoding !== "auto")) {
 					// the primary encoding can be set
 					client.enable_encoding(encoding);
 				}
-			    // encodings can be disabled like so
-			    // client.disable_encoding("h264");
-			    if(action && (action!="connect")) {
-			    	sns = {
-			    			"mode" 	: action,
-			    	};
-    				if (exit_with_children) {
-    					sns["exit-with-children"] = true;
-    	    			if(start) {
-    	    				sns["start-child"] = [start];
-    	    			}
-    				}
-    				else {
-		    			if(start) {
-		    				sns["start"] = [start];
-		    			}
-    				}
-    				if (exit_with_client) {
-    					sns["exit-with-client"] = true;
-    				}
-			    	client.start_new_session = sns
-			    }
+				// encodings can be disabled like so
+				// client.disable_encoding("h264");
+				if(action && (action!="connect")) {
+					sns = {
+							"mode" 	: action,
+					};
+					if (exit_with_children) {
+						sns["exit-with-children"] = true;
+						if(start) {
+							sns["start-child"] = [start];
+						}
+					}
+					else {
+						if(start) {
+							sns["start"] = [start];
+						}
+					}
+					if (exit_with_client) {
+						sns["exit-with-client"] = true;
+					}
+					client.start_new_session = sns
+				}
 
-			    // sound support
-			    if(sound) {
-			    	client.audio_enabled = true;
-			    	clog("sound enabled, audio codec string: "+audio_codec);
-			    	if(audio_codec && audio_codec.includes(":")) {
-				    	var acparts = audio_codec.split(":");
-				    	client.audio_framework = acparts[0];
-				    	client.audio_codec = acparts[1];
-			    	}
-			    	client.audio_mediasource_enabled = getboolparam("mediasource", true);
-			    	client.audio_aurora_enabled = getboolparam("aurora", true);
-			    	client.audio_httpstream_enabled = getboolparam("http-stream", true);
-			    	$('#sound_button').attr('data-icon', 'volume_up');
-			    }
+				// sound support
+				if(sound) {
+					client.audio_enabled = true;
+					clog("sound enabled, audio codec string: "+audio_codec);
+					if(audio_codec && audio_codec.includes(":")) {
+						var acparts = audio_codec.split(":");
+						client.audio_framework = acparts[0];
+						client.audio_codec = acparts[1];
+					}
+					client.audio_mediasource_enabled = getboolparam("mediasource", true);
+					client.audio_aurora_enabled = getboolparam("aurora", true);
+					client.audio_httpstream_enabled = getboolparam("http-stream", true);
+				}
 
-			    if(keyboard_layout) {
-			    	client.keyboard_layout = keyboard_layout;
-			    }
+				if(keyboard_layout) {
+					client.keyboard_layout = keyboard_layout;
+				}
 
-			    // check for username and password
-			    if(username) {
-			    	client.username = username;
-			    }
-			    if(password) {
-			    	client.password = password;
-			    }
+				// check for username and password
+				if(username) {
+					client.username = username;
+				}
+				if(password) {
+					client.password = password;
+				}
 
-			    // check for encryption parameters
-			    if(encryption) {
-			    	client.encryption = encryption;
-			    	if(key) {
-			    		client.encryption_key = key;
-			    	}
-			    }
+				// check for encryption parameters
+				if(encryption) {
+					client.encryption = encryption;
+					if(key) {
+						client.encryption_key = key;
+					}
+				}
 
-			    // attach a callback for when client closes
-			    var debug_main = getboolparam("debug_main", false);
-			    if(!debug_main) {
-				    client.callback_close = function(reason) {
-				    	if(submit) {
-				    		var message = "Connection closed (socket closed)";
-				    		if(reason) {
-				    			message = reason;
-				    		}
-				    		var url = "./connect.html";
-				    		var has_session_storage = Utilities.hasSessionStorage();
-				    		function add_prop(prop, value) {
-				    			if (has_session_storage) {
-				    				if (value===null || value==="undefined") {
-				    					sessionStorage.removeItem(prop);
-				    				}
-				    				else {
-				    					sessionStorage.setItem(prop, value);
-				    				}
-				    			} else {
-				    				if (value===null || value==="undefined") {
-				    					value = "";
-				    				}
-				    				url = url + "&"+prop+"="+encodeURIComponent(""+value);
-				    			}
-				    		}
-				    		add_prop("disconnect", message);
-				    		var props = {
-				    				"username"			: username,
-				    				"insecure"			: insecure,
-				    				"server"			: server,
-				    				"port"				: port,
-				    				"encoding"			: encoding,
-				    				"bandwidth_limit"	: bandwidth_limit,
-				    				"keyboard_layout"	: keyboard_layout,
-				    				"action"			: action,
-				    				"sound"				: sound,
-				    				"audio_codec"		: audio_codec,
-				    				"clipboard"			: clipboard,
-				    				"exit_with_children": exit_with_children,
-				    				"exit_with_client"	: exit_with_client,
-				    				"sharing"			: sharing,
-				    				"steal"				: steal,
-				    				"video"				: video,
-				    				"mediasource_video"	: mediasource_video,
-				    				"remote_logging"	: remote_logging,
-				    				"insecure"			: insecure,
-				    				"ignore_audio_blacklist" : ignore_audio_blacklist,
-				    				}
+				// attach a callback for when client closes
+				var debug_main = getboolparam("debug_main", false);
+				if(!debug_main) {
+					client.callback_close = function(reason) {
+						if(submit) {
+							var message = "Connection closed (socket closed)";
+							if(reason) {
+								message = reason;
+							}
+							var url = "./connect.html";
+							var has_session_storage = Utilities.hasSessionStorage();
+							function add_prop(prop, value) {
+								if (has_session_storage) {
+									if (value===null || value==="undefined") {
+										sessionStorage.removeItem(prop);
+									}
+									else {
+										sessionStorage.setItem(prop, value);
+									}
+								} else {
+									if (value===null || value==="undefined") {
+										value = "";
+									}
+									url = url + "&"+prop+"="+encodeURIComponent(""+value);
+								}
+							}
+							add_prop("disconnect", message);
+							var props = {
+									"username"			: username,
+									"insecure"			: insecure,
+									"server"			: server,
+									"port"				: port,
+									"encoding"			: encoding,
+									"bandwidth_limit"	: bandwidth_limit,
+									"keyboard_layout"	: keyboard_layout,
+									"action"			: action,
+									"sound"				: sound,
+									"audio_codec"		: audio_codec,
+									"clipboard"			: clipboard,
+									"exit_with_children": exit_with_children,
+									"exit_with_client"	: exit_with_client,
+									"sharing"			: sharing,
+									"steal"				: steal,
+									"video"				: video,
+									"mediasource_video"	: mediasource_video,
+									"remote_logging"	: remote_logging,
+									"insecure"			: insecure,
+									"ignore_audio_blacklist" : ignore_audio_blacklist,
+									}
 							for (var i=0, len=client.debug_categories.length; i < len; i++) {
 								var category = client.debug_categories[i];
 								props["debug_"+category] = true;
 							}
-				    		if (insecure || Utilities.hasSessionStorage()) {
-			    				props["password"] = password;
-				    		}
-				    		else {
-				    			props["password"] = "";
-				    		}
-				    		for (var name in props) {
-				    			var value = props[name];
-					    		add_prop(name, value);
-				    		}
-				    		window.location=url;
-				    	} else {
-					    	// if we didn't submit through the form, silently redirect to the connect gui
-					    	window.location="connect.html";
-					    }
-				    }
+							if (insecure || Utilities.hasSessionStorage()) {
+								props["password"] = password;
+							}
+							else {
+								props["password"] = "";
+							}
+							for (var name in props) {
+								var value = props[name];
+								add_prop(name, value);
+							}
+							window.location=url;
+						} else {
+							// if we didn't submit through the form, silently redirect to the connect gui
+							window.location="connect.html";
+						}
+					}
 				}
-			    client.init(ignore_audio_blacklist);
+				client.init(ignore_audio_blacklist);
 
-			    client.host = server;
-			    client.port = port;
-			    client.ssl = ssl;
-			    client.path = path;
+				client.host = server;
+				client.port = port;
+				client.ssl = ssl;
+				client.path = path;
 				return client;
 			}
 
 			function init_tablet_input(client) {
 			   	//keyboard input for tablets:
-			    var pasteboard = $('#pasteboard');
+				var pasteboard = $('#pasteboard');
 			   	pasteboard.on("input", function(e) {
 			   		var txt = pasteboard.val();
 			   		pasteboard.val("");
@@ -703,48 +712,89 @@
 			}
 
 			function init_clipboard(client) {
-			    var pasteboard = $('#pasteboard');
-			    //clipboard hooks:
+				var pasteboard = $('#pasteboard');
+				//clipboard hooks:
 				pasteboard.on('paste', function (e) {
-					var paste_data = (e.originalEvent || e).clipboardData.getData('text/plain');
-					cdebug("clipboard", "paste event, data=", paste_data);
-			        client.send_clipboard_token(unescape(encodeURIComponent(paste_data)));
-			        return false;
+					var paste_data;
+					if (navigator.clipboard && navigator.clipboard.readText) {
+						navigator.clipboard.readText().then(function(text) {
+							cdebug("clipboard", "paste event, text=", text);
+							client.send_clipboard_token(unescape(encodeURIComponent(text)));
+						}, function(err) {
+							cdebug("clipboard", "paste event failed:", err);
+						});
+					}
+					else {
+						var datatype = "text/plain";
+						var clipboardData = (e.originalEvent || e).clipboardData;
+						//IE: must use window.clipboardData because the event clipboardData is null!
+						if (!clipboardData) {
+							clipboardData = window.clipboardData;
+						}
+						if (Utilities.isIE()) {
+							datatype = "Text";
+						}
+						paste_data = clipboardData.getData(datatype);
+						cdebug("clipboard", "paste event, data=", paste_data);
+						client.clipboard_buffer = paste_data;
+						client.send_clipboard_token(unescape(encodeURIComponent(paste_data)));
+					}
+					return false;
 				});
 				pasteboard.on('copy', function (e) {
-			        var clipboard_buffer = client.get_clipboard_buffer();
-			        pasteboard.text(decodeURIComponent(escape(clipboard_buffer)));
-			        pasteboard.select();
-			        cdebug("clipboard", "copy event, clipboard buffer=", clipboard_buffer);
-			        client.clipboard_pending = false;
-			        return true;
+					var clipboard_buffer = client.get_clipboard_buffer();
+					pasteboard.text(decodeURIComponent(escape(clipboard_buffer)));
+					pasteboard.select();
+					cdebug("clipboard", "copy event, clipboard buffer=", clipboard_buffer);
+					client.clipboard_pending = false;
+					return true;
 				});
 				pasteboard.on('cut', function (e) {
-			        var clipboard_buffer = client.get_clipboard_buffer();
-			        pasteboard.text(decodeURIComponent(escape(clipboard_buffer)));
-			        pasteboard.select();
+					var clipboard_buffer = client.get_clipboard_buffer();
+					pasteboard.text(decodeURIComponent(escape(clipboard_buffer)));
+					pasteboard.select();
 					cdebug("clipboard", "cut event, clipboard buffer=", clipboard_buffer);
-			        client.clipboard_pending = false;
-			        return true;
+					client.clipboard_pending = false;
+					return true;
 				});
 				$('#screen').on('click', function (e) {
-					//clog("click pending=", client.clipboard_pending, "buffer=", client.clipboard_buffer);
+					cdebug("clipboard", "click pending=", client.clipboard_pending, "buffer=", client.clipboard_buffer);
 					if (client.clipboard_pending) {
-				        var clipboard_buffer = client.get_clipboard_buffer();
-				        pasteboard.text(clipboard_buffer);
-				        pasteboard.select();
-						cdebug("clipboard", "click event, with pending clipboard buffer=", clipboard_buffer);
-						//for IE:
-						var success = true;
-						if (window.clipboardData && window.clipboardData.setData) {
-					        clipboardData.setData("Text", this.clipboard_buffer);
+						var clipboard_buffer = client.get_clipboard_buffer();
+						var clipboard_datatype = (client.get_clipboard_datatype() || "").toLowerCase();
+						var is_text = clipboard_datatype.indexOf("text")>=0 || clipboard_datatype.indexOf("string")>=0;
+						if (is_text) {
+							pasteboard.text(clipboard_buffer);
 						}
-					    else {
+						else {
+							pasteboard.text("");
+						}
+						pasteboard.select();
+						cdebug("clipboard", "click event, with pending clipboard datatype=", clipboard_datatype, ", buffer=", clipboard_buffer);
+						//for IE:
+						var success = false;
+						if (window.clipboardData && window.clipboardData.setData) {
+							try {
+								if (Utilities.isIE()) {
+									clipboardData.setData("Text", clipboard_buffer);
+								}
+								else {
+									clipboardData.setData(clipboard_datatype, clipboard_buffer);
+								}
+								success = true;
+							}
+							catch (e) {
+								success = false;
+							}
+						}
+						if (!success && is_text) {
 							success = document.execCommand('copy');
-							//clog("copy success=", success);
+						}
+						else {
+							//probably no point in trying again?
 						}
 						if (success) {
-					        client.clipboard_pending = false;
+							client.clipboard_pending = false;
 						}
 					}
 				});
@@ -787,11 +837,15 @@
 					return false;
 				});
 				$("#upload_form").on('submit',function(evt){
-				    evt.preventDefault();
+					evt.preventDefault();
 				});
 			}
 
-			function init_clock(client) {
+			function init_clock(client, enabled) {
+				if (!enabled) {
+					$("#clock_menu_entry").hide();
+					return;
+				}
 				function update_clock() {
 					var now = new Date().getTime();
 					var server_time = client.last_ping_server_time + (now - client.last_ping_local_time);
@@ -831,7 +885,7 @@
 				var f_el = document.fullscreenElement || document.mozFullScreen || document.webkitIsFullScreen || document.msFullscreenElement;
 					if (!f_el) {
 						var elem = document.getElementById("fullscreen_button");
-				        var req = elem.requestFullScreen || elem.webkitRequestFullScreen || elem.mozRequestFullScreen || elem.msRequestFullscreen;
+						var req = elem.requestFullScreen || elem.webkitRequestFullScreen || elem.mozRequestFullScreen || elem.msRequestFullscreen;
 						if (req) {
 							req.call(document.body);
 						}
@@ -841,14 +895,14 @@
 
 					} else {
 						if (document.exitFullscreen) {
-				            document.exitFullscreen();
-				        } else if (document.webkitExitFullscreen) {
-				            document.webkitExitFullscreen();
-				        } else if (document.mozCancelFullScreen) {
-				            document.mozCancelFullScreen();
-				        } else if (document.msExitFullscreen) {
-				            document.msExitFullscreen();
-				        }
+							document.exitFullscreen();
+						} else if (document.webkitExitFullscreen) {
+							document.webkitExitFullscreen();
+						} else if (document.mozCancelFullScreen) {
+							document.mozCancelFullScreen();
+						} else if (document.msExitFullscreen) {
+							document.msExitFullscreen();
+						}
 					}
 			}
 			
@@ -865,7 +919,7 @@
 				document.getElementById('float_menu').style.width ='0px'; $('#float_menu').children().hide();
 			}
 
-			if (getboolparam("autohide", true)) {
+			if (getboolparam("autohide", false)) {
 				$('#float_menu').on('mouseover', expand_float_menu);
 				$('#float_menu').on('mouseout', retract_float_menu);
 			}
@@ -880,48 +934,62 @@
 				set_touchaction();
 				
 				client = init_client();
-			    client.connect();
+				client.connect();
 
-			    //from now on, send log and debug to client function
-			    //which may forward it to the server once connected:
-			    clog = function() {
-			    	client.log.apply(client, arguments);
-			    }
-			    cdebug = function() {
-			    	client.debug.apply(client, arguments);
-			    }
-			    init_tablet_input(client);
-			    if (client.clipboard_enabled) {
-			    	init_clipboard(client);
-			    }
+				//from now on, send log and debug to client function
+				//which may forward it to the server once connected:
+				clog = function() {
+					client.log.apply(client, arguments);
+				}
+				cdebug = function() {
+					client.debug.apply(client, arguments);
+				}
+				init_tablet_input(client);
+				if (client.clipboard_enabled) {
+					init_clipboard(client);
+				}
 			   	if (client.file_transfer) {
 			   		init_file_transfer(client);
 			   	}
 			   	else {
 			   		$('upload_link').removeAttr('href');
 			   	}
-				if (getboolparam("clock")) {
-					init_clock(client);
-				}
-		    	client.on_audio_state_change = function(newstate, details) {
-		    		var tooltip = "";
-		    		var image_name = "";
-		    		if (newstate=="playing") {
-		    			image_name = "speaker.png";
-		    			tooltip = details || "playing";
-		    		}
-		    		else if (newstate=="waiting") {
-		    			image_name = "speaker-buffering.png";
-		    			tooltip = details || "buffering";
-		    		}
-		    		else {
-		    			image_name = "speaker-off.png";
-		    			tooltip = details || "off";
-		    		}
-		    		clog("audio-state:", newstate);
-		    		$("#speaker_icon").attr("src", "./icons/"+image_name);
-		    		$("#speaker_icon").attr("title", tooltip);
-		    	};
+				init_clock(client, getboolparam("clock", true));
+				client.on_audio_state_change = function(newstate, details) {
+					if (client.audio_state == newstate) {
+						return;
+					}
+					client.audio_state = newstate;
+					var tooltip = "";
+					var data_icon = "";
+					if (newstate=="playing") {
+						data_icon = "volume_up";
+						tooltip = "audio playing,\nclick to stop";
+					}
+					else if (newstate=="waiting") {
+						data_icon = "volume_up";
+						tooltip = "audio buffering";
+					}
+					else {
+						data_icon = "volume_off";
+						tooltip = "audio off,\nclick to start";
+					}
+					clog("audio-state:", newstate);
+					$("#sound_button").attr("data-icon", data_icon);
+					$("#sound_button").attr("title", tooltip);
+				};
+				$("#sound_button").click(function() {
+					clog("speaker icon clicked");
+					if (client.audio_state=="playing" || client.audio_state=="waiting") {
+						client.on_audio_state_change("stopped", "user action");
+						client.close_audio();
+					}
+					else {
+						client.on_audio_state_change("waiting", "user action");
+						client._audio_start_stream();
+						client._sound_start_receiving();
+					}
+				})
 				document.addEventListener("visibilitychange", function (e) {
 					window_ids = Object.keys(client.id_to_window).map(Number);
 					clog("visibilitychange hidden=", document.hidden, "connected=", client.connected);
@@ -948,10 +1016,10 @@
 				$(document).on(screen_change_events, function () {
 					var f_el = document.fullscreenElement || document.mozFullScreen || document.webkitIsFullScreen || document.msFullscreenElement;
 					clog("fullscreenchange:", f_el);
-				    if (f_el == null) {
-				    	//we're not in fullscreen mode now, so show fullscreen icon again:
+					if (f_el == null) {
+						//we're not in fullscreen mode now, so show fullscreen icon again:
 						$('#fullscreen_button').attr('data-icon', 'fullscreen');
-				    }
+					}
 				});
 			});
 		</script>

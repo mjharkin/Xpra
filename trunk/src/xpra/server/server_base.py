@@ -78,6 +78,7 @@ log("ServerBaseClass%s", SERVER_BASES)
 
 CLIENT_CAN_SHUTDOWN = envbool("XPRA_CLIENT_CAN_SHUTDOWN", True)
 INIT_THREAD_TIMEOUT = envint("XPRA_INIT_THREAD_TIMEOUT", 10)
+MDNS_CLIENT_COUNT = envbool("XPRA_MDNS_CLIENT_COUNT", True)
 
 
 """
@@ -97,6 +98,7 @@ class ServerBase(ServerBaseClass):
         self._authenticated_packet_handlers = {}
         self._authenticated_ui_packet_handlers = {}
 
+        self.display_pid = 0
         self._server_sources = {}
         self.client_properties = {}
         self.ui_driver = None
@@ -143,7 +145,6 @@ class ServerBase(ServerBaseClass):
         self.idle_timeout = opts.idle_timeout
         self.av_sync = opts.av_sync
         self.bandwidth_detection = opts.bandwidth_detection
-
 
     def setup(self):
         log("starting component init")
@@ -198,6 +199,13 @@ class ServerBase(ServerBaseClass):
         log.info("Shutting down in response to client request")
         self.cleanup_all_protocols(SERVER_SHUTDOWN)
         self.timeout_add(500, self.clean_quit)
+
+
+    def get_mdns_info(self):
+        mdns_info = ServerCore.get_mdns_info(self)
+        if MDNS_CLIENT_COUNT:
+            mdns_info["clients"] = len(self._server_sources)
+        return mdns_info
 
 
     ######################################################################
@@ -350,6 +358,7 @@ class ServerBase(ServerBaseClass):
             raise
         self.notify_new_user(ss)
         self._server_sources[proto] = ss
+        self.mdns_update()
         #process ui half in ui thread:
         send_ui = ui_client and not is_request
         self.idle_add(self._process_hello_ui, ss, c, auth_caps, send_ui, share_count)
@@ -402,7 +411,7 @@ class ServerBase(ServerBaseClass):
     def client_startup_complete(self, ss):
         ss.startup_complete()
         self.server_event("startup-complete", ss.uuid)
-        if not self.start_after_connect_done:
+        if not self.start_after_connect_done:   #pylint: disable=access-member-before-definition
             self.start_after_connect_done = True
             self.exec_after_connect_commands()
         self.exec_on_connect_commands()
@@ -732,12 +741,26 @@ class ServerBase(ServerBaseClass):
         if not source:
             httplog.warn("Warning: no client matching uuid '%s'", uuid)
             return err()
+        #don't close the connection when handler.finish() is called,
+        #we will continue to write to this socket as we process more buffers:
+        finish = handler.finish
+        def do_finish():
+            try:
+                finish()
+            except:
+                log("error calling %s", finish, exc_info=True)
+        def noop():
+            pass
+        handler.finish = noop
         state = {}
         def new_buffer(_sound_source, data, _metadata, packet_metadata=()):
+            if state.get("failed"):
+                return
             if not state.get("started"):
                 httplog.warn("buffer received but stream is not started yet")
-                err()
                 source.stop_sending_sound()
+                err()
+                do_finish()
                 return
             count = state.get("buffers", 0)
             httplog("new_buffer [%i] for %s sound stream: %i bytes", count, state.get("codec", "?"), len(data))
@@ -747,30 +770,45 @@ class ServerBase(ServerBaseClass):
                 for x in packet_metadata:
                     handler.wfile.write(x)
                 handler.wfile.write(data)
+                handler.wfile.flush()
             except Exception as e:
+                state["failed"] = True
+                httplog("failed to send new audio buffer", exc_info=True)
                 httplog.warn("Error: failed to send audio packet:")
                 httplog.warn(" %s", e)
                 source.stop_sending_sound()
-                return
-        def new_stream(_sound_source, codec):
+                do_finish()
+        def new_stream(sound_source, codec):
+            codec = bytestostr(codec)
             httplog("new_stream: %s", codec)
-            state["started"] = True
-            state["buffers"] = 0
-            state["codec"] = codec
-            handler.send_response(200)
+            sound_source.codec = codec
             headers = {
                 "Content-type"      : "audio/mpeg",
                 }
-            for k,v in headers.items():
-                handler.send_header(k, v)
-            handler.end_headers()
+            try:
+                handler.send_response(200)
+                for k,v in headers.items():
+                    handler.send_header(k, v)
+                handler.end_headers()
+            except ValueError:
+                httplog("new_stream error writing headers", exc_info=True)
+                state["failed"] = True
+                source.stop_sending_sound()
+                do_finish()
+            else:
+                state["started"] = True
+                state["buffers"] = 0
+                state["codec"] = codec
         def timeout_check():
             if not state.get("started"):
                 err()
+                source.stop_sending_sound()
         if source.sound_source:
             source.stop_sending_sound()
-        source.start_sending_sound("mp3", volume=1.0, new_stream=new_stream,
-                                   new_buffer=new_buffer, skip_client_codec_check=True)
+        def start_sending_sound():
+            source.start_sending_sound("mp3", volume=1.0, new_stream=new_stream,
+                                       new_buffer=new_buffer, skip_client_codec_check=True)
+        self.idle_add(start_sending_sound)
         self.mp3_stream_check_timer = self.timeout_add(1000*5, timeout_check)
 
     def cancel_mp3_stream_check_timer(self):
@@ -797,6 +835,7 @@ class ServerBase(ServerBaseClass):
         source = self._server_sources.pop(protocol, None)
         if source:
             self.cleanup_source(source)
+            self.mdns_update()
         for c in SERVER_BASES:
             c.cleanup_protocol(self, protocol)
         return source

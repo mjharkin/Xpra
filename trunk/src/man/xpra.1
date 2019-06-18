@@ -44,6 +44,8 @@ xpra \- viewer for remote, persistent X applications
 .HP
 \fBxpra\fP \fBshowconfig\fP [\fBOPTIONS..\fP]
 .HP
+\fBxpra\fP \fBshowsetting\fP [\fBSETTING1..\fP]
+.HP
 \fBxpra\fP \fBlist-mdns\fP
 .HP
 \fBxpra\fP \fBupgrade\fP \fI:[DISPLAY]\fP [...any options accepted by
@@ -146,6 +148,10 @@ Show a list of xpra servers found via mDNS. (local network)
 \fBxpra showconfig\fP
 Shows the configuration that would be used with other sub-commands,
 taking into account the command line arguments.
+.TP
+\fBxpra\fP \fBshowsetting\fP [\fBSETTING1..\fP]
+Shows the value of a specific configuration setting and which
+configuration directory set this value.
 .TP
 \fBxpra attach\fP \fI:7\fP
 Attach to the xpra server that is using local display number \fI:7\fP.
@@ -776,27 +782,30 @@ Authentication module to use for the \fBbind-rfb\fP sockets.
 Just like the \fBauth\fP switch, except this one only applies
 to VSOCK sockets (sockets defined using the \fBbind-vsock\fP switch).
 .TP
-\fB--challenge-handlers\fP=\fIMODULES\fP
+\fB--challenge-handlers\fP=\fIMODULE:options\fP
 Configures which challenge handlers are used by the client and in
-which order.
+which order. This option may be repeated to specify multiple handlers,
+which can be useful if the server sends more than one authentication
+challenge.
 The default value is: \fIall\fP which corresponds to:
 \fIuri,file,env,kerberos,gss,u2f,prompt\fP.
-Note: some of these modules will fall through to others if they are
-enable to supply the challenge requested (\fIuri\fP, \fIfile\fP,
-\fIkerberos\fP and \fIgss\fP), others do not (\fIenv\fP and \fIprompt\fP).
 .RS
 .IP \fBuri\fP
 Use the password specified on the connection string, if any.
 .IP \fBfile\fP
-Loads the password from the file specified with the
-\fPpassword-file switch.
+The filename used to store the password can be specified using the
+\fIfilename\fP option.
+If this option is not specified, it will fallback to using the
+password filename specified with the \fIpassword-file\fP switch
+or if that is also unset, \fIpassword.txt\fP will be used.
 .IP \fBenv\fP
-Use the password specified using the \fIXPRA_PASSWORD\fP
-environment variable.
+Use the password specified using the environment variable
+specified using the \fIname\fP option, which defaults to
+\fIXPRA_PASSWORD\fP if unspecified.
 .IP \fBkerberos\fP
-Request a kerberos token for the service specified.
+Requests a kerberos token for the service specified.
 .IP \fBgss\fP
-Request a gss token for the service specified.
+Requests a gss token for the service specified.
 .IP \fBu2f\fP
 Requests a token from a U2F device.
 .IP \fBprompt\fP
@@ -1191,7 +1200,7 @@ This option is enabled by default with a delay of 0.25 seconds.
 This option is only relevant when using a lossy encoding.
 .TP
 \fB--shortcut-modifiers\fP=\fIMODIFIERS\fP
-Defines the default shorcut modifers required by the \fIkey-shortcuts\fP,
+Defines the default shortcut modifiers required by the \fIkey-shortcuts\fP,
 these modifiers can then be referred to as \fI#\fP.
 The default value is 'auto' which evaluates to \fIMeta+Shift\fP on most
 platforms.

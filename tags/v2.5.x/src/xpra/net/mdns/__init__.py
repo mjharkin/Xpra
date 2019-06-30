@@ -4,7 +4,7 @@
 # later version. See the file COPYING for details.
 
 XPRA_MDNS_TYPE = "_xpra._tcp."
-RFB_MDNS_TYPE = "_rfb._tcp"
+RFB_MDNS_TYPE = "_rfb._tcp."
 
 from xpra.util import envbool
 

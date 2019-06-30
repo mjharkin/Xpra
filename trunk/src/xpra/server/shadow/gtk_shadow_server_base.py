@@ -48,6 +48,7 @@ class GTKShadowServerBase(ShadowServerBase, GTKServerBase):
         if self.tray:
             self.setup_tray()
 
+
     def cleanup(self):
         self.cleanup_tray()
         ShadowServerBase.cleanup(self)
@@ -109,7 +110,7 @@ class GTKShadowServerBase(ShadowServerBase, GTKServerBase):
 
     def recreate_window_models(self):
         #remove all existing models and re-create them:
-        for model in self._id_to_window.values():
+        for model in tuple(self._window_to_id.keys()):
             self._remove_window(model)
         self.cleanup_capture()
         for model in self.makeRootWindowModels():

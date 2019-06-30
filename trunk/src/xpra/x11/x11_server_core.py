@@ -20,12 +20,14 @@ from xpra.server.server_uuid import save_uuid, get_uuid
 from xpra.x11.fakeXinerama import find_libfakeXinerama, save_fakeXinerama_config, cleanup_fakeXinerama
 from xpra.x11.gtk_x11.prop import prop_get, prop_set
 from xpra.x11.gtk_x11.gdk_display_source import close_gdk_display_source
+from xpra.x11.gtk_x11.gdk_bindings import init_x11_filter, cleanup_x11_filter, cleanup_all_event_receivers
 from xpra.x11.common import MAX_WINDOW_SIZE
 from xpra.os_util import monotonic_time, strtobytes, bytestostr, PYTHON3
 from xpra.util import engs, csv, typedict, iround, envbool, XPRA_DPI_NOTIFICATION_ID
 from xpra.net.compression import Compressed
 from xpra.server.gtk_server_base import GTKServerBase
 from xpra.x11.xkbhelper import clean_keyboard_state
+from xpra.scripts.config import FALSE_OPTIONS
 from xpra.log import Logger
 
 gdk = import_gdk()
@@ -90,6 +92,7 @@ class X11ServerCore(GTKServerBase):
         self.pointer_device_map = {}
         self.keys_pressed = {}
         self.last_mouse_user = None
+        self.x11_filter = False
         GTKServerBase.__init__(self)
         log("XShape=%s", X11Window.displayHasXShape())
 
@@ -107,9 +110,10 @@ class X11ServerCore(GTKServerBase):
         super(X11ServerCore, self).server_init()
 
     def do_init(self, opts):
+        self.opengl = opts.opengl
         self.randr = opts.resize_display
         self.randr_exact_size = False
-        self.fake_xinerama = False      #only enabled in seamless server
+        self.fake_xinerama = "no"      #only enabled in seamless server
         self.current_xinerama_config = None
         #x11 keyboard bits:
         self.current_keyboard_group = None
@@ -117,10 +121,12 @@ class X11ServerCore(GTKServerBase):
 
     def x11_init(self):
         clean_keyboard_state()
-        if self.fake_xinerama:
-            self.libfakeXinerama_so = find_libfakeXinerama()
-        else:
+        if self.fake_xinerama in FALSE_OPTIONS:
             self.libfakeXinerama_so = None
+        elif os.path.isabs(self.fake_xinerama):
+            self.libfakeXinerama_so = self.fake_xinerama
+        else:
+            self.libfakeXinerama_so = find_libfakeXinerama()
         if not X11Keyboard.hasXFixes() and self.cursors:
             log.error("Error: cursor forwarding support disabled")
         if not X11Keyboard.hasXTest():
@@ -132,6 +138,8 @@ class X11ServerCore(GTKServerBase):
             self.init_randr()
         self.init_cursor()
         self.query_opengl()
+        self.x11_filter = init_x11_filter()
+        assert self.x11_filter
 
 
     def init_randr(self):
@@ -155,18 +163,9 @@ class X11ServerCore(GTKServerBase):
                 self.randr = False
                 self.randr_exact_size = False
         screenlog("randr=%s, exact size=%s", self.randr, self.randr_exact_size)
-        display = display_get_default()
-        i=0
-        while i<display.get_n_screens():
-            screen = display.get_screen(i)
-            screen.connect("size-changed", self._screen_size_changed)
-            i += 1
         screenlog("randr enabled: %s", self.randr)
         if not self.randr:
             screenlog.warn("Warning: no X11 RandR support on %s", os.environ.get("DISPLAY"))
-
-    def _screen_size_changed(self, screen):
-        pass
 
 
     def init_cursor(self):
@@ -188,6 +187,9 @@ class X11ServerCore(GTKServerBase):
 
     def query_opengl(self):
         self.opengl_props = {}
+        if self.opengl.lower()=="noprobe":
+            gllog("query_opengl() skipped: %s", self.opengl)
+            return
         blacklisted_kernel_modules = []
         for mod in ("vboxguest", "vboxvideo"):
             if os.path.exists("/sys/module/%s" % mod):
@@ -304,6 +306,21 @@ class X11ServerCore(GTKServerBase):
         return env
 
     def do_cleanup(self):
+        if self.x11_filter:
+            self.x11_filter = False
+            cleanup_x11_filter()
+            #try a few times:
+            #errors happen because windows are being destroyed
+            #(even more so when we cleanup)
+            #and we don't really care too much about this
+            for l in (log, log, log, log, log.warn):
+                try:
+                    with xsync:
+                        cleanup_all_event_receivers()
+                        #all went well, we're done
+                        return
+                except Exception as e:
+                    l("failed to remove event receivers: %s", e)
         if self.fake_xinerama:
             cleanup_fakeXinerama()
         with xswallow:
@@ -361,7 +378,7 @@ class X11ServerCore(GTKServerBase):
         sinfo = info.setdefault("server", {})
         sinfo.update({
             "type"                  : "Python/gtk/x11",
-            "fakeXinerama"          : self.fake_xinerama and bool(self.libfakeXinerama_so),
+            "fakeXinerama"          : bool(self.libfakeXinerama_so),
             "libfakeXinerama"       : self.libfakeXinerama_so or "",
             })
         log("X11ServerBase.do_get_info took %ims", (monotonic_time()-start)*1000)

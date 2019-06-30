@@ -242,25 +242,35 @@ def do_load_xdg_menu_data():
         from xdg.Menu import parse, Menu, ParsingError
     except ImportError:
         log("do_load_xdg_menu_data()", exc_info=True)
-        log.warn("Warning: cannot use application menu data:")
-        log.warn(" no python-xdg module")
+        if first_time("no-python-xdg"):
+            log.warn("Warning: cannot use application menu data:")
+            log.warn(" no python-xdg module")
         return None
     menu = None
     error = None
     with OSEnvContext():
-        #see ticket #2174,
-        #things may break if the prefix is not set,
-        #and it isn't set when logging in via ssh
-        for prefix in (None, "", "gnome-", "kde-"):
-            if prefix is not None:
-                os.environ["XDG_MENU_PREFIX"] = prefix
-            try:
-                menu = parse()
-                break
-            except ParsingError as e:
-                log("do_load_xdg_menu_data()", exc_info=True)
-                error = e
-                menu = None
+        #see ticket #2340,
+        #invalid values for XDG_CONFIG_DIRS can cause problems,
+        #so try unsetting it if we can't load the menus with it:
+        for cd in (False, True):
+            if cd:
+                try:
+                    del os.environ["XDG_CONFIG_DIRS"]
+                except KeyError:
+                    continue
+            #see ticket #2174,
+            #things may break if the prefix is not set,
+            #and it isn't set when logging in via ssh
+            for prefix in (None, "", "gnome-", "kde-"):
+                if prefix is not None:
+                    os.environ["XDG_MENU_PREFIX"] = prefix
+                try:
+                    menu = parse()
+                    break
+                except ParsingError as e:
+                    log("do_load_xdg_menu_data()", exc_info=True)
+                    error = e
+                    menu = None
     if menu is None:
         if error:
             log.error("Error parsing xdg menu data:")

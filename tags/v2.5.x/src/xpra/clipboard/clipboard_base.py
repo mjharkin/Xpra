@@ -419,15 +419,17 @@ class ClipboardProtocolHelperBase(object):
         send_token(rsel)
 
     def _munge_raw_selection_to_wire(self, target, dtype, dformat, data):
+        dtype = bytestostr(dtype)
+        target = bytestostr(target)
         log("_munge_raw_selection_to_wire%s", (target, dtype, dformat, data))
         # Some types just cannot be marshalled:
-        if type in ("WINDOW", "PIXMAP", "BITMAP", "DRAWABLE",
+        if dtype in ("WINDOW", "PIXMAP", "BITMAP", "DRAWABLE",
                     "PIXEL", "COLORMAP"):
             log("skipping clipboard data of type: %s, format=%s, len(data)=%s", dtype, dformat, len(data or ""))
             return None, None
-        if target==b"TARGETS" and dtype==b"ATOM":
+        if target=="TARGETS" and dtype=="ATOM" and isinstance(data, (tuple,list)):
             #targets is special cased here
-            #because we get the values in wire format already (not atoms)
+            #because we can get the values in wire format already (not atoms)
             #thanks to the request_targets() function (required on win32)
             return "atoms", _filter_targets(data)
         return self._do_munge_raw_selection_to_wire(target, dtype, dformat, data)
@@ -436,10 +438,12 @@ class ClipboardProtocolHelperBase(object):
         """ this method is overriden in xclipboard to parse X11 atoms """
         # Other types need special handling, and all types need to be
         # converting into an endian-neutral format:
+        dtype = bytestostr(dtype)
+        target = bytestostr(target)
         log("_do_munge_raw_selection_to_wire(%s, %s, %s, %s:%s)", target, dtype, dformat, type(data), len(data or ""))
         if dformat == 32:
             #you should be using gdk_clipboard for atom support!
-            if dtype in (b"ATOM", b"ATOM_PAIR") and POSIX:
+            if dtype in ("ATOM", "ATOM_PAIR") and POSIX:
                 #we cannot handle gdk atoms here (but gdk_clipboard does)
                 return None, None
             #important note: on 64 bits, format=32 means 8 bytes, not 4
@@ -469,9 +473,10 @@ class ClipboardProtocolHelperBase(object):
                 olen = len(data)
                 data = data[:max_recv_datalen]
                 log.info("Data copied out truncated because of clipboard policy %d to %d", olen, max_recv_datalen)
-        if encoding == b"bytes":
+        encoding = bytestostr(encoding)
+        if encoding == "bytes":
             return data
-        if encoding == b"integers":
+        if encoding == "integers":
             if not data:
                 return ""
             if dformat == 32:
@@ -521,7 +526,7 @@ class ClipboardProtocolHelperBase(object):
         def got_contents(dtype, dformat, data):
             log("got_contents(%s, %s, %s:%s) data=0x%s..",
                   dtype, dformat, type(data), len(data or ""), hexstr((data or "")[:200]))
-            if dtype is None or data is None or (dformat==0 and data==b""):
+            if dtype is None or data is None or (dformat==0 and not data):
                 no_contents()
                 return
             log("perform clipboard limit checking - datasize - %d, %d", len(data), self.max_clipboard_send_size)
@@ -843,11 +848,13 @@ class ClipboardProxy(gtk.Invisible):
         data = result["data"]
         dformat = result["format"]
         dtype = result["type"]
+        if dtype:
+            dtype = bytestostr(dtype)
         log("do_selection_get(%s,%s,%s) calling selection_data.set(%s, %s, %s:%s)",
               selection_data, info, time, dtype, dformat, type(data), len(data or ""))
         boc = self._block_owner_change
         self._block_owner_change = True
-        if is_gtk3() and dtype in (b"UTF8_STRING", b"STRING") and dformat==8:
+        if is_gtk3() and dtype in ("UTF8_STRING", "STRING") and dformat==8:
             #GTK3 workaround: can only use set_text and only on the clipboard?
             s = bytestostr(data)
             self._clipboard.set_text(s, len(s))
@@ -962,10 +969,10 @@ class ClipboardProxy(gtk.Invisible):
                 return
             log("unpack: %s", selection_data)
             data = selectiondata_get_data(selection_data)
-            dtype = selectiondata_get_data_type(selection_data)
+            dtype = bytestostr(selectiondata_get_data_type(selection_data))
             dformat = selectiondata_get_format(selection_data)
             log("unpack(..) type=%s, format=%s, data=%s:%s", dtype, dformat, type(data), len(data or ""))
-            isstring = dtype in (b"UTF8_STRING", b"STRING") and dformat==8
+            isstring = dtype in ("UTF8_STRING", "STRING") and dformat==8
             if isstring:
                 if self._strip_nullbyte:
                     #we may have to strip the nullbyte:
@@ -975,7 +982,7 @@ class ClipboardProxy(gtk.Invisible):
                 if data and data==self._loop_uuid:
                     log("not sending loop uuid value '%s', returning an empty string instead", data)
                     data= ""
-            cb(str(dtype), dformat, data)
+            cb(dtype, dformat, data)
         #some applications (ie: firefox, thunderbird) can request invalid targets,
         #when that happens, translate it to something the application can handle (if any)
         translated_target = TRANSLATED_TARGETS.get(target)

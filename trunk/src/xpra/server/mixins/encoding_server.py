@@ -7,7 +7,7 @@
 
 from xpra.scripts.config import parse_bool_or_int
 from xpra.codecs.codec_constants import PREFERED_ENCODING_ORDER, PROBLEMATIC_ENCODINGS
-from xpra.codecs.loader import load_codecs, get_codec, has_codec, codec_versions
+from xpra.codecs.loader import get_codec, has_codec, codec_versions, load_codec
 from xpra.codecs.video_helper import getVideoHelper
 from xpra.server.mixins.stub_server_mixin import StubServerMixin
 from xpra.log import Logger
@@ -48,8 +48,17 @@ class EncodingServer(StubServerMixin):
         self.init_encodings()
 
     def threaded_setup(self):
+        #load video codecs:
         getVideoHelper().init()
-        #re-init encodings now that we have video:
+        #and load the picture codecs:
+        load_codec("enc_pillow")
+        ae = self.allowed_encodings
+        if "jpeg" in ae:
+            #try to load the fast jpeg encoder:
+            load_codec("enc_jpeg")
+        if "webp" in ae:
+            #try to load the fast webp encoder:
+            load_codec("enc_webp")
         self.init_encodings()
 
     def cleanup(self):
@@ -99,7 +108,6 @@ class EncodingServer(StubServerMixin):
              }
 
     def init_encodings(self):
-        load_codecs(decoders=False, video=False)
         encs, core_encs = [], []
         log("init_encodings() allowed_encodings=%s", self.allowed_encodings)
         def add_encodings(encodings):

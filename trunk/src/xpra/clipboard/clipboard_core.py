@@ -13,7 +13,7 @@ from xpra.os_util import POSIX, monotonic_time, strtobytes, bytestostr, hexstr, 
 from xpra.util import csv, envint, envbool, repr_ellipsized, typedict
 from xpra.platform.features import CLIPBOARDS as PLATFORM_CLIPBOARDS
 from xpra.gtk_common.gobject_compat import import_glib
-from xpra.log import Logger
+from xpra.log import Logger, is_debug_enabled
 
 log = Logger("clipboard")
 
@@ -321,13 +321,13 @@ class ClipboardProtocolHelperCore(object):
     def _munge_raw_selection_to_wire(self, target, dtype, dformat, data):
         log("_munge_raw_selection_to_wire%s", (target, dtype, dformat, repr_ellipsized(bytestostr(data))))
         # Some types just cannot be marshalled:
-        if type in ("WINDOW", "PIXMAP", "BITMAP", "DRAWABLE",
+        if dtype in ("WINDOW", "PIXMAP", "BITMAP", "DRAWABLE",
                     "PIXEL", "COLORMAP"):
             log("skipping clipboard data of type: %s, format=%s, len(data)=%s", dtype, dformat, len(data or b""))
             return None, None
-        if target=="TARGETS" and dtype=="ATOM":
+        if target=="TARGETS" and dtype=="ATOM" and isinstance(data, (tuple, list)):
             #targets is special cased here
-            #because we get the values in wire format already (not atoms)
+            #because we can get the values in wire format already (not atoms)
             #thanks to the request_targets() function (required on win32)
             return "atoms", _filter_targets(data)
         try:
@@ -345,7 +345,7 @@ class ClipboardProtocolHelperCore(object):
         log("_do_munge_raw_selection_to_wire(%s, %s, %s, %s:%s)", target, dtype, dformat, type(data), len(data or ""))
         if dformat == 32:
             #you should be using gdk_clipboard for atom support!
-            if dtype in (b"ATOM", b"ATOM_PAIR") and POSIX:
+            if dtype in ("ATOM", "ATOM_PAIR") and POSIX:
                 #we cannot handle gdk atoms here (but gdk_clipboard does)
                 return None, None
             #important note: on 64 bits, format=32 means 8 bytes, not 4
@@ -434,10 +434,11 @@ class ClipboardProtocolHelperCore(object):
         def no_contents():
             self.send("clipboard-contents-none", request_id, selection)
         dtype = bytestostr(dtype)
-        log("proxy_got_contents(%s, %s, %s, %s, %s, %s:%s) data=0x%s..",
-              request_id, selection, target,
-              dtype, dformat, type(data), len(data or ""), hexstr((data or "")[:200]))
-        if dtype is None or data is None or (dformat==0 and data==b""):
+        if is_debug_enabled("clipboard"):
+            log("proxy_got_contents(%s, %s, %s, %s, %s, %s:%s) data=0x%s..",
+                  request_id, selection, target,
+                  dtype, dformat, type(data), len(data or ""), hexstr((data or "")[:200]))
+        if dtype is None or data is None or (dformat==0 and not data):
             no_contents()
             return
         log("perform clipboard limit checking - datasize - %d, %d", len(data), self.max_clipboard_send_size)
@@ -448,8 +449,9 @@ class ClipboardProtocolHelperCore(object):
                 truncated = len(data) - max_send_datalen
                 data = data[:max_send_datalen]
         munged = self._munge_raw_selection_to_wire(target, dtype, dformat, data)
-        log("clipboard raw -> wire: %r -> %r",
-            (dtype, dformat, repr_ellipsized(str(data))), repr_ellipsized(str(munged)))
+        if is_debug_enabled("clipboard"):
+            log("clipboard raw -> wire: %r -> %r",
+                (dtype, dformat, repr_ellipsized(str(data))), repr_ellipsized(str(munged)))
         wire_encoding, wire_data = munged
         if wire_encoding is None:
             no_contents()

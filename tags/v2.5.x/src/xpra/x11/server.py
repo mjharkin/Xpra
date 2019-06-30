@@ -288,7 +288,18 @@ class XpraServer(gobject.GObject, X11ServerBase):
         self.cancel_all_configure_damage()
         X11ServerBase.do_cleanup(self)
         cleanup_x11_filter()
-        cleanup_all_event_receivers()
+        #try a few times:
+        #errors happen because windows are being destroyed
+        #(even more so when we cleanup)
+        #and we don't really care too much about this
+        for l in (log, log, log, log, log.warn):
+            try:
+                with xsync:
+                    cleanup_all_event_receivers()
+                    #all went well, we're done
+                    return
+            except Exception as e:
+                l("failed to remove event receivers: %s", e)
         if self._wm:
             self._wm.cleanup()
             self._wm = None

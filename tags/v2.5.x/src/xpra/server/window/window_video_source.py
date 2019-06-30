@@ -1739,7 +1739,10 @@ class WindowVideoSource(WindowSource):
         #tells make_data_packet not to invalidate the scroll data:
         ww, wh = self.window_dimensions
         scrolllog("encode_scrolling(%s, %s) window-dimensions=%s", image, options, (ww, wh))
-        x, y, w, h = image.get_geometry()[:4]
+        x = image.get_target_x()
+        y = image.get_target_y()
+        w = image.get_width()
+        h = image.get_height()
         raw_scroll, non_scroll = {}, {0 : h}
         if x+y>ww or y+h>wh:
             #window may have been resized
@@ -1810,7 +1813,7 @@ class WindowVideoSource(WindowSource):
                 #    filename = "./scroll-%i-%i.png" % (self._sequence, len(non_scroll)-flush)
                 #    im.save(filename, "png")
                 #    log.info("saved scroll y=%i h=%i to %s", sy, sh, filename)
-                packet = self.make_draw_packet(sub.get_x(), sub.get_y(), outw, outh, coding, data, outstride, client_options, options)
+                packet = self.make_draw_packet(sub.get_target_x(), sub.get_target_y(), outw, outh, coding, data, outstride, client_options, options)
                 self.queue_damage_packet(packet)
                 psize = w*sh*4
                 csize = len(data)

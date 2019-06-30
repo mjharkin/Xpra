@@ -25,8 +25,6 @@ from xpra.x11.models.model_stub import WindowModelStub
 from xpra.x11.gtk_x11.gdk_bindings import (
     add_catchall_receiver, remove_catchall_receiver,
     add_event_receiver,          #@UnresolvedImport
-    init_x11_filter, cleanup_x11_filter,          #@UnresolvedImport
-    cleanup_all_event_receivers  #@UnresolvedImport
    )
 from xpra.x11.bindings.window_bindings import X11WindowBindings #@UnresolvedImport
 from xpra.x11.xroot_props import XRootPropWatcher
@@ -170,7 +168,7 @@ class DesktopModel(WindowModelStub, WindowDamageHandler):
         icon = get_icon(icon_name)
         if not icon:
             return None
-        return icon.get_width(), icon.get_height(), "BGRA", icon.get_pixels()
+        return icon.get_width(), icon.get_height(), "RGBA", icon.get_pixels()
 
 
     def get_property(self, prop):
@@ -314,7 +312,6 @@ class XpraDesktopServer(DesktopServerBaseClass):
 
     def x11_init(self):
         X11ServerBase.x11_init(self)
-        assert init_x11_filter() is True
         display = display_get_default()
         screens = display.get_n_screens()
         for n in range(screens):
@@ -328,9 +325,6 @@ class XpraDesktopServer(DesktopServerBaseClass):
     def do_cleanup(self):
         self.cancel_resize_timer()
         remove_catchall_receiver("xpra-motion-event", self)
-        cleanup_x11_filter()
-        with xswallow:
-            cleanup_all_event_receivers()
         X11ServerBase.do_cleanup(self)
 
 
@@ -346,7 +340,7 @@ class XpraDesktopServer(DesktopServerBaseClass):
     def parse_screen_info(self, ss):
         return self.do_parse_screen_info(ss, ss.desktop_mode_size)
 
-    def _screen_size_changed(self, screen):
+    def do_screen_changed(self, screen):
         #this is not relevant.. don't send it
         pass
 
@@ -602,7 +596,7 @@ class XpraDesktopServer(DesktopServerBaseClass):
                 #TODO: just like shadow server, adjust for window position
                 pass
         with xsync:
-            super(XpraDesktopServer, self)._move_pointer(self, wid, pos, -1, *args)
+            X11ServerBase._move_pointer(self, wid, pos, -1, *args)
 
 
     def _process_close_window(self, proto, packet):

@@ -174,6 +174,7 @@ def sanitize_env():
              "CKCON_TTY",
              "CKCON_X11_DISPLAY",
              "CKCON_X11_DISPLAY_DEVICE",
+             "WAYLAND_DISPLAY",
              )
 
 def configure_imsettings_env(input_method):
@@ -796,7 +797,7 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
 
     #create devices for vfb if needed:
     devices = {}
-    if not start_vfb and not proxying and not shadowing:
+    if not start_vfb and not proxying and not shadowing and envbool("XPRA_UINPUT", True):
         #try to find the existing uinput uuid:
         #use a subprocess to avoid polluting our current process
         #with X11 connections before we get a chance to change uid
@@ -932,7 +933,7 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
         app.init(opts)
         app.init_sockets(sockets)
         app.init_dbus(dbus_pid, dbus_env)
-        if xvfb_pid or clobber:
+        if not shadowing and (xvfb_pid or clobber):
             app.init_display_pid(xvfb_pid)
         app.original_desktop_display = desktop_display
         del opts

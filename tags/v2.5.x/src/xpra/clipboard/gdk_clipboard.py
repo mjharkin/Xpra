@@ -7,6 +7,7 @@
 import struct
 
 from xpra.util import envbool
+from xpra.os_util import bytestostr
 from xpra.gtk_common.gobject_compat import is_gtk3
 from xpra.clipboard.clipboard_base import ClipboardProtocolHelperBase, _filter_targets, log
 
@@ -41,8 +42,9 @@ class GDKClipboardProtocolHelper(ClipboardProtocolHelperBase):
         return "GDKClipboardProtocolHelper"
 
 
-    def _do_munge_raw_selection_to_wire(self, target, datatype, dataformat, data):
-        if dataformat==32 and datatype in (b"ATOM", b"ATOM_PAIR") and gdk_atoms:
+    def _do_munge_raw_selection_to_wire(self, target, dtype, dataformat, data):
+        datatype = bytestostr(dtype)
+        if dataformat==32 and datatype in ("ATOM", "ATOM_PAIR") and gdk_atoms:
             # Convert to strings and send that. Bizarrely, the atoms are
             # not actual X atoms, but an array of GdkAtom's reinterpreted
             # as a byte buffer.
@@ -50,13 +52,13 @@ class GDKClipboardProtocolHelper(ClipboardProtocolHelperBase):
             log("_do_munge_raw_selection_to_wire(%s, %s, %s, %s:%s) atoms=%s",
                 target, datatype, dataformat, type(data), len(data), tuple(atoms))
             atom_names = [str(atom) for atom in atoms]
-            if target==b"TARGETS":
+            if bytestostr(target)=="TARGETS":
                 atom_names = _filter_targets(atom_names)
             return "atoms", atom_names
         return ClipboardProtocolHelperBase._do_munge_raw_selection_to_wire(self, target, datatype, dataformat, data)
 
     def _munge_wire_selection_to_raw(self, encoding, datatype, dataformat, data):
-        if encoding==b"atoms" and gdk_atoms:
+        if bytestostr(encoding)=="atoms" and gdk_atoms:
             atom_array = gdk_atoms.gdk_atom_array_from_atoms(data)
             bdata = struct.pack(b"@" + b"L" * len(atom_array), *atom_array)
             log("_munge_wire_selection_to_raw(%s, %s, %s, %s:%s)=%s=%s=%s",

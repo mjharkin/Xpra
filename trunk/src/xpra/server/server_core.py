@@ -38,7 +38,7 @@ from xpra.os_util import (
     getuid, monotonic_time, get_peercred, hexstr,
     WIN32, POSIX, PYTHON3, BITS,
     )
-from xpra.server.background_worker import stop_worker, get_worker
+from xpra.server.background_worker import stop_worker, get_worker, add_work_item
 from xpra.make_thread import start_thread
 from xpra.util import (
     csv, merge_dicts, typedict, notypedict, flatten_dict, parse_simple_dict,
@@ -329,7 +329,8 @@ class ServerCore(object):
         return True
 
     def server_init(self):
-        self.mdns_publish()
+        if self.mdns:
+            add_work_item(self.mdns_publish)
         self.start_listen_sockets()
 
     def setup(self):
@@ -392,8 +393,6 @@ class ServerCore(object):
 
 
     def run(self):
-        self.print_run_info()
-        self.print_screen_info()
         self.install_signal_handlers(self.signal_quit)
         def start_ready_callbacks():
             for x in self._when_ready:
@@ -407,6 +406,7 @@ class ServerCore(object):
         self.idle_add(start_ready_callbacks)
         self.idle_add(self.reset_server_timeout)
         self.idle_add(self.server_is_ready)
+        self.idle_add(self.print_run_info)
         self.do_run()
         log("run()")
         return 0
@@ -685,6 +685,9 @@ class ServerCore(object):
 
 
     def print_run_info(self):
+        add_work_item(self.do_print_run_info)
+
+    def do_print_run_info(self):
         log.info("xpra %s version %s %i-bit", self.get_server_mode(), full_version_str(), BITS)
         try:
             pinfo = get_platform_info()
@@ -704,6 +707,7 @@ class ServerCore(object):
             except:
                 log.info(" uid=%i, gid=%i", uid, gid)
         log.info(" running with pid %s%s", os.getpid(), osinfo)
+        self.idle_add(self.print_screen_info)
 
     def notify_new_user(self, ss):
         pass
@@ -722,6 +726,7 @@ class ServerCore(object):
             if bit_depth:
                 extra = " with %i bit colors" % bit_depth
             log.info(" connected to X11 display %s%s", display, extra)
+        now = monotonic_time()
 
 
     ######################################################################
@@ -972,6 +977,7 @@ class ServerCore(object):
         return True
 
     def peek_connection(self, conn, timeout=PEEK_TIMEOUT_MS):
+        log("peek_connection(%s, %i)", conn, timeout)
         PEEK_SIZE = 8192
         start = monotonic_time()
         peek_data = b""
@@ -983,7 +989,8 @@ class ServerCore(object):
             except ValueError:
                 log("peek_connection(%s, %i) failed", conn, timeout, exc_info=True)
                 break
-            sleep(timeout/4000.0)
+            if not peek_data:
+                sleep(timeout/4000.0)
         line1 = b""
         netlog("socket %s peek: got %i bytes", conn, len(peek_data))
         if peek_data:

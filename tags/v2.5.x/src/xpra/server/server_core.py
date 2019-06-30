@@ -803,7 +803,8 @@ class ServerCore(object):
             except ValueError:
                 log("peek_connection(%s, %i) failed", conn, timeout, exc_info=True)
                 break
-            sleep(timeout/4.0)
+            if not peek_data:
+                sleep(timeout/4.0)
         line1 = b""
         netlog("socket %s peek: got %i bytes", conn, len(peek_data))
         if peek_data:

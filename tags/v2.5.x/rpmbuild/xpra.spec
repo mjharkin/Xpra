@@ -3,7 +3,7 @@
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-%define version 2.5.2
+%define version 2.5.3
 
 %{!?__python2: %global __python2 python2}
 %{!?__python3: %define __python3 python3}
@@ -826,6 +826,43 @@ fi
 
 
 %changelog
+* Tue Jul 16 2019 Antoine Martin <antoine@xpra.org> 2.5.2-1
+- fix HTML5 MSIE 11 detection
+- fix HTML5 path of audio script for IE
+- fix HTML5 CapsLock and NumLock state detection
+- fix HTML5 desktop server screen size not resizing to match window
+- fix shadow servers display resizing not being propagated
+- fix scroll encoding with multi monitor shadow servers
+- fix handling of uncompressed window icon pixel data
+- fix handling of unicode values for desktop names
+- fix handling of unicode values for desktop names
+- fix remote ssh failures with python3-only installations
+- fix '_monitor' subcommand with python3 clients
+- fix client ping latency calculations
+- fix non-strict ssl host key not honoured with wss connections
+- fix handling of websocket and ssl traffic with unix-domain sockets
+- fix handling of websocket ping packets
+- fix unnecessary delay in initial connection handling
+- fix incorrect disconnections with non-UI clients
+- fix spurious socket warnings
+- fix distro information shown for proxied connections
+- fix invalid mdns records for rfb connections (desktop and shadow servers)
+- fix GTK3 signal handling before the main loop is running
+- fix clipboard-direction setting not propagated to the client
+- fix clipboard datatype shortcut not taken due to a typo
+- fix clipboard bugs with python3 builds, invalid atoms
+- fix overzealous cleanup code in X11 root property handler
+- fix Xresources debug logging and error handler
+- fix errors during cleanup: close display later
+- fix errors if md5 is not available: use sha1
+- fix default build options for RedHat
+- fix typos in man page and docstrings
+- silence annoying atk warnings
+- improve compatibility with 'xpra top'
+- make it possible to skip opengl probing during server startup
+- add missing modal-window entry in man page
+- reduce weak RPM dependencies on gnome components
+
 * Tue Jun 18 2019 Antoine Martin <antoine@xpra.org> 2.5.2-1
 - force rebuild with bumped release number to prevent conflicts with Fedora packages
 
@@ -921,7 +958,7 @@ fi
 - DEB package still recommends the python2 builds
 - don't bundle openssh on MS Windows
 
-* Tue Mar 19 2019 Antoine Martin <antoine@xpra.org> 2.5.2
+* Tue Mar 19 2019 Antoine Martin <antoine@xpra.org> 2.5.3
 - Python 3 port mostly complete, including packaging for Debian
 - pixel compression and bandwidth management:
 - better recovery from network congestion
@@ -1210,7 +1247,7 @@ fi
 -functional HTML5 client
 -add session idle timeout switch
 -add html command line switch for easily setting up an HTML5 xpra server
--dropped support for Python 2.5.2 and older, allowing many code cleanups and improvements
+-dropped support for Python 2.5.3 and older, allowing many code cleanups and improvements
 -include manual in html format with MS Windows and OSX builds
 -add option to control socket permissions (easier setup of containers)
 -client log output forwarding to the server
@@ -1392,7 +1429,7 @@ fi
 - fix RGB pixel data buffer size (re-stride as needed)
 - avoid buggy swscale 2.1.0 on Ubuntu
 
-* Sat May 03 2014 Antoine Martin <antoine@xpra.org> 0.12.5.2-1
+* Sat May 03 2014 Antoine Martin <antoine@xpra.org> 0.12.5.3-1
 - fix error when clients supply invalid screen dimensions
 - fix MS Windows build without ffmpeg
 - fix cairo backing alternative
@@ -1713,7 +1750,7 @@ fi
 - fix focus problems with old Xvfb display servers
 - fix RPM SELinux labelling of static codec builds (CentOS)
 - fix CentOS 5.x compatibility
-- fix Python 2.4 and 2.5.2 compatibility (many)
+- fix Python 2.4 and 2.5.3 compatibility (many)
 - fix failed server upgrades killing the virtual display
 - fix screenshot command with "OR" windows
 - fix support "OR" windows that move and resize
@@ -2068,7 +2105,7 @@ fi
 - toggle cursors, bell and notifications by telling the server not to bother sending them, saves bandwidth
 - build/deploy: don't modify file in source tree, generate it at build time only
 - add missing GPL2 license file to show in about dialog
-- Python 2.5.2: workarounds to restore support
+- Python 2.5.3: workarounds to restore support
 - turn off compression over local connections (when mmap is enabled)
 - clients can specify maximum refresh rate and screen update batching options
 

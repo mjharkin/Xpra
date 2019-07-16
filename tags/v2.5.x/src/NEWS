@@ -1,3 +1,42 @@
+v2.5.3 (2019-07-16)
+======================
+	-- fix HTML5 MSIE 11 detection
+	-- fix HTML5 path of audio script for IE
+	-- fix HTML5 CapsLock and NumLock state detection
+	-- fix HTML5 desktop server screen size not resizing to match window
+	-- fix shadow servers display resizing not being propagated
+	-- fix scroll encoding with multi monitor shadow servers
+	-- fix handling of uncompressed window icon pixel data
+	-- fix handling of unicode values for desktop names
+	-- fix handling of unicode values for desktop names
+	-- fix remote ssh failures with python3-only installations
+	-- fix '_monitor' subcommand with python3 clients
+	-- fix client ping latency calculations
+	-- fix non-strict ssl host key not honoured with wss connections
+	-- fix handling of websocket and ssl traffic with unix-domain sockets
+	-- fix handling of websocket ping packets
+	-- fix unnecessary delay in initial connection handling
+	-- fix incorrect disconnections with non-UI clients
+	-- fix spurious socket warnings
+	-- fix distro information shown for proxied connections
+	-- fix invalid mdns records for rfb connections (desktop and shadow servers)
+	-- fix GTK3 signal handling before the main loop is running
+	-- fix clipboard-direction setting not propagated to the client
+	-- fix clipboard datatype shortcut not taken due to a typo
+	-- fix clipboard bugs with python3 builds, invalid atoms
+	-- fix overzealous cleanup code in X11 root property handler
+	-- fix Xresources debug logging and error handler
+	-- fix errors during cleanup: close display later
+	-- fix errors if md5 is not available: use sha1
+	-- fix default build options for RedHat
+	-- fix typos in man page and docstrings
+	-- silence annoying atk warnings
+	-- improve compatibility with 'xpra top'
+	-- make it possible to skip opengl probing during server startup
+	-- add missing modal-window entry in man page
+	-- reduce weak RPM dependencies on gnome components
+
+
 v2.5.2 (2019-06-07)
 ======================
 	-- fix mmap leak which can cause the client to stop painting

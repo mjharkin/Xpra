@@ -879,7 +879,7 @@ class ServerCore(object):
                 packet_type = None
                 if peek_data[0] in ("P", ord("P")):
                     packet_type = "xpra"
-                elif line1.find("HTTP/")>0:
+                elif line1.find(b"HTTP/")>0:
                     packet_type = "HTTP"
                 if packet_type:
                     self.new_conn_err(conn, sock, socktype, socket_info, packet_type,
@@ -895,16 +895,16 @@ class ServerCore(object):
                 http = True
             elif self.ssl_mode=="auto" or self.ssl_mode in TRUE_OPTIONS:
                 #look for HTTPS request to handle:
-                if line1.find("HTTP/")>0 or peek_data.find("\x08http/1.1")>0:
+                if line1.find(b"HTTP/")>0 or peek_data.find(b"\x08http/1.1")>0:
                     http = True
                 else:
                     ssl_conn.enable_peek()
                     peek_data, line1 = self.peek_connection(ssl_conn, PEEK_TIMEOUT)
-                    http = line1.find("HTTP/")>0
+                    http = line1.find(b"HTTP/")>0
             if http and self._html:
                 self.start_http_socket(socktype, ssl_conn, True, peek_data)
             else:
-                log_new_connection(conn, socket_info)
+                log_new_connection(ssl_conn, socket_info)
                 self.make_protocol(socktype, ssl_conn)
             return
 

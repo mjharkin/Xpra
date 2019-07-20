@@ -826,7 +826,7 @@ fi
 
 
 %changelog
-* Tue Jul 16 2019 Antoine Martin <antoine@xpra.org> 2.5.2-1
+* Sun Jul 20 2019 Antoine Martin <antoine@xpra.org> 2.5.2-1
 - fix HTML5 MSIE 11 detection
 - fix HTML5 path of audio script for IE
 - fix HTML5 CapsLock and NumLock state detection
@@ -841,6 +841,7 @@ fi
 - fix client ping latency calculations
 - fix non-strict ssl host key not honoured with wss connections
 - fix handling of websocket and ssl traffic with unix-domain sockets
+- fix ssl and websocket connection upgrades with python3 servers
 - fix handling of websocket ping packets
 - fix unnecessary delay in initial connection handling
 - fix incorrect disconnections with non-UI clients
@@ -848,16 +849,19 @@ fi
 - fix distro information shown for proxied connections
 - fix invalid mdns records for rfb connections (desktop and shadow servers)
 - fix GTK3 signal handling before the main loop is running
+- fix file descriptor leak when running child commands
 - fix clipboard-direction setting not propagated to the client
 - fix clipboard datatype shortcut not taken due to a typo
 - fix clipboard bugs with python3 builds, invalid atoms
 - fix overzealous cleanup code in X11 root property handler
 - fix Xresources debug logging and error handler
 - fix errors during cleanup: close display later
+- fix uinput device mode with python3 servers
 - fix errors if md5 is not available: use sha1
 - fix default build options for RedHat
 - fix typos in man page and docstrings
 - silence annoying atk warnings
+- avoid running invalid lpinfo commands
 - improve compatibility with 'xpra top'
 - make it possible to skip opengl probing during server startup
 - add missing modal-window entry in man page

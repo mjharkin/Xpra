@@ -13,6 +13,7 @@ xpra (2.5.3-1) UNRELEASED; urgency=low
   * fix client ping latency calculations
   * fix non-strict ssl host key not honoured with wss connections
   * fix handling of websocket and ssl traffic with unix-domain sockets
+  * fix ssl and websocket connection upgrades with python3 servers
   * fix handling of websocket ping packets
   * fix unnecessary delay in initial connection handling
   * fix incorrect disconnections with non-UI clients
@@ -20,22 +21,25 @@ xpra (2.5.3-1) UNRELEASED; urgency=low
   * fix distro information shown for proxied connections
   * fix invalid mdns records for rfb connections (desktop and shadow servers)
   * fix GTK3 signal handling before the main loop is running
+  * fix file descriptor leak when running child commands
   * fix clipboard-direction setting not propagated to the client
   * fix clipboard datatype shortcut not taken due to a typo
   * fix clipboard bugs with python3 builds, invalid atoms
   * fix overzealous cleanup code in X11 root property handler
   * fix Xresources debug logging and error handler
   * fix errors during cleanup: close display later
+  * fix uinput device mode with python3 servers
   * fix errors if md5 is not available: use sha1
   * fix default build options for RedHat
   * fix typos in man page and docstrings
   * silence annoying atk warnings
+  * avoid running invalid lpinfo commands
   * improve compatibility with 'xpra top'
   * make it possible to skip opengl probing during server startup
   * add missing modal-window entry in man page
   * reduce weak RPM dependencies on gnome components
 
- -- Antoine Martin <antoine@nagafix.co.uk>  Tue, 16 Jul 2019 23:15:22 +0800
+ -- Antoine Martin <antoine@nagafix.co.uk>  Sun, 20 Jul 2019 14:10:09 +0800
 
 xpra (2.5.2-1) UNRELEASED; urgency=low
   * fix mmap leak which can cause the client to stop painting

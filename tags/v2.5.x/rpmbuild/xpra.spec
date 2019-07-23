@@ -835,7 +835,6 @@ fi
 - fix scroll encoding with multi monitor shadow servers
 - fix handling of uncompressed window icon pixel data
 - fix handling of unicode values for desktop names
-- fix handling of unicode values for desktop names
 - fix remote ssh failures with python3-only installations
 - fix '_monitor' subcommand with python3 clients
 - fix client ping latency calculations

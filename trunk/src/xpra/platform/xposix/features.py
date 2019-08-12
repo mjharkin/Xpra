@@ -28,6 +28,8 @@ DEFAULT_ENV = [
              "GTK_OVERLAY_SCROLLING=0",
              "#some versions of GTK3 honour this option, sadly not all:",
              "GTK_CSD=0",
+             "#silence some AT-SPI and atk-bridge warnings:",
+             "NO_AT_BRIDGE=1",
              ]
 
 DEFAULT_SSH_CMD = "ssh"
@@ -35,6 +37,7 @@ DEFAULT_SSH_CMD = "ssh"
 CLIPBOARDS=["CLIPBOARD", "PRIMARY"]
 if not is_Wayland():
     CLIPBOARDS.append("SECONDARY")
+CLIPBOARD_PREFERRED_TARGETS = ("UTF8_STRING", "TEXT", "STRING", "text/plain", "image/png")
 
 OPEN_COMMAND = ["/usr/bin/xdg-open"]
 

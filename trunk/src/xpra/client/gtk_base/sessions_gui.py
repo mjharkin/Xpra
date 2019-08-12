@@ -280,6 +280,16 @@ class SessionsGUI(gtk.Window):
         display = tt.strget("display", "")
         username = tt.strget("username", "")
         mode = tt.strget("mode", "")
+        if not mode:
+            #guess the mode from the service name,
+            #ie: "localhost.localdomain :2 (wss)" -> "wss"
+            pos = name.rfind("(")
+            if name.endswith(")") and pos>0:
+                mode = name[pos+1:-1]
+                if mode not in ("tcp", "ws", "wss", "ssl", "ssh"):
+                    return ""
+            else:
+                mode = "tcp"
         if display and display.startswith(":"):
             dstr = display[1:]
         #append interface to IPv6 host URI for link local addresses ("fe80:"):

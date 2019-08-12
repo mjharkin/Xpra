@@ -23,7 +23,7 @@ from xpra.exit_codes import EXIT_SSL_FAILURE, EXIT_STR, EXIT_UNSUPPORTED
 from xpra.os_util import (
     get_util_logger, getuid, getgid,
     monotonic_time, setsid, bytestostr, use_tty,
-    WIN32, OSX, POSIX, PYTHON3, SIGNAMES, is_Ubuntu, getUbuntuVersion,
+    WIN32, OSX, POSIX, PYTHON2, PYTHON3, SIGNAMES, is_Ubuntu, getUbuntuVersion,
     )
 from xpra.scripts.parsing import (
     info, warn, error,
@@ -44,6 +44,7 @@ assert info and warn and error, "used by modules importing those from here"
 NO_ROOT_WARNING = envbool("XPRA_NO_ROOT_WARNING", False)
 CLIPBOARD_CLASS = os.environ.get("XPRA_CLIPBOARD_CLASS")
 WAIT_SERVER_TIMEOUT = envint("WAIT_SERVER_TIMEOUT", 90)
+CONNECT_TIMEOUT = envint("XPRA_CONNECT_TIMEOUT", 20)
 SYSTEMD_RUN = envbool("XPRA_SYSTEMD_RUN", True)
 LOG_SYSTEMD_WRAP = envbool("XPRA_LOG_SYSTEMD_WRAP", True)
 VERIFY_X11_SOCKET_TIMEOUT = envint("XPRA_VERIFY_X11_SOCKET_TIMEOUT", 1)
@@ -81,6 +82,18 @@ def main(script_file, cmdline):
     #and we may need to use it again to launch new commands:
     if "XPRA_ALT_PYTHON_RETRY" in os.environ:
         del os.environ["XPRA_ALT_PYTHON_RETRY"]
+
+    if envbool("XPRA_NOMD5", False):
+        import hashlib
+        def nomd5(*_args):
+            raise ValueError("md5 support is disabled")
+        hashlib.algorithms_available.remove("md5")
+        hashlib.md5 = nomd5
+
+    if OSX and PYTHON2 and any(x in cmdline for x in ("_sound_record", "_sound_play", "_sound_query")):
+        #bug 2365: force gi bindings early on macos
+        from xpra.gtk_common.gobject_compat import want_gtk3
+        want_gtk3(True)
 
     def debug_exc(msg="run_mode error"):
         get_util_logger().debug(msg, exc_info=True)
@@ -433,7 +446,7 @@ def run_mode(script_file, error_cb, options, args, mode, defaults):
         elif mode in (
             "attach", "detach",
             "screenshot", "version", "info", "id",
-            "control", "_monitor", "print",
+            "control", "_monitor", "top", "print",
             "connect-test", "request-start", "request-start-desktop", "request-shadow",
             ):
             return run_client(error_cb, options, args, mode)
@@ -1027,20 +1040,32 @@ def socket_connect(dtype, host, port):
             socket.AF_INET6 : " IPv6",
             socket.AF_INET  : " IPv4",
             }.get(family, ""), (host, port), e))
-    #try each one:
-    for addr in addrinfo:
-        sockaddr = addr[-1]
-        family = addr[0]
-        sock = socket.socket(family, socktype)
-        if dtype!="udp":
-            from xpra.net.bytestreams import SOCKET_TIMEOUT
-            sock.settimeout(SOCKET_TIMEOUT)
-        try:
-            sock.connect(sockaddr)
-            sock.settimeout(None)
-            return sock
-        except Exception as e:
-            get_util_logger().debug("failed to connect using %s%s for %s", sock.connect, sockaddr, addr, exc_info=True)
+    retry = 0
+    start = monotonic_time()
+    while True:
+        #try each one:
+        for addr in addrinfo:
+            sockaddr = addr[-1]
+            family = addr[0]
+            sock = socket.socket(family, socktype)
+            if dtype!="udp":
+                from xpra.net.bytestreams import SOCKET_TIMEOUT
+                sock.settimeout(SOCKET_TIMEOUT)
+            try:
+                sock.connect(sockaddr)
+                sock.settimeout(None)
+                return sock
+            except Exception as e:
+                log = Logger("network")
+                log("failed to connect using %s%s for %s", sock.connect, sockaddr, addr, exc_info=True)
+        if monotonic_time()-start>=CONNECT_TIMEOUT:
+            break
+        if retry==0:
+            log = Logger("network")
+            log.info("failed to connect to %s:%s, retrying for %i seconds", host, port, CONNECT_TIMEOUT)
+        retry += 1
+        import time
+        time.sleep(1)
     raise InitException("failed to connect to %s:%s" % (host, port))
 
 
@@ -1357,7 +1382,32 @@ def get_sockpath(display_desc, error_cb):
             display_desc.get("gid", 0),
             )
         display = display_desc["display"]
-        dir_servers = dotxpra.socket_details(matching_state=DotXpra.LIVE, matching_display=display)
+        def socket_details(state=DotXpra.LIVE):
+            return dotxpra.socket_details(matching_state=state, matching_display=display)
+        dir_servers = socket_details()
+        if display and not dir_servers:
+            state = dotxpra.get_display_state(display)
+            if state in (DotXpra.UNKNOWN, DotXpra.DEAD):
+                #found the socket for this specific display in UNKNOWN state,
+                #or not found any sockets at all (DEAD),
+                #this could be a server starting up,
+                #so give it a bit of time:
+                log = Logger("network")
+                if state==DotXpra.UNKNOWN:
+                    log.info("server socket for display %s is in %s state", display, DotXpra.UNKNOWN)
+                else:
+                    log.info("server socket for display %s not found", display)
+                log.info(" waiting up to %i seconds", CONNECT_TIMEOUT)
+                start = monotonic_time()
+                while monotonic_time()-start<CONNECT_TIMEOUT:
+                    state = dotxpra.get_display_state(display)
+                    log("get_display_state(%s)=%s", display, state)
+                    if state in (dotxpra.LIVE, dotxpra.INACCESSIBLE):
+                        #found a final state
+                        break
+                    import time
+                    time.sleep(0.1)
+                dir_servers = socket_details()
         sockpath = single_display_match(dir_servers, error_cb,
                                         nomatch="cannot find live server for display %s" % display)[-1]
     return sockpath
@@ -1436,6 +1486,9 @@ def get_client_app(error_cb, opts, extra_args, mode):
     elif mode=="_monitor":
         from xpra.client.gobject_client_base import MonitorXpraClient
         app = MonitorXpraClient(connect(), opts)
+    elif mode == "top":
+        from xpra.client.top_client import TopClient
+        app = TopClient(connect(), opts)
     elif mode=="control":
         from xpra.client.gobject_client_base import ControlXpraClient
         if len(extra_args)<=1:
@@ -1802,6 +1855,10 @@ def guess_X11_display(dotxpra, current_display, uid=getuid(), gid=getgid()):
 
 
 def no_gtk():
+    if OSX and PYTHON2:
+        #on macos, we may have loaded the bindings already
+        #and this is not a problem there
+        return
     gtk = sys.modules.get("gtk") or sys.modules.get("gi.repository.Gtk")
     if gtk is None:
         #all good, not loaded
@@ -1817,10 +1874,10 @@ def no_gtk():
 
 def run_glprobe(opts):
     props = do_run_glcheck(opts)
-    if not props.get("safe", False):
-        return 2
     if not props.get("success", False):
         return 3
+    if not props.get("safe", False):
+        return 2
     return 0
 
 def do_run_glcheck(opts):

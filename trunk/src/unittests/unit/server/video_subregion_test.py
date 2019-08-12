@@ -4,17 +4,19 @@
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-from xpra.os_util import monotonic_time
-from xpra.gtk_common.gobject_compat import import_glib
-glib = import_glib()
-
 import unittest
 from collections import deque
+
+from xpra.os_util import monotonic_time
+from xpra.gtk_common.gobject_compat import import_glib
 try:
-    from xpra.server.window import video_subregion, region
+    from xpra.server.window import video_subregion
+    from xpra import rectangle
 except ImportError:
     video_subregion = None
-    region = None
+    rectangle = None
+
+glib = import_glib()
 
 
 class TestVersionUtilModule(unittest.TestCase):
@@ -29,7 +31,10 @@ class TestVersionUtilModule(unittest.TestCase):
         ww = 1024
         wh = 768
         def assertiswin():
-            assert r.rectangle and r.rectangle.get_geometry()==(0, 0, ww, wh), "rectangle %s does not match whole window %ix%i" % (r.rectangle, ww, wh)
+            if not r.rectangle:
+                raise Exception("region not found, should have matched the whole window")
+            if r.rectangle.get_geometry()!=(0, 0, ww, wh):
+                raise Exception("rectangle %s does not match whole window %ix%i" % (r.rectangle, ww, wh))
 
         log("* checking that we need some events")
         last_damage_events = []
@@ -45,7 +50,7 @@ class TestVersionUtilModule(unittest.TestCase):
             last_damage_events.append(vr)
         r.identify_video_subregion(ww, wh, 50, last_damage_events)
         assert r.rectangle
-        assert r.rectangle==region.rectangle(*vr[1:])
+        assert r.rectangle==rectangle.rectangle(*vr[1:])
 
         log("* checking that empty damage events does not cause errors")
         r.reset()
@@ -101,24 +106,23 @@ class TestVersionUtilModule(unittest.TestCase):
             for _ in range(N2):
                 last_damage_events.append(v2)
             r.identify_video_subregion(ww, wh, 100, last_damage_events)
-            m = region.merge_all([region.rectangle(*v1[1:]), region.rectangle(*v2[1:])])
+            m = rectangle.merge_all([rectangle.rectangle(*v1[1:]), rectangle.rectangle(*v2[1:])])
             assert r.rectangle and r.rectangle==m, "expected %s but got %s for N1=%i, N2=%i" % (m, r.rectangle, N1, N2)
 
 
     def test_cases(self):
         from xpra.server.window.video_subregion import scoreinout   #, sslog
-        from xpra.rectangle import rectangle         #@UnresolvedImport
         #sslog.enable_debug()
-        r = rectangle(35, 435, 194, 132)
+        r = rectangle.rectangle(35, 435, 194, 132)
         score = scoreinout(1200, 1024, r, 1466834, 21874694)
         assert score<100
-        r = rectangle(100, 600, 320, 240)
+        r = rectangle.rectangle(100, 600, 320, 240)
         score = scoreinout(1200, 1024, r, 320*240*10, 320*240*25)
         assert score<100
 
 
 def main():
-    if video_subregion and region:
+    if video_subregion and rectangle:
         unittest.main()
     else:
         print("video_subregion_test skipped")

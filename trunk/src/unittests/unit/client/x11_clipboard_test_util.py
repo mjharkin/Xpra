@@ -5,14 +5,14 @@
 # later version. See the file COPYING for details.
 
 import time
+
+from unit.client.x11_client_test_util import X11ClientTestUtil
 from xpra.util import envbool
 from xpra.os_util import get_hex_uuid, pollwait, which
-from unit.client.x11_client_test_util import X11ClientTestUtil
 from xpra.platform.features import CLIPBOARDS
-
 from xpra.log import Logger
-log = Logger("clipboard")
 
+log = Logger("clipboard")
 
 SANITY_CHECKS = envbool("XPRA_CLIPBOARD_SANITY_CHECKS", True)
 
@@ -23,7 +23,8 @@ def has_xclip():
 class X11ClipboardTestUtil(X11ClientTestUtil):
 
 	def get_clipboard_value(self, display, selection="clipboard"):
-		return self.get_command_output("xclip -d %s -selection %s -o" % (display, selection), shell=True)
+		out = self.get_command_output("xclip -d %s -selection %s -o" % (display, selection), shell=True)
+		return out.decode()
 
 	def set_clipboard_value(self, display, value, selection="clipboard"):
 		cmd = "echo -n '%s' | xclip -d %s -selection %s -i" % (value, display, selection)
@@ -52,7 +53,8 @@ class X11ClipboardTestUtil(X11ClientTestUtil):
 		server = self.run_server()
 		server_display = server.display
 		#connect a client:
-		xvfb, client = self.run_client(server_display, "--clipboard-direction=%s" % direction, "--remote-logging=no")
+		xvfb, client = self.run_client(server_display,
+									"--clipboard-direction=%s" % direction, "--remote-logging=no")
 		assert pollwait(client, 2) is None, "client has exited with return code %s" % client.poll()
 		client_display = xvfb.display
 

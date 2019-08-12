@@ -10,16 +10,14 @@ from xpra.gtk_common.error import xlog, XError
 from xpra.x11.gtk_x11.prop import prop_set, prop_get
 from xpra.x11.gtk_x11.selection import ManagerSelection
 from xpra.x11.gtk_x11.gdk_bindings import (
-               add_event_receiver,          #@UnresolvedImport
-               remove_event_receiver,       #@UnresolvedImport
-               get_pywindow,                #@UnresolvedImport
-               get_xatom)                   #@UnresolvedImport
-from xpra.x11.bindings.window_bindings import constants, X11WindowBindings #@UnresolvedImport
-from xpra.gtk_common.gobject_compat import import_gtk, import_gobject
+    add_event_receiver,          #@UnresolvedImport
+    remove_event_receiver,       #@UnresolvedImport
+    get_pywindow,                #@UnresolvedImport
+    get_xatom,                   #@UnresolvedImport
+    )
+from xpra.gtk_common.gobject_compat import import_gobject
 from xpra.log import Logger
 
-X11Window = X11WindowBindings()
-gtk = import_gtk()
 gobject = import_gobject()
 
 log = Logger("x11", "xsettings")
@@ -29,7 +27,7 @@ XSETTINGS = "_XSETTINGS_SETTINGS"
 #constant type in prop.py:
 XSETTINGS_TYPE = "xsettings-settings"
 
-XNone = constants["XNone"]
+XNone = 0
 
 
 class XSettingsManager(object):
@@ -68,6 +66,8 @@ class XSettingsHelper(object):
 
     def xsettings_owner(self):
         with xlog:
+            from xpra.x11.bindings.window_bindings import X11WindowBindings #@UnresolvedImport
+            X11Window = X11WindowBindings()
             owner_x = X11Window.XGetSelectionOwner(self._selection)
             log("XGetSelectionOwner(%s)=%#x", self._selection, owner_x)
             if owner_x == XNone:
@@ -122,3 +122,25 @@ class XSettingsWatcher(XSettingsHelper, gobject.GObject):
             self.emit("xsettings-changed")
 
 gobject.type_register(XSettingsWatcher)
+
+
+def main():
+    from xpra.x11.xsettings_prop import XSettingsNames
+    from xpra.x11.gtk_x11.gdk_display_source import init_gdk_display_source
+    init_gdk_display_source()
+    s = XSettingsHelper().get_settings()
+    assert s
+    seq, data = s
+    print("XSettings: (sequence %i)" % seq)
+    for vtype, prop, value, serial  in data:
+        if isinstance(value, bytes):
+            vstr = value.decode()
+        else:
+            vstr = str(value)
+        if serial>0:
+            vstr += " (serial=%#x)" % serial
+        print("%8s: %32s = %-32s" % (XSettingsNames.get(vtype, "?"), prop.decode(), vstr))
+
+
+if __name__ == "__main__":
+    main()

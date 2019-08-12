@@ -16,7 +16,7 @@ from xpra.util import envbool, envint
 from xpra.os_util import (
     setsid, shellsub, close_fds,
     setuidgid, getuid, getgid,
-    strtobytes, osexpand, monotonic_time,
+    strtobytes, bytestostr, osexpand, monotonic_time,
     POSIX, OSX, PYTHON3,
     )
 from xpra.platform.displayfd import read_displayfd, parse_displayfd
@@ -90,11 +90,11 @@ def create_xorg_device_configs(xorg_conf_dir, device_uuid, uid, gid):
 #create individual device files:
 def save_input_conf(xorg_conf_dir, i, dev_type, device_uuid, uid, gid):
     upper_dev_type = dev_type[:1].upper()+dev_type[1:]   #ie: Pointer
-    product_name = "Xpra Virtual %s %s" % (upper_dev_type, device_uuid)
+    product_name = "Xpra Virtual %s %s" % (upper_dev_type, bytestostr(device_uuid))
     identifier = "xpra-virtual-%s" % dev_type
     conf_file = os.path.join(xorg_conf_dir, "%02i-%s.conf" % (i, dev_type))
     with open(conf_file, "wb") as f:
-        f.write(b"""Section "InputClass"
+        f.write(strtobytes("""Section "InputClass"
 Identifier "%s"
 MatchProduct "%s"
 MatchUSBID "ffff:ffff"
@@ -103,7 +103,7 @@ Driver "libinput"
 Option "AccelProfile" "flat"
 Option "Ignore" "False"
 EndSection
-""" % (identifier, product_name, upper_dev_type))
+""" % (identifier, product_name, upper_dev_type)))
         os.fchown(f.fileno(), uid, gid)
     #Option "AccelerationProfile" "-1"
     #Option "AccelerationScheme" "none"

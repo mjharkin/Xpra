@@ -38,9 +38,10 @@ class AudioClient(StubClientMixin):
         #sound state:
         self.on_sink_ready = None
         self.sound_sink = None
-        self.min_sound_sequence = 0
+        self.sound_sink_sequence = 0
         self.server_sound_eos_sequence = False
         self.sound_source = None
+        self.sound_source_sequence = 0
         self.sound_in_bytecount = 0
         self.sound_out_bytecount = 0
         self.server_av_sync = False
@@ -53,6 +54,8 @@ class AudioClient(StubClientMixin):
         self.server_sound_bundle_metadata = False
         self.server_ogg_latency_fix = False
         self.queue_used_sent = None
+        #duplicated from ServerInfo mixin:
+        self._remote_machine_id = None
 
     def init(self, opts, _extra_args=()):
         self.av_sync = opts.av_sync
@@ -292,6 +295,7 @@ class AudioClient(StubClientMixin):
             if not ss:
                 return False
             self.sound_source = ss
+            ss.sequence = self.sound_source_sequence
             ss.connect("new-buffer", self.new_sound_buffer)
             ss.connect("state-changed", sound_source_state_changed)
             ss.connect("new-stream", self.new_stream)
@@ -330,7 +334,11 @@ class AudioClient(StubClientMixin):
             log.warn("Warning: cannot stop sound source which has not been started")
             return
         #tell the server to stop:
-        self.send("sound-data", ss.codec or "", "", {"end-of-stream" : True})
+        self.send("sound-data", ss.codec or "", "", {
+            "end-of-stream" : True,
+            "sequence"      : ss.sequence,
+            })
+        self.sound_source_sequence += 1
         ss.cleanup()
 
     def start_receiving_sound(self):
@@ -377,12 +385,12 @@ class AudioClient(StubClientMixin):
         if self.speaker_enabled:
             self.speaker_enabled = False
             self.emit("speaker-changed")
-        if tell_server:
-            self.send("sound-control", "stop", self.min_sound_sequence)
-        self.min_sound_sequence += 1
-        self.send("sound-control", "new-sequence", self.min_sound_sequence)
-        if ss is None:
+        if not ss:
             return
+        if tell_server and ss.sequence==self.sound_sink_sequence:
+            self.send("sound-control", "stop", self.sound_sink_sequence)
+        self.sound_sink_sequence += 1
+        self.send("sound-control", "new-sequence", self.sound_sink_sequence)
         self.sound_sink = None
         log("stop_receiving_sound(%s) calling %s", tell_server, ss.cleanup)
         ss.cleanup()
@@ -451,6 +459,7 @@ class AudioClient(StubClientMixin):
             if not ss:
                 return False
             self.sound_sink = ss
+            ss.sequence = self.sound_sink_sequence
             ss.connect("state-changed", self.sound_sink_state_changed)
             ss.connect("error", self.sound_sink_error)
             ss.connect("exit", self.sound_sink_exit)
@@ -466,25 +475,28 @@ class AudioClient(StubClientMixin):
 
     def new_sound_buffer(self, sound_source, data, metadata, packet_metadata=()):
         log("new_sound_buffer(%s, %s, %s, %s)", sound_source, len(data or ()), metadata, packet_metadata)
-        if not self.sound_source:
+        if sound_source.sequence<self.sound_source_sequence:
+            log("sound buffer dropped: old sequence number: %s (current is %s)",
+                sound_source.sequence, self.sound_source_sequence)
             return
         self.sound_out_bytecount += len(data)
         for x in packet_metadata:
             self.sound_out_bytecount += len(x)
+        metadata["sequence"] = sound_source.sequence
         if packet_metadata:
             if not self.server_sound_bundle_metadata:
                 #server does not support bundling, send packet metadata as individual packets before the main packet:
                 for x in packet_metadata:
-                    self.send_sound_data(sound_source, x)
+                    self.send_sound_data(sound_source, x, metadata)
                 packet_metadata = ()
             else:
                 #the packet metadata is compressed already:
                 packet_metadata = Compressed("packet metadata", packet_metadata, can_inline=True)
         self.send_sound_data(sound_source, data, metadata, packet_metadata)
 
-    def send_sound_data(self, sound_source, data, metadata=None, packet_metadata=None):
+    def send_sound_data(self, sound_source, data, metadata, packet_metadata=None):
         codec = sound_source.codec
-        packet_data = [codec, Compressed(codec, data), metadata or {}]
+        packet_data = [codec, Compressed(codec, data), metadata]
         if packet_metadata:
             assert self.server_sound_bundle_metadata
             packet_data.append(packet_metadata)
@@ -504,8 +516,8 @@ class AudioClient(StubClientMixin):
             self.sound_in_bytecount += len(data)
         #verify sequence number if present:
         seq = metadata.intget("sequence", -1)
-        if self.min_sound_sequence>0 and 0<=seq<self.min_sound_sequence:
-            log("ignoring sound data with old sequence number %s (now on %s)", seq, self.min_sound_sequence)
+        if self.sound_sink_sequence>0 and 0<=seq<self.sound_sink_sequence:
+            log("ignoring sound data with old sequence number %s (now on %s)", seq, self.sound_sink_sequence)
             return
 
         if not self.speaker_enabled:

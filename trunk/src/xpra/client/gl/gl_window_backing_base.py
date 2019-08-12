@@ -31,7 +31,7 @@ from OpenGL.GL import (
     glActiveTexture, glTexSubImage2D,
     glGetString, glViewport, glMatrixMode, glLoadIdentity, glOrtho,
     glGenTextures, glDisable,
-    glBindTexture, glPixelStorei, glEnable, glEnablei, glBegin, glFlush,
+    glBindTexture, glPixelStorei, glEnable, glBegin, glFlush,
     glTexParameteri,
     glTexImage2D,
     glMultiTexCoord2i,
@@ -51,14 +51,18 @@ from OpenGL.GL.ARB.framebuffer_object import (
     glGenFramebuffers, glBindFramebuffer, glFramebufferTexture2D, glBlitFramebuffer,
     )
 
-from xpra.os_util import monotonic_time, strtobytes, hexstr, POSIX, PYTHON2, DummyContextManager
-from xpra.util import envint, envbool, repr_ellipsized
+from xpra.os_util import (
+    monotonic_time, strtobytes, hexstr,
+    POSIX, PYTHON2, OSX,
+    DummyContextManager,
+    )
+from xpra.util import envint, envbool, repr_ellipsized, first_time
 from xpra.client.paint_colors import get_paint_box_color
 from xpra.codecs.codec_constants import get_subsampling_divs
 from xpra.client.window_backing_base import (
     fire_paint_callbacks, WindowBackingBase,
     WEBP_PILLOW, SCROLL_ENCODING,
-    ) 
+    )
 from xpra.client.gl.gl_check import GL_ALPHA_SUPPORTED, is_pyopengl_memoryview_safe, get_max_texture_size
 from xpra.client.gl.gl_colorspace_conversions import YUV2RGB_shader, YUV2RGB_FULL_shader, RGBP2RGB_shader
 from xpra.client.gl.gl_spinner import draw_spinner
@@ -72,9 +76,12 @@ PAINT_FLUSH = envbool("XPRA_PAINT_FLUSH", True)
 JPEG_YUV = envbool("XPRA_JPEG_YUV", True)
 WEBP_YUV = envbool("XPRA_WEBP_YUV", True)
 FORCE_CLONE = envbool("XPRA_OPENGL_FORCE_CLONE", False)
+DRAW_REFRESH = envbool("XPRA_OPENGL_DRAW_REFRESH", False)
+FBO_RESIZE = envbool("XPRA_OPENGL_FBO_RESIZE", not OSX)
+FBO_RESIZE_DELAY = envint("XPRA_OPENGL_FBO_RESIZE_DELAY", 50)
 
 CURSOR_IDLE_TIMEOUT = envint("XPRA_CURSOR_IDLE_TIMEOUT", 6)
-TEXTURE_CURSOR = envbool("XPRA_OPENGL_TEXTURE_CURSOR", False)
+TEXTURE_CURSOR = envbool("XPRA_OPENGL_TEXTURE_CURSOR", True)
 
 SAVE_BUFFERS = os.environ.get("XPRA_OPENGL_SAVE_BUFFERS")
 if SAVE_BUFFERS not in ("png", "jpeg", None):
@@ -205,6 +212,32 @@ YUV2RGB_SHADER = 0
 RGBP2RGB_SHADER = 1
 YUV2RGB_FULL_SHADER = 2
 
+#X11 constants we use for gravity:
+NorthWestGravity = 1
+NorthGravity     = 2
+NorthEastGravity = 3
+WestGravity      = 4
+CenterGravity    = 5
+EastGravity      = 6
+SouthWestGravity = 7
+SouthGravity     = 8
+SouthEastGravity = 9
+StaticGravity    = 10
+
+GRAVITY_STR = {
+    NorthWestGravity : "NorthWest",
+    NorthGravity     : "North",
+    NorthEastGravity : "NorthEast",
+    WestGravity      : "West",
+    CenterGravity    : "Center",
+    EastGravity      : "East",
+    SouthWestGravity : "SouthWest",
+    SouthGravity     : "South",
+    SouthEastGravity : "SouthEast",
+    StaticGravity    : "South",
+    }
+
+
 """
 The logic is as follows:
 
@@ -245,7 +278,7 @@ class GLWindowBackingBase(WindowBackingBase):
         self.init_backing()
         self.bit_depth = self.get_bit_depth(pixel_depth)
         self.init_formats()
-        self.draw_needs_refresh = False
+        self.draw_needs_refresh = DRAW_REFRESH
         self._backing.show()
 
     def init_gl_config(self, window_alpha):
@@ -304,6 +337,8 @@ class GLWindowBackingBase(WindowBackingBase):
         props = WindowBackingBase.get_encoding_properties(self)
         if SCROLL_ENCODING:
             props["encoding.scrolling"] = True
+        if FBO_RESIZE:
+            props["encoding.send-window-size"] = True
         props["encoding.bit-depth"] = self.bit_depth
         return props
 
@@ -314,10 +349,103 @@ class GLWindowBackingBase(WindowBackingBase):
     def init(self, ww, wh, bw, bh):
         #re-init gl projection with new dimensions
         #(see gl_init)
+        self.render_size = ww, wh
         if self.size!=(bw, bh):
             self.gl_setup = False
+            oldw, oldh = self.size
             self.size = bw, bh
-        self.render_size = ww, wh
+            if FBO_RESIZE:
+                self.resize_fbo(oldw, oldh, bw, bh)
+
+    def resize_fbo(self, oldw, oldh, bw, bh):
+        try:
+            context = self.gl_context()
+        except Exception:
+            context = None
+        if context is None or self.offscreen_fbo is None:
+            return
+        #if we have a valid context and an existing offscreen fbo,
+        #preserve the existing pixels by copying them onto the new tmp fbo (new size)
+        #and then doing the gl_init() call but without initializing the offscreen fbo.
+        with context:
+            sx = sy = dx = dy = 0
+            w = min(bw, oldw)
+            h = min(bh, oldh)
+            def center_y():
+                if bh>=oldh:
+                    #take the whole source, paste it in the middle
+                    return 0, (bh-oldh)//2
+                #skip the edges of the source, paste all of it
+                return (oldh-bh)//2, 0
+            def center_x():
+                if bw>=oldw:
+                    return 0, (bw-oldw)//2
+                return (oldw-bw)//2, 0
+            def east_x():
+                if bw>=oldw:
+                    return 0, bw-oldw
+                return oldw-bw, 0
+            def west_x():
+                return 0, 0
+            def north_y():
+                return 0, 0
+            def south_y():
+                if bh>=oldh:
+                    return 0, bh-oldh
+                return oldh-bh, 0
+            if not self.gravity or self.gravity==NorthWestGravity:
+                #undefined (or 0), use NW
+                sx, dx = west_x()
+                sy, dy = north_y()
+            elif self.gravity==NorthGravity:
+                sx, dx = center_x()
+                sy, dy = north_y()
+            elif self.gravity==NorthEastGravity:
+                sx, dx = east_x()
+                sy, dy = north_y()
+            elif self.gravity==WestGravity:
+                sx, dx = west_x()
+                sy, dy = center_y()
+            elif self.gravity==CenterGravity:
+                sx, dx = center_x()
+                sy, dy = center_y()
+            elif self.gravity==EastGravity:
+                sx, dx = east_x()
+                sy, dy = center_y()
+            elif self.gravity==SouthWestGravity:
+                sx, dx = west_x()
+                sy, dy = south_y()
+            elif self.gravity==SouthGravity:
+                sx, dx = center_x()
+                sy, dy = south_y()
+            elif self.gravity==SouthEastGravity:
+                sx, dx = east_x()
+                sy, dy = south_y()
+            elif self.gravity==StaticGravity:
+                if first_time("StaticGravity-%i" % self.wid):
+                    log.warn("Warning: static gravity is not handled")
+
+            #invert Y coordinates for OpenGL:
+            sy = (oldh-h)-sy
+            dy = (bh-h)-dy
+            #re-init our OpenGL context with the new size,
+            #but leave offscreen fbo with the old size
+            self.gl_init(True)
+            #copy offscreen to new tmp:
+            self.copy_fbo(w, h, sx, sy, dx, dy)
+            #make tmp the new offscreen:
+            self.swap_fbos()
+            #now we don't need the old tmp fbo contents any more,
+            #and we can re-initialize it with the correct size:
+            mag_filter = self.get_init_magfilter()
+            self.init_fbo(TEX_TMP_FBO, self.tmp_fbo, bw, bh, mag_filter)
+            #no idea why, but we have to wait a bit to show it:
+            from gi.repository import GLib
+            def redraw():
+                with self.gl_context():
+                    self.pending_fbo_paint = ((0, 0, bw, bh), )
+                    self.do_present_fbo()
+            GLib.timeout_add(FBO_RESIZE_DELAY, redraw)
 
     def gl_marker(self, *msg):
         log(*msg)
@@ -388,10 +516,9 @@ class GLWindowBackingBase(WindowBackingBase):
                 log.error("OpenGL shader %s failed:", name)
                 log.error(" %s", err)
                 raise Exception("OpenGL shader %s setup failure: %s" % (name, err))
-            else:
-                log("%s shader initialized", name)
+            log("%s shader initialized", name)
 
-    def gl_init(self):
+    def gl_init(self, skip_fbo=False):
         #must be called within a context!
         #performs init if needed
         if not self.debug_setup:
@@ -400,7 +527,6 @@ class GLWindowBackingBase(WindowBackingBase):
 
         if not self.gl_setup:
             mt = get_max_texture_size()
-            rw, rh = self.render_size
             w, h = self.size
             if w>mt or h>mt:
                 raise Exception("invalid texture dimensions %ix%i, maximum is %i" % (w, h, mt))
@@ -439,32 +565,14 @@ class GLWindowBackingBase(WindowBackingBase):
             if self.textures is None:
                 self.gl_init_textures()
 
-            mag_filter = GL_NEAREST
-            if float(rw)/w!=rw//w or float(rh)/h!=rh//h:
-                #non integer scaling, use linear magnification filter:
-                mag_filter = GL_LINEAR
-
-            log("initializing FBOs")
+            mag_filter = self.get_init_magfilter()
             # Define empty tmp FBO
+            self.init_fbo(TEX_TMP_FBO, self.tmp_fbo, w, h, mag_filter)
+            if not skip_fbo:
+                # Define empty FBO texture and set rendering to FBO
+                self.init_fbo(TEX_FBO, self.offscreen_fbo, w, h, mag_filter)
+
             target = GL_TEXTURE_RECTANGLE_ARB
-            glBindTexture(target, self.textures[TEX_TMP_FBO])
-            glTexParameteri(target, GL_TEXTURE_MAG_FILTER, mag_filter)
-            glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
-            glTexImage2D(target, 0, self.internal_format, w, h, 0, self.texture_pixel_format, GL_UNSIGNED_BYTE, None)
-            glBindFramebuffer(GL_FRAMEBUFFER, self.tmp_fbo)
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, target, self.textures[TEX_TMP_FBO], 0)
-            glClear(GL_COLOR_BUFFER_BIT)
-
-            # Define empty FBO texture and set rendering to FBO
-            glBindTexture(target, self.textures[TEX_FBO])
-            # nvidia needs this even though we don't use mipmaps (repeated through this file):
-            glTexParameteri(target, GL_TEXTURE_MAG_FILTER, mag_filter)
-            glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
-            glTexImage2D(target, 0, self.internal_format, w, h, 0, self.texture_pixel_format, GL_UNSIGNED_BYTE, None)
-            glBindFramebuffer(GL_FRAMEBUFFER, self.offscreen_fbo)
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, target, self.textures[TEX_FBO], 0)
-            glClear(GL_COLOR_BUFFER_BIT)
-
             glBindTexture(target, 0)
 
             # Create and assign fragment programs
@@ -475,6 +583,27 @@ class GLWindowBackingBase(WindowBackingBase):
             glBindProgramARB(GL_FRAGMENT_PROGRAM_ARB, self.shaders[YUV2RGB_SHADER])
             self.gl_setup = True
             log("gl_init() done")
+
+    def get_init_magfilter(self):
+        rw, rh = self.render_size
+        w, h = self.size
+        if float(rw)/w!=rw//w or float(rh)/h!=rh//h:
+            #non integer scaling, use linear magnification filter:
+            return GL_LINEAR
+        return GL_NEAREST
+
+
+    def init_fbo(self, texture_index, fbo, w, h, mag_filter):
+        target = GL_TEXTURE_RECTANGLE_ARB
+        glBindTexture(target, self.textures[texture_index])
+        # nvidia needs this even though we don't use mipmaps (repeated through this file):
+        glTexParameteri(target, GL_TEXTURE_MAG_FILTER, mag_filter)
+        glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+        glTexImage2D(target, 0, self.internal_format, w, h, 0, self.texture_pixel_format, GL_UNSIGNED_BYTE, None)
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo)
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, target, self.textures[texture_index], 0)
+        glClear(GL_COLOR_BUFFER_BIT)
+
 
     def close(self):
         #This seems to cause problems, so we rely
@@ -505,25 +634,9 @@ class GLWindowBackingBase(WindowBackingBase):
         def fail(msg):
             log.error("Error: %s", msg)
             fire_paint_callbacks(callbacks, False, msg)
+        bw, bh = self.size
         with context:
-            bw, bh = self.size
-            #paste from offscreen to tmp with delta offset:
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, self.offscreen_fbo)
-            target = GL_TEXTURE_RECTANGLE_ARB
-            glEnable(target)
-            glBindTexture(target, self.textures[TEX_FBO])
-            glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, target, self.textures[TEX_FBO], 0)
-            glReadBuffer(GL_COLOR_ATTACHMENT0)
-
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, self.tmp_fbo)
-            glBindTexture(target, self.textures[TEX_TMP_FBO])
-            glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, target, self.textures[TEX_TMP_FBO], 0)
-            glDrawBuffer(GL_COLOR_ATTACHMENT1)
-
-            #copy current fbo:
-            glBlitFramebuffer(0, 0, bw, bh,
-                              0, 0, bw, bh,
-                              GL_COLOR_BUFFER_BIT, GL_NEAREST)
+            self.copy_fbo(bw, bh)
 
             for x,y,w,h,xdelta,ydelta in scrolls:
                 if abs(xdelta)>=bw:
@@ -568,14 +681,9 @@ class GLWindowBackingBase(WindowBackingBase):
                 self.paint_box("scroll", True, x+xdelta, y+ydelta, x+w+xdelta, y+h+ydelta)
                 glFlush()
 
-            #now swap references to tmp and offscreen so tmp becomes the new offscreen:
-            tmp = self.offscreen_fbo
-            self.offscreen_fbo = self.tmp_fbo
-            self.tmp_fbo = tmp
-            tmp = self.textures[TEX_FBO]
-            self.textures[TEX_FBO] = self.textures[TEX_TMP_FBO]
-            self.textures[TEX_TMP_FBO] = tmp
+            self.swap_fbos()
 
+            target = GL_TEXTURE_RECTANGLE_ARB
             #restore normal paint state:
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, target, self.textures[TEX_FBO], 0)
             glBindFramebuffer(GL_READ_FRAMEBUFFER, self.offscreen_fbo)
@@ -586,6 +694,34 @@ class GLWindowBackingBase(WindowBackingBase):
             glDisable(target)
             fire_paint_callbacks(callbacks, True)
             self.present_fbo(0, 0, bw, bh, flush)
+
+    def copy_fbo(self, w, h, sx=0, sy=0, dx=0, dy=0):
+        #copy from offscreen to tmp:
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, self.offscreen_fbo)
+        target = GL_TEXTURE_RECTANGLE_ARB
+        glEnable(target)
+        glBindTexture(target, self.textures[TEX_FBO])
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, target, self.textures[TEX_FBO], 0)
+        glReadBuffer(GL_COLOR_ATTACHMENT0)
+
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, self.tmp_fbo)
+        glBindTexture(target, self.textures[TEX_TMP_FBO])
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, target, self.textures[TEX_TMP_FBO], 0)
+        glDrawBuffer(GL_COLOR_ATTACHMENT1)
+
+        glBlitFramebuffer(sx, sy, sx+w, sy+h,
+                          dx, dy, dx+w, dy+h,
+                          GL_COLOR_BUFFER_BIT, GL_NEAREST)
+
+    def swap_fbos(self):
+        #swap references to tmp and offscreen so tmp becomes the new offscreen:
+        tmp = self.offscreen_fbo
+        self.offscreen_fbo = self.tmp_fbo
+        self.tmp_fbo = tmp
+        tmp = self.textures[TEX_FBO]
+        self.textures[TEX_FBO] = self.textures[TEX_TMP_FBO]
+        self.textures[TEX_TMP_FBO] = tmp
+
 
     def present_fbo(self, x, y, w, h, flush=0):
         log("present_fbo: adding %s to pending paint list (size=%i), flush=%s, paint_screen=%s",
@@ -650,7 +786,6 @@ class GLWindowBackingBase(WindowBackingBase):
         glBindTexture(target, self.textures[TEX_FBO])
         if self._alpha_enabled:
             # support alpha channel if present:
-            glEnablei(GL_BLEND, self.textures[TEX_FBO])
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
         glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE)
         glBegin(GL_QUADS)
@@ -694,16 +829,17 @@ class GLWindowBackingBase(WindowBackingBase):
         log("%s.do_present_fbo() done", self)
 
     def save_FBO(self):
+        target = GL_TEXTURE_RECTANGLE_ARB
         bw, bh = self.size
-        glEnable(GL_TEXTURE_RECTANGLE_ARB)
+        glEnable(target)
         glBindFramebuffer(GL_READ_FRAMEBUFFER, self.offscreen_fbo)
-        glBindTexture(GL_TEXTURE_RECTANGLE_ARB, self.textures[TEX_FBO])
-        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_RECTANGLE_ARB, self.textures[TEX_FBO], 0)
+        glBindTexture(target, self.textures[TEX_FBO])
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, target, self.textures[TEX_FBO], 0)
         glReadBuffer(GL_COLOR_ATTACHMENT0)
         glViewport(0, 0, bw, bh)
         size = bw*bh*4
         data = numpy.empty(size)
-        img_data = glGetTexImage(GL_TEXTURE_RECTANGLE_ARB, 0, GL_BGRA, GL_UNSIGNED_BYTE, data)
+        img_data = glGetTexImage(target, 0, GL_BGRA, GL_UNSIGNED_BYTE, data)
         img = Image.frombuffer("RGBA", (bw, bh), img_data, "raw", "BGRA", bw*4)
         img = ImageOps.flip(img)
         kwargs = {}
@@ -718,8 +854,8 @@ class GLWindowBackingBase(WindowBackingBase):
         log("do_present_fbo: saving %4ix%-4i pixels, %7i bytes to %s", bw, bh, size, filename)
         img.save(filename, SAVE_BUFFERS, **kwargs)
         glBindFramebuffer(GL_READ_FRAMEBUFFER, 0)
-        glBindTexture(GL_TEXTURE_RECTANGLE_ARB, 0)
-        glDisable(GL_TEXTURE_RECTANGLE_ARB)
+        glBindTexture(target, 0)
+        glDisable(target)
 
     def draw_pointer(self):
         px, py, _, _, size, start_time = self.pointer_overlay
@@ -758,10 +894,9 @@ class GLWindowBackingBase(WindowBackingBase):
             target = GL_TEXTURE_RECTANGLE_ARB
             glEnable(target)
             glBindTexture(target, self.textures[TEX_CURSOR])
-            glEnablei(GL_BLEND, self.textures[TEX_CURSOR])
+            glEnable(GL_BLEND)
             glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
-            glBlendFunc(GL_ONE, GL_ONE)
-            glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE)
+            #glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE)
 
             glBegin(GL_QUADS)
             glTexCoord2i(0, 0)
@@ -774,17 +909,17 @@ class GLWindowBackingBase(WindowBackingBase):
             glVertex2i(x+cw, y)
             glEnd()
 
+            glDisable(GL_BLEND)
             glBindTexture(target, 0)
             glDisable(target)
         else:
-            #FUGLY: paint each pixel separately..
+            #ugly and slow: paint each pixel separately..
             if not self.validate_cursor():
                 return
             pixels = self.cursor_data[8]
             blen = cw*ch*4
             p = struct.unpack(b"B"*blen, pixels)
             glLineWidth(1)
-            #TODO: use VBO arrays to make this faster
             for cx in range(cw):
                 for cy in range(ch):
                     i = cx*4+cy*cw*4
@@ -924,7 +1059,7 @@ class GLWindowBackingBase(WindowBackingBase):
         if JPEG_YUV and width>=2 and height>=2:
             img = self.jpeg_decoder.decompress_to_yuv(img_data, width, height, options)
             flush = options.intget("flush", 0)
-            self.idle_add(self.gl_paint_planar, YUV2RGB_FULL_SHADER, flush, "jpeg", img, x, y, width, height, width, height, callbacks)
+            self.idle_add(self.gl_paint_planar, YUV2RGB_FULL_SHADER, flush, "jpeg", img, x, y, width, height, width, height, options, callbacks)
         else:
             img = self.jpeg_decoder.decompress_to_rgb("BGRX", img_data, width, height, options)
             self.idle_add(self.do_paint_rgb, "BGRX", img.get_pixels(), x, y, width, height, img.get_rowstride(), options, callbacks)
@@ -935,7 +1070,7 @@ class GLWindowBackingBase(WindowBackingBase):
         if subsampling=="YUV420P" and WEBP_YUV and self.webp_decoder and not WEBP_PILLOW and not has_alpha and width>=2 and height>=2:
             img = self.webp_decoder.decompress_yuv(img_data)
             flush = options.intget("flush", 0)
-            self.idle_add(self.gl_paint_planar, YUV2RGB_SHADER, flush, "webp", img, x, y, width, height, width, height, callbacks)
+            self.idle_add(self.gl_paint_planar, YUV2RGB_SHADER, flush, "webp", img, x, y, width, height, width, height, options, callbacks)
             return
         WindowBackingBase.paint_webp(self, img_data, x, y, width, height, options, callbacks)
 
@@ -951,8 +1086,8 @@ class GLWindowBackingBase(WindowBackingBase):
             fire_paint_callbacks(callbacks)
             return
         try:
-            rgb_format = rgb_format.decode()
-        except:
+            rgb_format = rgb_format.decode("utf-8")
+        except (AttributeError, UnicodeDecodeError):
             pass
         try:
             upload, img_data = self.pixels_for_upload(img_data)
@@ -979,6 +1114,8 @@ class GLWindowBackingBase(WindowBackingBase):
                 glTexParameteri(target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER)
                 glTexParameteri(target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER)
                 glTexImage2D(target, 0, self.internal_format, width, height, 0, pformat, ptype, img_data)
+
+                x, y = self.gravity_adjust(x, y, options)
 
                 # Draw textured RGB quad at the right coordinates
                 glBegin(GL_QUADS)
@@ -1008,6 +1145,62 @@ class GLWindowBackingBase(WindowBackingBase):
             log("Error in %s paint of %i bytes, options=%s", rgb_format, len(img_data), options, exc_info=True)
         fire_paint_callbacks(callbacks, False, message)
 
+    def gravity_adjust(self, x, y, options):
+        #if the window size has changed,
+        #adjust the coordinates honouring the window gravity:
+        window_size = options.intlistget("window-size", None)
+        if not window_size:
+            return x, y
+        window_size = tuple(window_size)
+        if window_size==self.size:
+            return x, y
+        if self.gravity==0 or self.gravity==NorthWestGravity:
+            return x, y
+        log("adjusting for %s gravity and window-size=%s, size=%s",
+            GRAVITY_STR.get(self.gravity, "unknown"), window_size, self.size)
+        oldw, oldh = window_size
+        bw, bh = self.size
+        def center_y():
+            if bh>=oldh:
+                return y + (bh-oldh)//2
+            return y - (oldh-bh)//2
+        def center_x():
+            if bw>=oldw:
+                return x + (bw-oldw)//2
+            return x - (oldw-bw)//2
+        def east_x():
+            if bw>=oldw:
+                return x + (bw-oldw)
+            return x - (oldw-bw)
+        def west_x():
+            return x
+        def north_y():
+            return y
+        def south_y():
+            if bh>=oldh:
+                return y + (bh-oldh)
+            return y - (oldh-bh)
+        if self.gravity==NorthGravity:
+            return center_x(), north_y()
+        if self.gravity==NorthEastGravity:
+            return east_x(), north_y()
+        if self.gravity==WestGravity:
+            return west_x(), center_y()
+        if self.gravity==CenterGravity:
+            return center_x(), center_y()
+        if self.gravity==EastGravity:
+            return east_x(), center_y()
+        if self.gravity==SouthWestGravity:
+            return west_x(), south_y()
+        if self.gravity==SouthGravity:
+            return center_x(), south_y()
+        if self.gravity==SouthEastGravity:
+            return east_x(), south_y()
+        #if self.gravity==StaticGravity:
+        #    pass
+        return x, y
+
+
     def do_video_paint(self, img, x, y, enc_width, enc_height, width, height, options, callbacks):
         if not zerocopy_upload or FORCE_CLONE:
             #copy so the data will be usable (usually a str)
@@ -1017,9 +1210,9 @@ class GLWindowBackingBase(WindowBackingBase):
             shader = RGBP2RGB_SHADER
         else:
             shader = YUV2RGB_SHADER
-        self.idle_add(self.gl_paint_planar, shader, options.intget("flush", 0), options.strget("encoding"), img, x, y, enc_width, enc_height, width, height, callbacks)
+        self.idle_add(self.gl_paint_planar, shader, options.intget("flush", 0), options.strget("encoding"), img, x, y, enc_width, enc_height, width, height, options, callbacks)
 
-    def gl_paint_planar(self, shader, flush, encoding, img, x, y, enc_width, enc_height, width, height, callbacks):
+    def gl_paint_planar(self, shader, flush, encoding, img, x, y, enc_width, enc_height, width, height, options, callbacks):
         #this function runs in the UI thread, no video_decoder lock held
         log("gl_paint_planar%s", (flush, encoding, img, x, y, enc_width, enc_height, width, height, callbacks))
         try:
@@ -1034,13 +1227,15 @@ class GLWindowBackingBase(WindowBackingBase):
                 return
             with context:
                 self.gl_init()
-                self.update_planar_textures(x, y, enc_width, enc_height, img, pixel_format, scaling=(enc_width!=width or enc_height!=height))
+                self.update_planar_textures(enc_width, enc_height, img, pixel_format, scaling=(enc_width!=width or enc_height!=height))
 
                 # Update FBO texture
                 x_scale, y_scale = 1, 1
                 if width!=enc_width or height!=enc_height:
                     x_scale = float(width)/enc_width
                     y_scale = float(height)/enc_height
+
+                x, y = self.gravity_adjust(x, y, options)
                 self.render_planar_update(x, y, enc_width, enc_height, x_scale, y_scale, shader)
                 self.paint_box(encoding, False, x, y, width, height)
                 fire_paint_callbacks(callbacks, True)
@@ -1058,9 +1253,9 @@ class GLWindowBackingBase(WindowBackingBase):
                   flush, img, (x, y, enc_width, enc_height), width, height)
         fire_paint_callbacks(callbacks, False, message)
 
-    def update_planar_textures(self, x, y, width, height, img, pixel_format, scaling=False):
+    def update_planar_textures(self, width, height, img, pixel_format, scaling=False):
         assert self.textures is not None, "no OpenGL textures!"
-        log("%s.update_planar_textures%s", self, (x, y, width, height, img, pixel_format))
+        log("%s.update_planar_textures%s", self, (width, height, img, pixel_format))
 
         divs = get_subsampling_divs(pixel_format)
         if self.pixel_format is None or self.pixel_format!=pixel_format or self.texture_size!=(width, height):
@@ -1095,7 +1290,7 @@ class GLWindowBackingBase(WindowBackingBase):
             h = height//div_h
             if w==0 or h==0:
                 log.error("Error: zero dimension %ix%i for %s planar texture %s", w, h, pixel_format, tex_name)
-                log.error(" screen update %s dropped", (x, y, width, height))
+                log.error(" screen update %s dropped", (width, height))
                 continue
             glActiveTexture(texture)
 
@@ -1108,7 +1303,7 @@ class GLWindowBackingBase(WindowBackingBase):
             glTexParameteri(target, GL_TEXTURE_BASE_LEVEL, 0)
             try:
                 glTexParameteri(target, GL_TEXTURE_MAX_LEVEL, 0)
-            except:
+            except Exception:
                 pass
             glTexSubImage2D(target, 0, 0, 0, w, h, GL_LUMINANCE, GL_UNSIGNED_BYTE, pixel_data)
             glBindTexture(target, 0)

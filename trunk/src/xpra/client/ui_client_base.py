@@ -97,6 +97,7 @@ class UIXpraClient(ClientBaseClass):
         #same for tray:
         self.tray = None
         for c in CLIENT_BASES:
+            log("calling %s.__init__()", c)
             c.__init__(self)
         try:
             pinfo = get_platform_info()
@@ -434,7 +435,7 @@ class UIXpraClient(ClientBaseClass):
             proxy_release = c.strget("proxy.platform.release")
             proxy_version = c.strget("proxy.version")
             proxy_version = c.strget("proxy.build.version", proxy_version)
-            proxy_distro = c.strget("linux_distribution")
+            proxy_distro = c.strget("proxy.linux_distribution")
             msg = "via: %s proxy version %s" % (
                 platform_name(proxy_platform, proxy_distro or proxy_release),
                 std(proxy_version or "unknown")
@@ -451,7 +452,7 @@ class UIXpraClient(ClientBaseClass):
         #keyboard:
         c = self.server_capabilities
         if self.keyboard_helper:
-            modifier_keycodes = c.dictget("modifier_keycodes")
+            modifier_keycodes = c.dictget("modifier_keycodes", {})
             if modifier_keycodes:
                 self.keyboard_helper.set_modifier_mappings(modifier_keycodes)
         self.key_repeat_delay, self.key_repeat_interval = c.intpair("key_repeat", (-1,-1))

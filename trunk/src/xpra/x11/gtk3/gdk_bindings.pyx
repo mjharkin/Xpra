@@ -107,15 +107,51 @@ cdef extern from "pygobject-3.0/pygobject.h":
 # Xlib primitives and constants
 ######
 
-include "constants.pxi"
 ctypedef unsigned long CARD32
 ctypedef unsigned short CARD16
 ctypedef unsigned char CARD8
+DEF XNone = 0
 
 cdef extern from "X11/X.h":
     unsigned long NoSymbol
 
 cdef extern from "X11/Xlib.h":
+    int BadWindow
+    int MapRequest
+    int ConfigureRequest
+    int SelectionRequest
+    int SelectionClear
+    int FocusIn
+    int FocusOut
+    int KeymapNotify
+    int Expose
+    int GraphicsExpose
+    int NoExpose
+    int VisibilityNotify
+    int ClientMessage
+    int CreateNotify
+    int MapNotify
+    int UnmapNotify
+    int DestroyNotify
+    int ConfigureNotify
+    int ReparentNotify
+    int GravityNotify
+    int ResizeRequest
+    int CirculateNotify
+    int CirculateRequest
+    int SelectionNotify
+    int ColormapNotify
+    int MappingNotify
+    int PropertyNotify
+    int KeyPress
+    int KeyRelease
+    int ButtonPress
+    int ButtonRelease
+    int EnterNotify
+    int LeaveNotify
+    int MotionNotify
+    int GenericEvent
+
     ctypedef struct Display:
         pass
     # To make it easier to translate stuff in the X header files into
@@ -1297,23 +1333,21 @@ cdef parse_xevent(GdkXEvent * e_gdk) with gil:
     return pyev
 
 
-_INIT_X11_FILTER_DONE = False
+_INIT_X11_FILTER_DONE = 0
 def init_x11_filter():
     log("init_x11_filter()")
     """ returns True if we did initialize it, False if it was already initialized """
     global _INIT_X11_FILTER_DONE
-    if _INIT_X11_FILTER_DONE:
-        return False
-    init_x11_events()
-    gdk_window_add_filter(<GdkWindow*>0, x_event_filter, <void*>0)
-    _INIT_X11_FILTER_DONE = True
-    return True
+    if _INIT_X11_FILTER_DONE==0:
+        init_x11_events()
+        gdk_window_add_filter(<GdkWindow*>0, x_event_filter, <void*>0)
+    _INIT_X11_FILTER_DONE += 1
+    return _INIT_X11_FILTER_DONE==1
 
 def cleanup_x11_filter():
     log("cleanup_x11_filter()")
     global _INIT_X11_FILTER_DONE
-    if not _INIT_X11_FILTER_DONE:
-        return False
-    gdk_window_remove_filter(<GdkWindow*>0, x_event_filter, <void*>0)
-    _INIT_X11_FILTER_DONE = False
-    return True
+    _INIT_X11_FILTER_DONE -= 1
+    if _INIT_X11_FILTER_DONE==0:
+        gdk_window_remove_filter(<GdkWindow*>0, x_event_filter, <void*>0)
+    return _INIT_X11_FILTER_DONE==0

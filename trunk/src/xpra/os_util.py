@@ -197,7 +197,7 @@ def platform_name(sys_platform, release=None):
 
 def get_rand_chars(l=16, chars=b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"):
     import random
-    return b"".join(chars[random.randint(0, len(chars)-1)] for _ in range(l))
+    return b"".join(chars[random.randint(0, len(chars)-1):][:1] for _ in range(l))
 
 def get_hex_uuid():
     return uuid.uuid4().hex
@@ -260,12 +260,17 @@ def is_X11():
     return is_X11_Display()
 
 def is_Wayland():
-    return os.environ.get("WAYLAND_DISPLAY") or os.environ.get("XDG_SESSION_TYPE")=="wayland"
+    return os.environ.get("GDK_BACKEND", "")!="x11" and (os.environ.get("WAYLAND_DISPLAY") or os.environ.get("XDG_SESSION_TYPE")=="wayland")
 
 
-def is_distribution_variant(variant=b"Debian", os_file="/etc/os-release"):
+def is_distribution_variant(variant=b"Debian"):
     if not POSIX:
         return False
+    try:
+        v = load_os_release_file()
+        return any(l.find(variant)>=0 for l in v.splitlines() if l.startswith(b"NAME="))
+    except:
+        pass
     try:
         if b"RedHat"==variant and get_linux_distribution()[0].startswith(variant):
             return True
@@ -273,11 +278,17 @@ def is_distribution_variant(variant=b"Debian", os_file="/etc/os-release"):
             return True
     except:
         pass
-    try:
-        v = load_binary_file(os_file)
-        return any(l.find(variant)>=0 for l in v.splitlines() if l.startswith(b"NAME="))
-    except:
-        return False
+    return False
+
+os_release_file_data = False
+def load_os_release_file():
+    global os_release_file_data
+    if os_release_file_data is False:
+        try:
+            os_release_file_data = load_binary_file("/etc/os-release")
+        except:
+            os_release_file_data = None
+    return os_release_file_data
 
 def is_Ubuntu():
     return is_distribution_variant(b"Ubuntu")

@@ -9,7 +9,7 @@ import os.path
 
 from xpra.platform.features import COMMAND_SIGNALS
 from xpra.child_reaper import getChildReaper, reaper_cleanup
-from xpra.os_util import monotonic_time, OSX, WIN32, POSIX
+from xpra.os_util import monotonic_time, bytestostr, OSX, WIN32, POSIX
 from xpra.util import envint, csv
 from xpra.scripts.parsing import parse_env
 from xpra.server import EXITING_CODE
@@ -51,6 +51,11 @@ class ChildCommandServer(StubServerMixin):
         self.watch_manager = None
         self.watch_notifier = None
         self.xdg_menu_reload_timer = None
+        #does not belong here...
+        if not hasattr(self, "_upgrading"):
+            self._upgrading = False
+        if not hasattr(self, "session_name"):
+            self.session_name = ""
 
     def init(self, opts):
         self.exit_with_children = opts.exit_with_children
@@ -83,6 +88,8 @@ class ChildCommandServer(StubServerMixin):
                 log("threaded_setup()", exc_info=True)
                 log.error("Error setting up menu watcher:")
                 log.error(" %s", e)
+            from xpra.platform.xposix.xdg_helper import load_xdg_menu_data
+            load_xdg_menu_data()
 
     def setup_menu_watcher(self):
         try:
@@ -162,12 +169,15 @@ class ChildCommandServer(StubServerMixin):
 
     def get_caps(self, source):
         caps = {}
-        if source.wants_features:
-            xdg_menu = self._get_xdg_menu_data()
-            if xdg_menu:
-                if source.xdg_menu_update:
-                    caps["xdg-menu"] = {}
-                else:
+        if not source:
+            return caps
+        #don't assume we have a real ClientConnection object:
+        if getattr(source, "wants_features", False):
+            caps["xdg-menu"] = {}
+            if not source.xdg_menu_update:
+                #we have to send it now:
+                xdg_menu = self._get_xdg_menu_data()
+                if xdg_menu:
                     l = len(str(xdg_menu))
                     #arbitrary: don't use more than half
                     #of the maximum size of the hello packet:
@@ -272,12 +282,12 @@ class ChildCommandServer(StubServerMixin):
     def start_command(self, name, child_cmd, ignore=False, callback=None, use_wrapper=True, shell=False, **kwargs):
         log("start_command%s exec_wrapper=%s",
             (name, child_cmd, ignore, callback, use_wrapper, shell, kwargs), self.exec_wrapper)
-        from subprocess import Popen, PIPE
+        from subprocess import Popen
         env = self.get_child_env()
         try:
             real_cmd = self.get_full_child_command(child_cmd, use_wrapper)
             log("full child command(%s, %s)=%s", child_cmd, use_wrapper, real_cmd)
-            proc = Popen(real_cmd, stdin=PIPE, env=env, shell=shell, cwd=self.exec_cwd, close_fds=True, **kwargs)
+            proc = Popen(real_cmd, env=env, shell=shell, cwd=self.exec_cwd, close_fds=True, **kwargs)
             procinfo = self.add_process(proc, name, real_cmd, ignore=ignore, callback=callback)
             log("pid(%s)=%s", real_cmd, proc.pid)
             if not ignore:
@@ -363,11 +373,15 @@ class ChildCommandServer(StubServerMixin):
             log.warn(" but the feature is currently disabled")
             return
         name, command, ignore = packet[1:4]
-        proc = self.start_command(name.decode("utf-8"), command.decode("utf-8"), ignore)
+        if isinstance(command, (list, tuple)):
+            cmd = command
+        else:
+            cmd = command.decode("utf-8")
+        proc = self.start_command(name.decode("utf-8"), cmd, ignore)
         if len(packet)>=5:
             shared = packet[4]
             if proc and not shared:
-                ss = self._server_sources.get(proto)
+                ss = self.get_server_source(proto)
                 assert ss
                 log("adding filter: pid=%s for %s", proc.pid, proto)
                 ss.add_window_filter("window", "pid", "=", proc.pid)
@@ -400,6 +414,8 @@ class ChildCommandServer(StubServerMixin):
 
 
     def init_packet_handlers(self):
+        log("init_packet_handlers() COMMANDS_SIGNALS=%s, start new commands=%s",
+            COMMAND_SIGNALS, self.start_new_commands)
         if COMMAND_SIGNALS:
             self.add_packet_handler("command-signal", self._process_command_signal, False)
         if self.start_new_commands:

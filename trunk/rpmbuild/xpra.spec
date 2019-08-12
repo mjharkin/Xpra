@@ -147,6 +147,7 @@ BuildRequires:		systemd-devel
 BuildRequires:		checkpolicy
 BuildRequires:		selinux-policy-devel
 %if 0%{?run_tests}
+BuildRequires:		dbus-x11
 BuildRequires:		tigervnc
 BuildRequires:		xorg-x11-server-Xvfb
 BuildRequires:		xorg-x11-drv-dummy
@@ -270,6 +271,13 @@ Requires:			gstreamer1-plugins-good
 %{Recommends}:		gstreamer1-plugin-timestamp
 %{Recommends}:		pulseaudio
 %{Recommends}:		pulseaudio-utils
+%if 0%{?run_tests}
+Requires:			python2-gstreamer1
+BuildRequires:		gstreamer1
+BuildRequires:		gstreamer1-plugins-good
+BuildRequires:		pulseaudio
+BuildRequires:		pulseaudio-utils
+%endif
 %description -n python2-xpra-audio
 This package contains audio support for python2 builds of xpra.
 
@@ -283,7 +291,10 @@ Requires:			pygtk2
 Requires:			python2-pyopengl
 Requires:			pygtkglext
 %{Recommends}:		python2-pyu2f
+#no longer available in Fedora 30:
+#BuildRequires:		python2-cups
 %if 0%{?fedora}%{?el8}
+BuildRequires:		python2-pyxdg
 Recommends:         python2-xdg
 Recommends:			python2-xpra-audio
 Recommends:			python2-cups
@@ -357,6 +368,7 @@ Recommends:         python3-gssapi
 Recommends:         python3-ldap
 Recommends:         python3-ldap3
 Recommends:         python3-brotli
+Recommends:         python3-cpuinfo
 Requires:			libwebp
 BuildRequires:		libwebp-devel
 BuildRequires:		libyuv-devel
@@ -394,6 +406,13 @@ Recommends:			gstreamer1-plugins-ugly
 Recommends:			gstreamer1-plugins-ugly-free
 Recommends:			pulseaudio
 Recommends:			pulseaudio-utils
+%if 0%{?run_tests}
+Requires:			python3-gstreamer1
+BuildRequires:		gstreamer1
+BuildRequires:		gstreamer1-plugins-good
+BuildRequires:		pulseaudio
+BuildRequires:		pulseaudio-utils
+%endif
 %description -n python3-xpra-audio
 This package contains audio support for python2 builds of xpra.
 
@@ -402,6 +421,8 @@ Summary:			python3 build of xpra client
 Group:				Networking
 Requires:			xpra-common-client = %{version}-%{release}
 Requires:			python3-xpra = %{version}-%{release}
+BuildRequires:		python3-pyxdg
+BuildRequires:		python3-cups
 Recommends:			python3-xpra-audio
 Recommends:			python3-cups
 Recommends:			python3-pyopengl

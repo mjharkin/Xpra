@@ -9,8 +9,8 @@ import os
 import re
 
 from xpra.client.client_widget_base import ClientWidgetBase
-from xpra.os_util import bytestostr, PYTHON2, PYTHON3, OSX, WIN32
-from xpra.util import typedict, envbool, WORKSPACE_UNSET, WORKSPACE_NAMES
+from xpra.os_util import bytestostr, PYTHON2, PYTHON3, OSX, WIN32, is_Wayland
+from xpra.util import typedict, envbool, envint, WORKSPACE_UNSET, WORKSPACE_NAMES
 from xpra.log import Logger
 
 log = Logger("window")
@@ -29,6 +29,8 @@ SIMULATE_MOUSE_DOWN = envbool("XPRA_SIMULATE_MOUSE_DOWN", True)
 PROPERTIES_DEBUG = [x.strip() for x in os.environ.get("XPRA_WINDOW_PROPERTIES_DEBUG", "").split(",")]
 AWT_DIALOG_WORKAROUND = envbool("XPRA_AWT_DIALOG_WORKAROUND", WIN32)
 SET_SIZE_CONSTRAINTS = envbool("XPRA_SET_SIZE_CONSTRAINTS", True)
+DEFAULT_GRAVITY = envint("XPRA_DEFAULT_GRAVITY", 0)
+OVERRIDE_GRAVITY = envint("XPRA_OVERRIDE_GRAVITY", 0)
 
 
 class ClientWindowBase(ClientWidgetBase):
@@ -65,6 +67,7 @@ class ClientWindowBase(ClientWidgetBase):
         self._sticky = False
         self._iconified = False
         self._focused = False
+        self.gravity = OVERRIDE_GRAVITY or DEFAULT_GRAVITY
         self.border = border
         self.cursor_data = None
         self.default_cursor_data = default_cursor_data
@@ -101,6 +104,9 @@ class ClientWindowBase(ClientWidgetBase):
         if self.max_window_size and b"size-constraints" not in metadata:
             #this ensures that we will set size-constraints and honour max_window_size:
             metadata[b"size-constraints"] = {}
+        #initialize gravity early:
+        sc = typedict(metadata.dictget("size-constraints", {}))
+        self.gravity = OVERRIDE_GRAVITY or sc.intget("gravity", DEFAULT_GRAVITY)
 
 
     def get_desktop_workspace(self):
@@ -118,6 +124,7 @@ class ClientWindowBase(ClientWidgetBase):
         self._backing = self.make_new_backing(backing_class, w, h, bw, bh)
         self._backing.border = self.border
         self._backing.default_cursor_data = self.default_cursor_data
+        self._backing.gravity = self.gravity
         return self._backing._backing
 
 
@@ -258,7 +265,7 @@ class ClientWindowBase(ClientWidgetBase):
             self.reset_icon()
 
         if b"size-constraints" in metadata:
-            sc = typedict(metadata.dictget("size-constraints"))
+            sc = typedict(metadata.dictget("size-constraints", {}))
             self.size_constraints = sc
             self._set_initial_position = sc.boolget("set-initial-position", self._set_initial_position)
             self.set_size_constraints(sc, self.max_window_size)
@@ -384,13 +391,13 @@ class ClientWindowBase(ClientWidgetBase):
             self.set_bypass_compositor(metadata.intget("bypass-compositor"))
 
         if b"strut" in metadata:
-            self.set_strut(metadata.dictget("strut"))
+            self.set_strut(metadata.dictget("strut", {}))
 
         if b"fullscreen-monitors" in metadata:
             self.set_fullscreen_monitors(metadata.intlistget("fullscreen-monitors"))
 
         if b"shape" in metadata:
-            self.set_shape(metadata.dictget("shape"))
+            self.set_shape(metadata.dictget("shape", {}))
 
         if b"command" in metadata:
             self.set_command(metadata.strget("command"))
@@ -519,8 +526,11 @@ class ClientWindowBase(ClientWidgetBase):
             geomlog.error(" from size constraints:")
             for k,v in size_constraints.items():
                 geomlog.error(" %s=%s", k, v)
-        #TODO: handle gravity
-        #gravity = size_metadata.get("gravity")
+        self.gravity = OVERRIDE_GRAVITY or size_constraints.intget("gravity", DEFAULT_GRAVITY)
+        b = self._backing
+        if b:
+            b.gravity = self.gravity
+
 
     def set_window_type(self, window_types):
         hints = 0
@@ -649,7 +659,7 @@ class ClientWindowBase(ClientWidgetBase):
                 return
             backing = self._backing
             if backing and (backing.draw_needs_refresh or REPAINT_ALL):
-                if REPAINT_ALL=="1" or self._client.xscale!=1 or self._client.yscale!=1:
+                if REPAINT_ALL=="1" or self._client.xscale!=1 or self._client.yscale!=1 or is_Wayland():
                     rw, rh = self.get_size()
                     rx, ry = 0, 0
                 else:
@@ -740,7 +750,7 @@ class ClientWindowBase(ClientWidgetBase):
         #overriden in GTKClientWindowBase
         return self._id
 
-    def do_motion_notify_event(self, event):
+    def _do_motion_notify_event(self, event):
         if self._client.readonly or self._client.server_readonly or not self._client.server_pointer:
             return
         pointer, relative_pointer, modifiers, buttons = self._pointer_modifiers(event)

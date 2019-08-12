@@ -16,7 +16,7 @@
 "use strict";
 
 var XPRA_CLIENT_FORCE_NO_WORKER = false;
-var CLIPBOARD_IMAGES = false;
+var CLIPBOARD_IMAGES = true;
 
 function XpraClient(container) {
 	// the container div is the "screen" on the HTML page where we
@@ -1070,6 +1070,10 @@ XpraClient.prototype._make_hello_base = function() {
 		});
 	}
 
+	this._update_capabilities({
+		"clipboard.preferred-targets" : this.clipboard_targets,
+	});
+	
 	if(this.encryption) {
 		this.cipher_in_caps = {
 			"cipher"					: this.encryption,
@@ -3135,7 +3139,7 @@ XpraClient.prototype._process_clipboard_token = function(packet, ctx) {
 		}
 		else if (CLIPBOARD_IMAGES && dtype=="image/png" && dformat==8 && wire_encoding=="bytes" && navigator.clipboard && navigator.clipboard.write) {
 			ctx.debug("clipboard", "png image received");
-			var blob = new Blob(wire_data, {type: dtype});
+			var blob = new Blob([wire_data], {type: dtype});
 			ctx.debug("clipboard", "created blob", blob);
 			var item = new ClipboardItem({"image/png": blob});
 			ctx.debug("clipboard", "created ClipboardItem", item);

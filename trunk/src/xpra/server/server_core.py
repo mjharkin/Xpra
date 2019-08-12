@@ -234,7 +234,7 @@ class ServerCore(object):
 
         #Features:
         self.mdns = False
-        self.mdns_publishers = []
+        self.mdns_publishers = {}
         self.encryption = None
         self.encryption_keyfile = None
         self.tcp_encryption = None
@@ -355,14 +355,24 @@ class ServerCore(object):
         self._closing = True
         self.cleanup()
         def quit_timer():
-            log.debug("quit_timer()")
-            stop_worker(True)
+            w = get_worker()
+            log("quit_timer() worker=%s", w)
+            if w and w.is_alive():
+                #wait up to 1 second for the worker thread to exit
+                try:
+                    w.wait(1)
+                except:
+                    pass
+                if w.is_alive():
+                    #still alive, force stop:
+                    stop_worker(True)
+                    try:
+                        w.wait(1)
+                    except:
+                        pass
             self.quit(upgrading)
-        #if from a signal, just force quit:
         stop_worker()
-        #not from signal: use force stop worker after delay
-        self.timeout_add(250, stop_worker, True)
-        self.timeout_add(500, quit_timer)
+        self.timeout_add(250, quit_timer)
         def force_quit():
             log.debug("force_quit()")
             from xpra import os_util
@@ -424,7 +434,8 @@ class ServerCore(object):
             p.quit()
         netlog("cleanup will disconnect: %s", self._potential_protocols)
         self.cancel_touch_timer()
-        self.mdns_cleanup()
+        if self.mdns:
+            add_work_item(self.mdns_cleanup)
         if self._upgrading:
             reason = SERVER_UPGRADE
         else:
@@ -759,12 +770,14 @@ class ServerCore(object):
                 mdnslog("mdns_publish() recs[%s]=%s", st, recs)
         from xpra.server.socket_util import mdns_publish
         mdns_info = self.get_mdns_info()
-        self.mdns_publishers = []
+        self.mdns_publishers = {}
         for mdns_mode, listen_on in mdns_recs.items():
-            ap = mdns_publish(self.display_name, mdns_mode, listen_on, mdns_info)
+            info = dict(mdns_info)
+            info["mode"] = mdns_mode
+            ap = mdns_publish(self.display_name, listen_on, info)
             if ap:
                 ap.start()
-                self.mdns_publishers.append(ap)
+                self.mdns_publishers[ap] = mdns_mode
 
     def get_mdns_socktypes(self, socktype):
         #for a given socket type,
@@ -812,16 +825,18 @@ class ServerCore(object):
 
     def mdns_cleanup(self):
         mp = self.mdns_publishers
-        self.mdns_publishers = []
-        for ap in mp:
+        self.mdns_publishers = {}
+        for ap in tuple(mp.keys()):
             ap.stop()
 
     def mdns_update(self):
         if not self.mdns:
             return
         txt = self.get_mdns_info()
-        for mdns_publisher in self.mdns_publishers:
-            mdns_publisher.update_txt(txt)
+        for mdns_publisher, mode in dict(self.mdns_publishers).items():
+            info = dict(txt)
+            info["mode"] = mode
+            mdns_publisher.update_txt(info)
 
 
     def start_listen_sockets(self):
@@ -1067,7 +1082,7 @@ class ServerCore(object):
                 packet_type = None
                 if peek_data[0] in ("P", ord("P")):
                     packet_type = "xpra"
-                elif line1.find("HTTP/")>0:
+                elif line1.find(b"HTTP/")>0:
                     packet_type = "HTTP"
                 if packet_type:
                     self.new_conn_err(conn, sock, socktype, socket_info, packet_type,
@@ -1083,16 +1098,16 @@ class ServerCore(object):
                 http = True
             elif self.ssl_mode=="auto" or self.ssl_mode in TRUE_OPTIONS:
                 #look for HTTPS request to handle:
-                if line1.find("HTTP/")>0 or peek_data.find("\x08http/1.1")>0:
+                if line1.find(b"HTTP/")>0 or peek_data.find(b"\x08http/1.1")>0:
                     http = True
                 else:
                     ssl_conn.enable_peek()
                     peek_data, line1 = self.peek_connection(ssl_conn)
-                    http = line1.find("HTTP/")>0
+                    http = line1.find(b"HTTP/")>0
             if http and self._html:
                 self.start_http_socket(socktype, ssl_conn, True, peek_data)
             else:
-                log_new_connection(conn, socket_info)
+                log_new_connection(ssl_conn, socket_info)
                 self.make_protocol(socktype, ssl_conn)
             return
 
@@ -1997,12 +2012,15 @@ class ServerCore(object):
         return get_thread_info(proto)
 
     def get_minimal_server_info(self):
+        now = time()
         info = {
             "mode"              : self.get_server_mode(),
             "session-type"      : self.session_type,
             "type"              : "Python",
             "python"            : {"version" : python_platform.python_version()},
             "start_time"        : int(self.start_time),
+            "current_time"      : int(now),
+            "elapsed_time"      : int(now - self.start_time),
             "uuid"              : self.uuid,
             }
         return info

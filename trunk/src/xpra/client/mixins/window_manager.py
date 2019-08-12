@@ -48,6 +48,7 @@ MOUSE_SHOW = envbool("XPRA_MOUSE_SHOW", True)
 
 PAINT_FAULT_RATE = envint("XPRA_PAINT_FAULT_INJECTION_RATE")
 PAINT_FAULT_TELL = envbool("XPRA_PAINT_FAULT_INJECTION_TELL", True)
+PAINT_DELAY = envint("XPRA_PAINT_DELAY", 0)
 
 WM_CLASS_CLOSEEXIT = os.environ.get("XPRA_WM_CLASS_CLOSEEXIT", "Xephyr").split(",")
 TITLE_CLOSEEXIT = os.environ.get("XPRA_TITLE_CLOSEEXIT", "Xnest").split(",")
@@ -203,6 +204,7 @@ class WindowClient(StubClientMixin):
                 else:
                     self.wheel_map[btn+1] = btn
                     self.wheel_map[btn] = btn+1
+        mouselog("wheel_map(%s)=%s", mw, self.wheel_map)
 
         if 0<ICON_OVERLAY<=100:
             icon_filename = get_icon_filename("xpra")
@@ -216,6 +218,7 @@ class WindowClient(StubClientMixin):
                 except Exception as e:
                     log.error("Error: failed to load overlay icon '%s':", icon_filename, exc_info=True)
                     log.error(" %s", e)
+        traylog("overlay_image=%s", self.overlay_image)
         self._draw_queue = Queue()
         self._draw_thread = make_thread(self._draw_thread_loop, "draw")
 
@@ -1299,7 +1302,7 @@ class WindowClient(StubClientMixin):
             elapsed = max(0, time()-self._suspended_at)
             self._suspended_at = 0
         delta = datetime.timedelta(seconds=int(elapsed))
-        log.info("system resumed, was suspended for %s", delta)
+        log.info("system resumed, was suspended for %s", str(delta).lstrip("0:"))
         #this will reset the refresh rate too:
         self.send_refresh_all()
         if self.opengl_enabled:
@@ -1349,8 +1352,10 @@ class WindowClient(StubClientMixin):
     ######################################################################
     # painting windows:
     def _process_draw(self, packet):
-        #self.timeout_add(1000*5, self._draw_queue.put, packet)
-        self._draw_queue.put(packet)
+        if PAINT_DELAY>0:
+            self.timeout_add(PAINT_DELAY, self._draw_queue.put, packet)
+        else:
+            self._draw_queue.put(packet)
 
     def _process_eos(self, packet):
         self._draw_queue.put(packet)

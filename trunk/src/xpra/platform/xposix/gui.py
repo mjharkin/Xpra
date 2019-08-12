@@ -10,7 +10,6 @@ import struct
 
 from xpra.os_util import bytestostr, hexstr
 from xpra.util import iround, envbool, envint, csv, repr_ellipsized
-from xpra.gtk_common.gtk_util import get_xwindow
 from xpra.os_util import is_unity, is_gnome, is_kde, is_Fedora, is_X11, is_Wayland
 from xpra.log import Logger
 
@@ -22,15 +21,34 @@ traylog = Logger("posix", "tray")
 mouselog = Logger("posix", "mouse")
 xinputlog = Logger("posix", "xinput")
 
-X11WindowBindings = None
-X11XI2Bindings = None
-if is_X11():
-    try:
-        from xpra.x11.bindings.window_bindings import X11WindowBindings #@UnresolvedImport
-        from xpra.x11.bindings.xi2_bindings import X11XI2Bindings       #@UnresolvedImport
-    except Exception as e:
-        log.error("no X11 bindings", exc_info=True)
-        del e
+_X11Window = False
+def X11WindowBindings():
+    global _X11Window
+    if _X11Window is False:
+        _X11Window = None
+        if is_X11():
+            try:
+                from xpra.x11.bindings.window_bindings import X11WindowBindings as _X11WindowBindings #@UnresolvedImport
+                _X11Window = _X11WindowBindings()
+            except Exception as e:
+                log("X11WindowBindings()", exc_info=True)
+                log.error("Error: no X11 bindings")
+                log.error(" %s", e)
+    return _X11Window
+
+X11XI2 = None
+def X11XI2Bindings():
+    global X11XI2
+    if X11XI2 is False:
+        X11XI2 = None
+        if is_X11():
+            try:
+                from xpra.x11.bindings.xi2_bindings import X11XI2Bindings as _X11XI2Bindings       #@UnresolvedImport
+                X11XI2 = _X11XI2Bindings()
+            except Exception:
+                log.error("no XI2 bindings", exc_info=True)
+    return X11XI2
+
 
 device_bell = None
 GTK_MENUS = envbool("XPRA_GTK_MENUS", False)
@@ -40,6 +58,10 @@ USE_NATIVE_TRAY = envbool("XPRA_USE_NATIVE_TRAY", is_unity() or (is_gnome() and 
 XINPUT_WHEEL_DIV = envint("XPRA_XINPUT_WHEEL_DIV", 15)
 DBUS_SCREENSAVER = envbool("XPRA_DBUS_SCREENSAVER", False)
 
+
+def get_xwindow(win):
+    from xpra.gtk_common.gtk_util import get_xwindow as _get_xwindow
+    return _get_xwindow(win)
 
 def gl_check():
     if not is_X11() and is_Wayland():
@@ -113,9 +135,8 @@ def _get_X11_window_property(xid, name, req_type):
         from xpra.gtk_common.error import xsync
         from xpra.x11.bindings.window_bindings import PropertyError #@UnresolvedImport
         try:
-            X11Window = X11WindowBindings()
             with xsync:
-                prop = X11Window.XGetWindowProperty(xid, name, req_type)
+                prop = X11WindowBindings().XGetWindowProperty(xid, name, req_type)
             log("_get_X11_window_property(%#x, %s, %s)=%s, len=%s", xid, name, req_type, type(prop), len(prop or []))
             return prop
         except PropertyError as e:
@@ -126,8 +147,7 @@ def _get_X11_window_property(xid, name, req_type):
     return None
 def _get_X11_root_property(name, req_type):
     try:
-        X11Window = X11WindowBindings()
-        root_xid = X11Window.getDefaultRootWindow()
+        root_xid = X11WindowBindings().getDefaultRootWindow()
         return _get_X11_window_property(root_xid, name, req_type)
     except Exception as e:
         log("_get_X11_root_property(%s, %s)", name, req_type, exc_info=True)
@@ -154,6 +174,8 @@ def _get_xsettings():
 
 def _get_xsettings_dict():
     d = {}
+    if is_Wayland():
+        return d
     v = _get_xsettings()
     if v:
         _, values = v
@@ -364,7 +386,7 @@ def _get_xresources():
             from xpra.gtk_common.gtk_util import get_default_root_window
             root = get_default_root_window()
             value = prop_get(root, "RESOURCE_MANAGER", "latin1", ignore_errors=True)
-            log("RESOURCE_MANAGER=%s", v)
+            log("RESOURCE_MANAGER=%s", value)
             if value is None:
                 return None
             #parse the resources into a dict:
@@ -528,11 +550,11 @@ class XI2_Window(object):
         window.connect("configure-event", self.configured)
         self.configured()
         #replace event handlers with XI2 version:
-        self.do_motion_notify_event = window.do_motion_notify_event
-        window.do_motion_notify_event = self.noop
-        window.do_button_press_event = self.noop
-        window.do_button_release_event = self.noop
-        window.do_scroll_event = self.noop
+        self._do_motion_notify_event = window._do_motion_notify_event
+        window._do_motion_notify_event = self.noop
+        window._do_button_press_event = self.noop
+        window._do_button_release_event = self.noop
+        window._do_scroll_event = self.noop
         window.connect("destroy", self.cleanup)
 
     def noop(self, *args):
@@ -714,7 +736,8 @@ class ClientExtras(object):
             from xpra.x11.gtk_x11.gdk_bindings import init_x11_filter  #@UnresolvedImport, @UnusedImport
             self.x11_filter = init_x11_filter()
             log("x11_filter=%s", self.x11_filter)
-        except Exception:
+        except Exception as e:
+            log("init_x11_filter()", exc_info=True)
             log.error("Error: failed to initialize X11 GDK filter:")
             log.error(" %s", e)
             self.x11_filter = None

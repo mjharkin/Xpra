@@ -1,6 +1,6 @@
 # This file is part of Xpra.
 # Copyright (C) 2008, 2009 Nathaniel Smith <njs@pobox.com>
-# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -10,7 +10,7 @@ from __future__ import absolute_import
 
 import errno as pyerrno
 
-from xpra.os_util import strtobytes
+from xpra.os_util import strtobytes, bytestostr
 from xpra.buffers.membuf cimport memory_as_pybuffer, object_as_buffer
 from xpra.monotonic_time cimport monotonic_time
 from xpra.x11.bindings.display_source import get_display_name
@@ -69,11 +69,11 @@ cdef extern from "sys/shm.h":
 cdef extern from "errno.h" nogil:
     int errno
 
-include "constants.pxi"
 ctypedef unsigned long CARD32
 ctypedef unsigned short CARD16
 ctypedef unsigned char CARD8
 ctypedef CARD32 Colormap
+DEF XNone = 0
 
 cdef extern from "X11/X.h":
     unsigned long NoSymbol
@@ -890,23 +890,24 @@ cdef window_pixmap_wrapper(Display *xdisplay, Window xwindow):
     pw.init(xdisplay, xwindow, width, height)
     return pw
 
-from xpra.x11.bindings.core_bindings cimport _X11CoreBindings
+from xpra.x11.bindings.core_bindings cimport X11CoreBindingsInstance
 
-cdef _XImageBindings singleton = None
+cdef XImageBindingsInstance singleton = None
 def XImageBindings():
     global singleton
     if singleton is None:
-        singleton = _XImageBindings()
+        singleton = XImageBindingsInstance()
     return singleton
 
-cdef class _XImageBindings(_X11CoreBindings):
+cdef class XImageBindingsInstance(X11CoreBindingsInstance):
     cdef int has_xshm
 
     def __cinit__(self):
         self.has_xshm = XShmQueryExtension(self.display)
-        xshmlog("XShmQueryExtension()=%s", bool(self.has_xshm))
+        dn = get_display_name()
+        xshmlog("XShmQueryExtension()=%s on display %s", bool(self.has_xshm), bytestostr(dn))
         if not self.has_xshm:
-            xshmlog.warn("Warning: no XShm support on display %s", get_display_name())
+            xshmlog.warn("Warning: no XShm support on display %s", bytestostr(dn))
 
     def has_XShm(self):
         return bool(self.has_xshm)

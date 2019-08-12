@@ -126,6 +126,9 @@ class ClientConnection(ClientConnectionClass):
             except Exception as e:
                 raise Exception("failed to initialize %s: %s" % (bc, e))
 
+        for c in CC_BASES:
+            c.init_state(self)
+
         #holds actual packets ready for sending (already encoded)
         #these packets are picked off by the "protocol" via 'next_packet()'
         #format: packet, wid, pixels, start_send_cb, end_send_cb
@@ -187,8 +190,6 @@ class ClientConnection(ClientConnectionClass):
         self.wants_display = True
         self.wants_events = False
         self.wants_default_cursor = False
-        for c in CC_BASES:
-            c.init_state(self)
 
 
     def is_closed(self):
@@ -286,8 +287,8 @@ class ClientConnection(ClientConnectionClass):
         self.bandwidth_limit = min(server_bandwidth_limit, bandwidth_limit)
         if self.bandwidth_detection:
             self.bandwidth_detection = c.boolget("bandwidth-detection", True)
-        cd = typedict(c.dictget("connection-data"))
-        self.jitter = cd.intget("jitter", 0)
+        self.client_connection_data = c.dictget("connection-data", {})
+        self.jitter = typedict(self.client_connection_data).intget("jitter", 0)
         bandwidthlog("server bandwidth-limit=%s, client bandwidth-limit=%s, value=%s, detection=%s",
                      server_bandwidth_limit, bandwidth_limit, self.bandwidth_limit, self.bandwidth_detection)
 
@@ -299,7 +300,6 @@ class ClientConnection(ClientConnectionClass):
             msg = version_compat_check(self.proxy_version)
             if msg:
                 proxylog.warn("Warning: proxy version may not be compatible: %s", msg)
-        self.update_connection_data(c.dictget("connection-data"))
         if getattr(self, "mmap_size", 0)>0:
             log("mmap enabled, ignoring bandwidth-limit")
             self.bandwidth_limit = 0
@@ -432,12 +432,6 @@ class ClientConnection(ClientConnectionClass):
     def send_async(self, *parts, **kwargs):
         kwargs["synchronous"] = False
         self.send(*parts, **kwargs)
-
-
-    #client tells us about network connection status:
-    def update_connection_data(self, data):
-        netlog("update_connection_data(%s)", data)
-        self.client_connection_data = data
 
 
     def send_hello(self, server_capabilities):

@@ -5,7 +5,7 @@
 # later version. See the file COPYING for details.
 
 import socket
-from zeroconf import ServiceInfo, Zeroconf        #@UnresolvedImport
+from zeroconf import ServiceInfo, Zeroconf, __version__ as zeroconf_version #@UnresolvedImport
 
 from xpra.log import Logger
 from xpra.util import csv
@@ -14,6 +14,7 @@ from xpra.net.mdns import XPRA_MDNS_TYPE, SHOW_INTERFACE
 from xpra.net.net_util import get_iface
 
 log = Logger("network", "mdns")
+log("python-zeroconf version %s", zeroconf_version)
 
 
 def get_interface_index(host):
@@ -31,7 +32,7 @@ def inet_ton(af, addr):
         #no ipv6 support with python2 on win32:
         return None
     return inet_pton(af, addr)   #@UndefinedVariable
-        
+
 
 class ZeroconfPublishers(object):
     """
@@ -90,10 +91,23 @@ class ZeroconfPublishers(object):
             if iface is not None and SHOW_INTERFACE:
                 td = text_dict.copy()
                 td["iface"] = iface
+            td = self.txt_rec(td)
             try:
-                service = ServiceInfo(service_type+"local.", service_name+"."+service_type+"local.",
-                                      address, port, 0, 0,
-                                      td, hostname)
+                #ie: service_name = localhost.localdomain :2 (ssl)
+                st = service_type+"local."
+                parts = service_name.split(" ", 1)
+                regname = parts[0].split(".")[0]
+                if len(parts)==2:
+                    regname += parts[1]
+                regname = regname.replace(" ", "-")
+                regname = regname.replace("(", "")
+                regname = regname.replace(")", "")
+                #ie: regname = localhost:2-ssl
+                regname += "."+service_type+"local."
+                args = (st, regname, address, port, 0, 0, td, hostname)
+                service = ServiceInfo(*args)
+                ServiceInfo.args = args
+                log("ServiceInfo%s=%s", args, service)
                 self.services.append(service)
             except Exception as e:
                 log("zeroconf ServiceInfo", exc_info=True)
@@ -123,9 +137,23 @@ class ZeroconfPublishers(object):
         self.zeroconf = None
 
 
+    def txt_rec(self, text_dict):
+        #prevent zeroconf from mangling our ints into booleans:
+        from collections import OrderedDict
+        new_dict = OrderedDict()
+        for k,v in text_dict.items():
+            if isinstance(v, int):
+                new_dict[k] = str(v)
+            else:
+                new_dict[k] = v
+        return new_dict
+
     def update_txt(self, txt):
-        #TODO: use stop / start to update?
-        pass
+        for service in tuple(self.registered):
+            args = list(service.args)
+            args[6] = self.txt_rec(txt)
+            si = ServiceInfo(*args)
+            self.zeroconf.update_service(si)
 
 
 def main():
@@ -140,6 +168,7 @@ def main():
     glib = import_glib()
     glib.idle_add(publisher.start)
     loop = glib.MainLoop()
+    log.info("python-zeroconf version %s", zeroconf_version)
     def update_rec():
         log("update_rec()")
         from zeroconf import DNSText, _CLASS_ANY, _DNS_OTHER_TTL, current_time_millis

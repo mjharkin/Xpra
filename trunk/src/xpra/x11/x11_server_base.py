@@ -345,15 +345,15 @@ class X11ServerBase(X11ServerCore):
                         return v
                     return set_xsettings_value(name, XSettingsTypeInteger, value)
                 if dpi>0:
-                    v = set_xsettings_int("Xft/DPI", dpi*1024)
+                    v = set_xsettings_int(b"Xft/DPI", dpi*1024)
                 if double_click_time>0:
-                    v = set_xsettings_int("Net/DoubleClickTime", self.double_click_time)
+                    v = set_xsettings_int(b"Net/DoubleClickTime", self.double_click_time)
                 if antialias:
                     ad = typedict(antialias)
-                    v = set_xsettings_int("Xft/Antialias",  ad.intget("enabled", -1))
-                    v = set_xsettings_int("Xft/Hinting",    ad.intget("hinting", -1))
-                    v = set_xsettings_value("Xft/RGBA",     XSettingsTypeString, ad.strget("orientation", "none").lower())
-                    v = set_xsettings_value("Xft/HintStyle", XSettingsTypeString, _get_antialias_hintstyle(ad))
+                    v = set_xsettings_int(b"Xft/Antialias",  ad.intget("enabled", -1))
+                    v = set_xsettings_int(b"Xft/Hinting",    ad.intget("hinting", -1))
+                    v = set_xsettings_value(b"Xft/RGBA",     XSettingsTypeString, ad.strget("orientation", "none").lower())
+                    v = set_xsettings_value(b"Xft/HintStyle", XSettingsTypeString, _get_antialias_hintstyle(ad))
                 if double_click_distance!=(-1, -1):
                     #some platforms give us a value for each axis,
                     #but X11 only has one, so take the average
@@ -362,18 +362,17 @@ class X11ServerBase(X11ServerCore):
                         if x>0 and y>0:
                             d = iround((x+y)/2.0)
                             d = max(1, min(128, d))     #sanitize it a bit
-                            v = set_xsettings_int("Net/DoubleClickDistance", d)
+                            v = set_xsettings_int(b"Net/DoubleClickDistance", d)
                     except Exception as e:
                         log.warn("error setting double click distance from %s: %s", double_click_distance, e)
 
             if k not in old_settings or v != old_settings[k]:
-                def root_set(p):
-                    from xpra.x11.gtk_x11.prop import prop_set
-                    log("server_settings: setting %s to %s", nonl(p), nonl(v))
-                    prop_set(self.root_window, p, "latin1", strtobytes(v).decode("latin1"))
                 if k == b"xsettings-blob":
                     self.set_xsettings(v)
                 elif k == b"resource-manager":
-                    root_set("RESOURCE_MANAGER")
+                    from xpra.x11.gtk_x11.prop import prop_set
+                    p = "RESOURCE_MANAGER"
+                    log("server_settings: setting %s to %s", nonl(p), nonl(v))
+                    prop_set(self.root_window, p, "latin1", strtobytes(v).decode("latin1"))
                 else:
                     log.warn("Warning: unexpected setting '%s'", bytestostr(k))

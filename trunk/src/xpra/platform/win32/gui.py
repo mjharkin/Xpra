@@ -154,12 +154,12 @@ def use_stdin():
         return False
     try:
         from xpra.platform.win32.common import GetStdHandle
-        from xpra.platform.win32 import STD_INPUT_HANDLE, not_a_console, get_console_position 
+        from xpra.platform.win32 import STD_INPUT_HANDLE, not_a_console, get_console_position
         hstdin = GetStdHandle(STD_INPUT_HANDLE)
         if not_a_console(hstdin):
             return False
         return get_console_position(hstdin)!=(-1, -1)
-    except:
+    except Exception:
         pass
     return True
 

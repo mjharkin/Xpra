@@ -51,6 +51,8 @@ class AudioServer(StubServerMixin):
         self.pulseaudio = opts.pulseaudio
         self.pulseaudio_command = opts.pulseaudio_command
         self.pulseaudio_configure_commands = opts.pulseaudio_configure_commands
+        log("AudioServer.init(..) supports speaker=%s, microphone=%s",
+            self.supports_speaker, self.supports_microphone)
 
     def setup(self):
         self.init_pulseaudio()
@@ -316,12 +318,12 @@ class AudioServer(StubServerMixin):
 
 
     def _process_sound_control(self, proto, packet):
-        ss = self._server_sources.get(proto)
+        ss = self.get_server_source(proto)
         if ss:
             ss.sound_control(*packet[1:])
 
     def _process_sound_data(self, proto, packet):
-        ss = self._server_sources.get(proto)
+        ss = self.get_server_source(proto)
         if ss:
             ss.sound_data(*packet[1:])
 

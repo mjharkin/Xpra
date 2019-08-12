@@ -5,13 +5,15 @@
 # later version. See the file COPYING for details.
 #pylint: disable-msg=E1101
 
+from threading import Lock
+
 from xpra.os_util import bytestostr
 from xpra.util import repr_ellipsized
 from xpra.scripts.config import FALSE_OPTIONS
 from xpra.server.mixins.stub_server_mixin import StubServerMixin
 from xpra.log import Logger
 
-log = Logger("client")
+log = Logger("server")
 
 
 """
@@ -21,6 +23,7 @@ class LoggingServer(StubServerMixin):
 
     def __init__(self):
         self.remote_logging = False
+        self.logging_lock = Lock()
 
     def init(self, opts):
         self.remote_logging = not (opts.remote_logging or "").lower() in FALSE_OPTIONS
@@ -33,13 +36,14 @@ class LoggingServer(StubServerMixin):
 
     def _process_logging(self, proto, packet):
         assert self.remote_logging
-        ss = self._server_sources.get(proto)
+        ss = self.get_server_source(proto)
         if ss is None:
             return
         level, msg = packet[1:3]
         prefix = "client "
-        if len(self._server_sources)>1:
-            prefix += "%3i " % ss.counter
+        counter = getattr(ss, "counter", 0)
+        if counter>0:
+            prefix += "%3i " % counter
         if len(packet)>=4:
             dtime = packet[3]
             prefix += "@%02i.%03i " % ((dtime//1000)%60, dtime%1000)
@@ -54,16 +58,17 @@ class LoggingServer(StubServerMixin):
             else:
                 dmsg = dec(msg)
             for l in dmsg.splitlines():
-                log.log(level, prefix+l)
+                self.do_log(level, prefix+l)
         except Exception as e:
             log("log message decoding error", exc_info=True)
             log.error("Error: failed to parse logging message:")
             log.error(" %s", repr_ellipsized(msg))
             log.error(" %s", e)
 
+    def do_log(self, level, line):
+        with self.logging_lock:
+            log.log(level, line)
 
     def init_packet_handlers(self):
         if self.remote_logging:
-            self._authenticated_packet_handlers.update({
-                "logging" : self._process_logging,
-              })
+            self.add_packet_handler("logging", self._process_logging, False)

@@ -227,7 +227,8 @@ if is_gtk3():
     keymap_get_for_display  = gdk.Keymap.get_for_display
 
     def get_default_cursor():
-        return gdk.Cursor.new(gdk.CursorType.X_CURSOR)
+        display = gdk.Display.get_default()
+        return gdk.Cursor.new_from_name(display, "default")
     new_Cursor_for_display  = gdk.Cursor.new_for_display
     new_Cursor_from_pixbuf  = gdk.Cursor.new_from_pixbuf
     from gi.repository import GdkPixbuf     #@UnresolvedImport
@@ -256,6 +257,7 @@ if is_gtk3():
     WIN_POS_CENTER  = gtk.WindowPosition.CENTER
     RESPONSE_CANCEL = gtk.ResponseType.CANCEL
     RESPONSE_OK     = gtk.ResponseType.OK
+    RESPONSE_REJECT = gtk.ResponseType.REJECT
     RESPONSE_ACCEPT = gtk.ResponseType.ACCEPT
     RESPONSE_CLOSE  = gtk.ResponseType.CLOSE
     RESPONSE_DELETE_EVENT = gtk.ResponseType.DELETE_EVENT
@@ -557,6 +559,7 @@ else:
     WIN_POS_CENTER  = gtk.WIN_POS_CENTER
     RESPONSE_CANCEL = gtk.RESPONSE_CANCEL
     RESPONSE_OK     = gtk.RESPONSE_OK
+    RESPONSE_REJECT = gtk.RESPONSE_REJECT
     RESPONSE_ACCEPT = gtk.RESPONSE_ACCEPT
     RESPONSE_CLOSE  = gtk.RESPONSE_CLOSE
     RESPONSE_DELETE_EVENT = gtk.RESPONSE_DELETE_EVENT
@@ -1103,7 +1106,7 @@ def get_screen_info(display, screen):
             val = None
             try:
                 #ugly workaround for "visual_type" -> "type" for GTK2...
-                val = getattr(v, x.replace("visual_"))
+                val = getattr(v, x.replace("visual_", ""))
             except AttributeError:
                 try:
                     fn = getattr(v, "get_"+x)

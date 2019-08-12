@@ -17,6 +17,8 @@ from xpra.gtk_common.gtk_util import (
 from xpra.x11.gtk_x11.gdk_bindings import (
     add_event_receiver,                          #@UnresolvedImport
     remove_event_receiver,                       #@UnresolvedImport
+    init_x11_filter,
+    cleanup_x11_filter,
     )
 from xpra.clipboard.clipboard_core import (
     ClipboardProtocolHelperCore, ClipboardProxyCore, TEXT_TARGETS,
@@ -79,7 +81,9 @@ class X11Clipboard(ClipboardTimeoutHelper, gobject.GObject):
     def __init__(self, send_packet_cb, progress_cb=None, **kwargs):
         gobject.GObject.__init__(self)
         self.init_window()
-        ClipboardTimeoutHelper.__init__(self, send_packet_cb, progress_cb)
+        init_x11_filter()
+        self.x11_filter = True
+        ClipboardTimeoutHelper.__init__(self, send_packet_cb, progress_cb, **kwargs)
 
     def __repr__(self):
         return "X11Clipboard"
@@ -101,6 +105,9 @@ class X11Clipboard(ClipboardTimeoutHelper, gobject.GObject):
             w.destroy()
 
     def cleanup(self):
+        if self.x11_filter:
+            self.x11_filter = False
+            cleanup_x11_filter()
         ClipboardTimeoutHelper.cleanup(self)
         self.cleanup_window()
 
@@ -483,8 +490,14 @@ class ClipboardProxy(ClipboardProxyCore, gobject.GObject):
         self.get_contents("TARGETS", got_targets)
 
     def choose_targets(self, targets):
-        #if "image/png" in targets:
-        #    return ("image/png",)
+        if self.preferred_targets:
+            #prefer PNG, but only if supported by the client:
+            if "image/png" in targets and "image/png" in self.preferred_targets:
+                return ("image/png",)
+            #if we can't choose a text target, at least choose a supported one:
+            if not any(x for x in targets if x in TEXT_TARGETS and x in self.preferred_targets):
+                return tuple(x for x in targets if x in self.preferred_targets)
+        #otherwise choose a text target:
         return tuple(x for x in targets if x in TEXT_TARGETS)
 
     def do_selection_clear_event(self, event):
@@ -528,7 +541,7 @@ class ClipboardProxy(ClipboardProxyCore, gobject.GObject):
             self.local_request_counter += 1
             timer = glib.timeout_add(CONVERT_TIMEOUT, self.timeout_get_contents, target, request_id)
             self.local_requests.setdefault(target, {})[request_id] = (timer, got_contents, time)
-            log("requesting local XConvertSelection from %s for '%s' into '%s'", self.get_wininfo(owner), target, prop)
+            log("requesting local XConvertSelection from %s as '%s' into '%s'", self.get_wininfo(owner), target, prop)
             X11Window.ConvertSelection(self._selection, target, prop, self.xid, time=time)
 
     def timeout_get_contents(self, target, request_id):
@@ -558,9 +571,11 @@ class ClipboardProxy(ClipboardProxyCore, gobject.GObject):
         assert len(parts)==2
         #selection = parts[0]        #ie: PRIMARY
         target = parts[1]           #ie: VALUE
+        dtype = ""
+        dformat = 8
         try:
             with xsync:
-                dtype, dformat = X11Window.GetWindowPropertyType(self.xid, event.atom, self.incr_data_size>0)
+                dtype, dformat = X11Window.GetWindowPropertyType(self.xid, event.atom, True)
                 dtype = bytestostr(dtype)
                 MAX_DATA_SIZE = 4*1024*1024
                 data = X11Window.XGetWindowProperty(self.xid, event.atom, dtype, None, MAX_DATA_SIZE, True)

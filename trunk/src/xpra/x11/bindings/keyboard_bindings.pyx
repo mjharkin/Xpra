@@ -37,13 +37,17 @@ cdef extern from "X11/Xutil.h":
 # Xlib primitives and constants
 ######
 
-include "constants.pxi"
 ctypedef unsigned long CARD32
 
 cdef extern from "X11/X.h":
     unsigned long NoSymbol
 
 cdef extern from "X11/Xlib.h":
+    int MappingBusy
+    int GrabModeAsync
+    int AnyKey
+    int AnyModifier
+
     ctypedef struct Display:
         pass
     # To make it easier to translate stuff in the X header files into
@@ -241,16 +245,16 @@ cdef s(const char *v):
 # to the original C xmodmap code
 
 
-from xpra.x11.bindings.core_bindings cimport _X11CoreBindings
+from xpra.x11.bindings.core_bindings cimport X11CoreBindingsInstance
 
-cdef _X11KeyboardBindings singleton = None
+cdef X11KeyboardBindingsInstance singleton = None
 def X11KeyboardBindings():
     global singleton
     if singleton is None:
-        singleton = _X11KeyboardBindings()
+        singleton = X11KeyboardBindingsInstance()
     return singleton
 
-cdef class _X11KeyboardBindings(_X11CoreBindings):
+cdef class X11KeyboardBindingsInstance(X11CoreBindingsInstance):
 
     cdef XModifierKeymap* work_keymap
     cdef int min_keycode

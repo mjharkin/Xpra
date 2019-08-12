@@ -17,7 +17,7 @@ import traceback
 from xpra.scripts.main import info, warn, no_gtk, validate_encryption, parse_env, configure_env
 from xpra.scripts.config import InitException, FALSE_OPTIONS
 from xpra.os_util import (
-    SIGNAMES, POSIX, WIN32, OSX,
+    SIGNAMES, POSIX, WIN32, OSX, PYTHON3,
     FDChangeCaptureContext,
     get_username_for_uid, get_home_for_uid, get_shell_for_uid, getuid, setuidgid,
     get_hex_uuid, get_status_output, strtobytes, bytestostr, get_util_logger, osexpand,
@@ -88,14 +88,14 @@ def _get_str(prop_name):
 
 
 def save_xvfb_pid(pid):
-    _save_int(b"_XPRA_SERVER_PID", pid)
+    _save_int("_XPRA_SERVER_PID", pid)
 
 def get_xvfb_pid():
-    return _get_int(b"_XPRA_SERVER_PID")
+    return _get_int("_XPRA_SERVER_PID")
 
 
 def save_uinput_id(uuid):
-    _save_str(b"_XPRA_UINPUT_ID", (uuid or b"").decode())
+    _save_str("_XPRA_UINPUT_ID", (uuid or b"").decode())
 
 #def get_uinput_id():
 #    return _get_str("_XPRA_UINPUT_ID")
@@ -481,6 +481,11 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
     clobber   = upgrading or upgrading_desktop or opts.use_display
     start_vfb = not (shadowing or proxying or clobber)
 
+    if not proxying and PYTHON3 and POSIX and not OSX:
+        #we don't support wayland servers,
+        #so make sure GDK will use the X11 backend:
+        os.environ["GDK_BACKEND"] = "x11"
+
     if proxying or upgrading or upgrading_desktop:
         #when proxying or upgrading, don't exec any plain start commands:
         opts.start = opts.start_child = []
@@ -752,6 +757,7 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
             from xpra.x11.vfb_util import get_xauthority_path
             xauthority = get_xauthority_path(display_name, username, uid, gid)
             if os.path.exists(xauthority):
+                log("found XAUTHORITY=%s", xauthority)
                 os.environ["XAUTHORITY"] = xauthority
         def check_xvfb():
             return True
@@ -841,10 +847,11 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
         os.environ.update(protected_env)
 
     if opts.chdir:
+        log("chdir(%s)", opts.chdir)
         os.chdir(opts.chdir)
 
     dbus_pid, dbus_env = 0, {}
-    if not shadowing and POSIX and not clobber:
+    if not shadowing and POSIX and not OSX and not clobber:
         no_gtk()
         assert starting or starting_desktop or proxying
         from xpra.server.dbus.dbus_start import start_dbus
@@ -861,13 +868,16 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
                 from xpra.x11.vfb_util import verify_display_ready
                 if not verify_display_ready(xvfb, display_name, shadowing):
                     return 1
+                log("X11 display is ready")
                 no_gtk()
                 from xpra.x11.gtk_x11.gdk_display_source import verify_gdk_display
                 display = verify_gdk_display(display_name)
                 if not display:
                     return 1
+                log("GDK can access the display")
         #on win32, this ensures that we get the correct screen size to shadow:
         from xpra.platform.gui import init as gui_init
+        log("gui_init()")
         gui_init()
 
     #setup unix domain socket:
@@ -883,9 +893,7 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
                                         opts.mmap_group, opts.socket_permissions,
                                         username, uid, gid)
     netlog("setting up local sockets: %s", local_sockets)
-    for socktype, socket, sockpath, cleanup_socket in local_sockets:
-        sockets.append((socktype, socket, sockpath, cleanup_socket))
-        netlog("%s %s : %s", socktype, sockpath, socket)
+    sockets += local_sockets
     if POSIX and (starting or upgrading or starting_desktop or upgrading_desktop):
         #all unix domain sockets:
         ud_paths = [sockpath for stype, _, sockpath, _ in local_sockets if stype=="unix-domain"]
@@ -906,10 +914,12 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
 
     set_server_features(opts)
 
-    if not proxying and POSIX:
+    if not proxying and POSIX and not OSX:
         if not check_xvfb():
             return  1
         from xpra.x11.gtk_x11.gdk_display_source import init_gdk_display_source
+        if os.environ.get("NO_AT_BRIDGE") is None:
+            os.environ["NO_AT_BRIDGE"] = "1"
         init_gdk_display_source()
         #(now we can access the X11 server)
         if uinput_uuid:

@@ -42,6 +42,9 @@ class GObjectXpraClient(gobject.GObject, XpraClientBase):
     INSTALL_SIGNAL_HANDLERS = True
 
     def __init__(self):
+        self.idle_add = glib.idle_add
+        self.timeout_add = glib.timeout_add
+        self.source_remove = glib.source_remove
         gobject.GObject.__init__(self)
         XpraClientBase.__init__(self)
 
@@ -50,15 +53,6 @@ class GObjectXpraClient(gobject.GObject, XpraClientBase):
         if self.INSTALL_SIGNAL_HANDLERS:
             self.install_signal_handlers()
         self.glib_init()
-
-    def timeout_add(self, *args):
-        return glib.timeout_add(*args)
-
-    def idle_add(self, *args):
-        return glib.idle_add(*args)
-
-    def source_remove(self, *args):
-        return glib.source_remove(*args)
 
     def get_scheduler(self):
         return glib
@@ -338,6 +332,7 @@ class MonitorXpraClient(SendCommandConnectClient):
         for x in ("wants_features", "wants_events", "event_request"):
             self.hello_extra[x] = True
         self.hello_extra["request"] = "event"
+        self.hello_extra["info-namespace"] = True
 
     def timeout(self, *args):
         pass
@@ -347,7 +342,7 @@ class MonitorXpraClient(SendCommandConnectClient):
         log.info("waiting for server events")
 
     def _process_server_event(self, packet):
-        log.info(": ".join(packet[1:]))
+        log.info(": ".join(bytestostr(x) for x in packet[1:]))
 
     def init_packet_handlers(self):
         SendCommandConnectClient.init_packet_handlers(self)

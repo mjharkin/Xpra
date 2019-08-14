@@ -5,6 +5,7 @@
 # later version. See the file COPYING for details.
 
 import os
+import time
 
 from xpra.util import envbool, envint, CLIENT_PING_TIMEOUT
 from xpra.os_util import monotonic_time, POSIX
@@ -34,10 +35,11 @@ class NetworkStateMixin(StubSourceMixin):
         if self.last_ping_echoed_time>0:
             lpe = int(monotonic_time()*1000-self.last_ping_echoed_time)
         info = {
+                "bandwidth-limit"   : {
+                    "setting"       : self.bandwidth_limit or 0,
+                    },
                 "last-ping-echo"    : lpe,
                 }
-        if self.bandwidth_limit>0:
-            info["bandwidth-limit"] = self.bandwidth_limit
         return info
 
     ######################################################################
@@ -47,7 +49,7 @@ class NetworkStateMixin(StubSourceMixin):
         #NOTE: all ping time/echo time/load avg values are in milliseconds
         now_ms = int(1000*monotonic_time())
         log("sending ping to %s with time=%s", self.protocol, now_ms)
-        self.send_async("ping", now_ms, int(monotonic_time()*1000), will_have_more=False)
+        self.send_async("ping", now_ms, int(time.time()*1000), will_have_more=False)
         timeout = PING_TIMEOUT
         self.check_ping_echo_timers[now_ms] = self.timeout_add(timeout*1000,
                                                                self.check_ping_echo_timeout, now_ms, timeout)

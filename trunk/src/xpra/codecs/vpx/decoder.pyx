@@ -15,7 +15,7 @@ log = Logger("decoder", "vpx")
 
 from xpra.codecs.codec_constants import get_subsampling_divs
 from xpra.codecs.image_wrapper import ImageWrapper
-from xpra.buffers.membuf cimport padbuf, MemBuf, memalign, object_as_buffer, memory_as_pybuffer
+from xpra.buffers.membuf cimport padbuf, MemBuf, memalign, object_as_buffer, memory_as_pybuffer #pylint: disable=syntax-error
 from xpra.os_util import bytestostr, OSX
 from xpra.util import envint
 
@@ -315,7 +315,7 @@ cdef class Decoder:
         self.frames += 1
         cdef double elapsed = 1000*(monotonic_time()-start)
         log("%s frame %4i decoded in %3ims", self.encoding, self.frames, elapsed)
-        return ImageWrapper(0, 0, self.width, self.height, pixels, self.get_colorspace(), 24, strides, 1, ImageWrapper._3_PLANES)
+        return ImageWrapper(0, 0, self.width, self.height, pixels, self.get_colorspace(), 24, strides, 1, ImageWrapper.PLANAR_3)
 
 
 def selftest(full=False):

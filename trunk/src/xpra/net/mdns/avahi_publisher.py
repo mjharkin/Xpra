@@ -88,8 +88,10 @@ class AvahiPublishers(object):
                             fqdn += ".local"
                         log("cannot find a fully qualified domain name for '%s', using: %s", host, fqdn)
                 except (OSError, IOError, IndexError):
-                    log("failed to get hostbyaddr", exc_info=True)
-            self.publishers.append(AvahiPublisher(bus, service_name, port, service_type, domain="", host=fqdn, text=txt, interface=iface_index))
+                    log("failed to get hostbyaddr for '%s'", host, exc_info=True)
+            self.publishers.append(AvahiPublisher(bus, service_name, port,
+                                                  service_type, domain="", host=fqdn,
+                                                  text=txt, interface=iface_index))
 
     def start(self):
         log("avahi:starting: %s", self.publishers)
@@ -142,8 +144,10 @@ class AvahiPublisher(object):
 
     def start(self):
         try:
-            self.server = dbus.Interface(self.bus.get_object(avahi.DBUS_NAME, avahi.DBUS_PATH_SERVER), avahi.DBUS_INTERFACE_SERVER)
-            self.group = dbus.Interface(self.bus.get_object(avahi.DBUS_NAME, self.server.EntryGroupNew()), avahi.DBUS_INTERFACE_ENTRY_GROUP)
+            self.server = dbus.Interface(self.bus.get_object(avahi.DBUS_NAME, avahi.DBUS_PATH_SERVER),
+                                         avahi.DBUS_INTERFACE_SERVER)
+            self.group = dbus.Interface(self.bus.get_object(avahi.DBUS_NAME, self.server.EntryGroupNew()),
+                                        avahi.DBUS_INTERFACE_ENTRY_GROUP)
         except Exception as e:
             log.warn("failed to connect to avahi's dbus interface: %s", e)
             return False
@@ -193,11 +197,12 @@ class AvahiPublisher(object):
                 log.error(" another instance already claims this dbus name")
                 log.error(" %s", e)
                 log.error(" %s", message)
-                return
-            for l in str(e).splitlines():
-                for x in l.split(":", 1):
-                    if x:
-                        log.error(" %s", x)
+            else:
+                for l in str(e).splitlines():
+                    for x in l.split(":", 1):
+                        if x:
+                            log.error(" %s", x)
+            self.stop()
 
     def stop(self):
         group = self.group
@@ -213,6 +218,9 @@ class AvahiPublisher(object):
 
 
     def update_txt(self, txt):
+        if not self.server:
+            log("update_txt(%s) ignored, already stopped", txt)
+            return
         if not self.group:
             log.warn("Warning: cannot update mdns record")
             log.warn(" publisher has already been stopped")

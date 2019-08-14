@@ -8,13 +8,15 @@ import socket
 from zeroconf import ServiceInfo, Zeroconf, __version__ as zeroconf_version #@UnresolvedImport
 
 from xpra.log import Logger
-from xpra.util import csv
+from xpra.util import envbool
 from xpra.net.net_util import get_interfaces_addresses
-from xpra.net.mdns import XPRA_MDNS_TYPE, SHOW_INTERFACE
+from xpra.net.mdns import XPRA_MDNS_TYPE
 from xpra.net.net_util import get_iface
 
 log = Logger("network", "mdns")
 log("python-zeroconf version %s", zeroconf_version)
+
+IPV6 = envbool("XPRA_ZEROCONF_IPV6", False)
 
 
 def get_interface_index(host):
@@ -22,7 +24,6 @@ def get_interface_index(host):
     #so just return the interface name,
     #which is also unique
     return get_iface(host)
-
 
 def inet_ton(af, addr):
     if af==socket.AF_INET:
@@ -38,104 +39,117 @@ class ZeroconfPublishers(object):
     """
     Expose services via python zeroconf
     """
-
     def __init__(self, listen_on, service_name, service_type=XPRA_MDNS_TYPE, text_dict=None):
         log("ZeroconfPublishers%s", (listen_on, service_name, service_type, text_dict))
-        self.zeroconf = None
         self.services = []
-        self.registered = []
-        errs = 0
-        hostname = socket.gethostname()+".local."
-        all_listen_on = []
-        for host_str, port in listen_on:
-            if host_str=="":
-                hosts = ("127.0.0.1", "::")
-            else:
-                hosts = (host_str,)
-            for host in hosts:
-                if host in ("0.0.0.0", "::", ""):
-                    #annoying: we have to enumerate all interfaces
-                    for iface, addresses in get_interfaces_addresses().items():
-                        for af in (socket.AF_INET, socket.AF_INET6):
-                            for defs in addresses.get(af, []):
-                                addr = defs.get("addr")
-                                if addr:
-                                    try:
-                                        addr_str = addr.split("%", 1)[0]
-                                        address = inet_ton(af, addr_str)
-                                        if address:
-                                            all_listen_on.append((addr_str, port, address))
-                                    except OSError as e:
-                                        log("socket.inet_pton '%s'", addr_str, exc_info=True)
-                                        log.error("Error: cannot parse IP address '%s'", addr_str)
-                                        log.error(" %s", e)
-                                        continue
-                    continue
-                try:
-                    if host.find(":")>=0:
-                        af = socket.AF_INET6
-                    else:
-                        af = socket.AF_INET
-                    address = inet_ton(af, host)
-                    if address:
-                        all_listen_on.append((host, port, address))
-                except OSError as e:
-                    log("socket.inet_pton '%s'", host, exc_info=True)
-                    log.error("Error: cannot parse IP address '%s'", host)
-                    log.error(" %s", e)
-                    continue
-        log("will listen on: %s", all_listen_on)
-        for host, port, address in all_listen_on:
-            td = text_dict or {}
-            iface = get_iface(host)
-            if iface is not None and SHOW_INTERFACE:
-                td = text_dict.copy()
-                td["iface"] = iface
-            td = self.txt_rec(td)
+        self.ports = {}
+        def add_address(host, port, af=socket.AF_INET):
             try:
-                #ie: service_name = localhost.localdomain :2 (ssl)
-                st = service_type+"local."
-                parts = service_name.split(" ", 1)
-                regname = parts[0].split(".")[0]
-                if len(parts)==2:
-                    regname += parts[1]
-                regname = regname.replace(" ", "-")
-                regname = regname.replace("(", "")
-                regname = regname.replace(")", "")
-                #ie: regname = localhost:2-ssl
-                regname += "."+service_type+"local."
-                args = (st, regname, address, port, 0, 0, td, hostname)
-                service = ServiceInfo(*args)
-                ServiceInfo.args = args
-                log("ServiceInfo%s=%s", args, service)
-                self.services.append(service)
+                if af==socket.AF_INET6 and host.find("%"):
+                    host = host.split("%")[0]
+                address = inet_ton(af, host)
+                sn = service_name
+                ports = set(self.ports.get(service_name, ()))
+                log("add_address(%s, %s, %s) ports=%s", host, port, af, ports)
+                ports.add(port)
+                if len(ports)>1:
+                    sn += "-%i" % len(ports)
+                zp = ZeroconfPublisher(address, host, port, sn, service_type, text_dict)
             except Exception as e:
-                log("zeroconf ServiceInfo", exc_info=True)
-                if errs==0:
-                    log.error("Error: zeroconf failed to create service")
-                log.error(" for host '%s' and port %i", host, port)
-                log.error(" %s", e)
-                errs += 1
+                log("inet_aton(%s)", host, exc_info=True)
+                log.warn("Warning: cannot publish records on %s:", host)
+                log.warn(" %s", e)
+            else:
+                self.services.append(zp)
+                self.ports[service_name] = ports
+        for host, port in listen_on:
+            if host in ("0.0.0.0", "::"):
+                #annoying: we have to enumerate all interfaces
+                for iface, addresses in get_interfaces_addresses().items():
+                    for af in (socket.AF_INET, socket.AF_INET6):
+                        if af==socket.AF_INET6 and not IPV6:
+                            continue
+                        log("%s: %s", iface, addresses.get(socket.AF_INET, {}))
+                        for defs in addresses.get(af, {}):
+                            addr = defs.get("addr")
+                            if addr:
+                                add_address(addr, port, af)
+                continue
+            if host=="":
+                host = "127.0.0.1"
+            af = socket.AF_INET
+            if host.find(":")>=0:
+                if IPV6:
+                    af = socket.AF_INET6
+                else:
+                    host = "127.0.0.1"
+            add_address(host, port, af)
 
     def start(self):
-        self.zeroconf = Zeroconf()
-        self.registered = []
-        for service in self.services:
-            try:
-                self.zeroconf.register_service(service)
-            except Exception:
-                log("start failed on %s", service, exc_info=True)
-            else:
-                self.registered.append(service)
+        for s in self.services:
+            s.start()
 
     def stop(self):
-        registered = self.registered
-        log("ZeroConfPublishers.stop(): %s" % csv(registered))
-        self.registered = []
-        for reg in registered:
-            self.zeroconf.unregister_service(reg)
-        self.zeroconf = None
+        for s in self.services:
+            s.stop()
 
+    def update_txt(self, txt):
+        for s in self.services:
+            s.update_txt(txt)
+
+
+class ZeroconfPublisher(object):
+    def __init__(self, address, host, port, service_name, service_type=XPRA_MDNS_TYPE, text_dict=None):
+        log("ZeroconfPublisher%s", (address, host, port, service_name, service_type, text_dict))
+        self.address = address
+        self.host = host
+        self.port = port
+        self.zeroconf = None
+        self.service = None
+        self.args = None
+        self.registered = False
+        try:
+            #ie: service_name = localhost.localdomain :2 (ssl)
+            parts = service_name.split(" ", 1)
+            regname = parts[0].split(".")[0]
+            if len(parts)==2:
+                regname += parts[1]
+            regname = regname.replace(":", "-")
+            regname = regname.replace(" ", "-")
+            regname = regname.replace("(", "")
+            regname = regname.replace(")", "")
+            #ie: regname = localhost:2-ssl
+            st = service_type+"local."
+            regname += "."+st
+            td = self.txt_rec(text_dict or {})
+            self.args = (st, regname, self.address, port, 0, 0, td)
+            service = ServiceInfo(*self.args)
+            log("ServiceInfo%s=%s", self.args, service)
+            self.service = service
+        except Exception as e:
+            log("zeroconf ServiceInfo", exc_info=True)
+            log.error(" for port %i", port)
+            log.error(" %s", e)
+
+    def start(self):
+        try:
+            self.zeroconf = Zeroconf(interfaces=[self.host])
+        except OSError:
+            log("start()", exc_info=True)
+            log.error("Error: failed to create Zeroconf instance for address '%s'", self.host)
+            return
+        try:
+            self.zeroconf.register_service(self.service)
+        except Exception:
+            log("start failed on %s", self.service, exc_info=True)
+        else:
+            self.registered = True
+
+    def stop(self):
+        log("ZeroConfPublishers.stop(): %s", self.service)
+        if self.registered:
+            self.zeroconf.unregister_service(self.service)
+        self.zeroconf = None
 
     def txt_rec(self, text_dict):
         #prevent zeroconf from mangling our ints into booleans:
@@ -149,11 +163,20 @@ class ZeroconfPublishers(object):
         return new_dict
 
     def update_txt(self, txt):
-        for service in tuple(self.registered):
-            args = list(service.args)
-            args[6] = self.txt_rec(txt)
-            si = ServiceInfo(*args)
+        args = list(self.args)
+        args[6] = self.txt_rec(txt)
+        self.args = tuple(args)
+        si = ServiceInfo(*self.args)
+        try:
             self.zeroconf.update_service(si)
+            self.service = si
+        except KeyError as e:
+            #probably a race condition with cleanup
+            log("update_txt(%s)", txt, exc_info=True)
+            log.warn("Warning: failed to update service")
+            log.warn(" %s", e)
+        except Exception:
+            log.error("Error: failed to update service", exc_info=True)
 
 
 def main():
@@ -170,18 +193,7 @@ def main():
     loop = glib.MainLoop()
     log.info("python-zeroconf version %s", zeroconf_version)
     def update_rec():
-        log("update_rec()")
-        from zeroconf import DNSText, _CLASS_ANY, _DNS_OTHER_TTL, current_time_millis
-        import struct
-        int2byte = struct.Struct(">B").pack
-        item = b"key=value"
-        txt_data = b"".join((int2byte(len(item)), item))
-        for service in publisher.services:
-            rec = DNSText(service.name, service.type, _CLASS_ANY, _DNS_OTHER_TTL, txt_data)
-            #service.update_record(time.time(), rec)
-            #service._set_properties({"hello" : "world"})
-            publisher.zeroconf.update_record(current_time_millis(), rec)
-        #publisher.zeroconf.notify_all()
+        publisher.update_txt({"somename": "someothervalue"})
         return False
     glib.timeout_add(10*1000, update_rec)
     try:

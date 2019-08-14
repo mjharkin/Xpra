@@ -18,7 +18,7 @@ from xpra.util import envbool
 from xpra.os_util import is_Ubuntu
 from xpra.codecs.codec_constants import csc_spec
 from xpra.codecs.image_wrapper import ImageWrapper
-from xpra.codecs.libav_common.av_log cimport override_logger, restore_logger #@UnresolvedImport
+from xpra.codecs.libav_common.av_log cimport override_logger, restore_logger #@UnresolvedImport pylint: disable=syntax-error
 from xpra.codecs.libav_common.av_log import suspend_nonfatal_logging, resume_nonfatal_logging
 from xpra.buffers.membuf cimport padbuf, MemBuf, object_as_buffer
 
@@ -112,6 +112,7 @@ for av_enum_name, av_enum, width_mult, height_mult, pix_fmt in FORMAT_OPTIONS:
     if pix_fmt not in COLORSPACES:
         COLORSPACES.append(pix_fmt)
 log("swscale pixel formats: %s", FORMATS)
+COLORSPACES = tuple(COLORSPACES)
 log("colorspaces: %s", COLORSPACES)
 
 BYTES_PER_PIXEL = {
@@ -472,7 +473,7 @@ cdef class ColorspaceConverter:
         #now parse the output:
         if self.dst_format.endswith("P"):
             #planar mode, assume 3 planes:
-            oplanes = ImageWrapper._3_PLANES
+            oplanes = ImageWrapper.PLANAR_3
             out = [memoryview(output_buf[i]) for i in range(3)]
             strides = [self.out_stride[i] for i in range(3)]
         else:

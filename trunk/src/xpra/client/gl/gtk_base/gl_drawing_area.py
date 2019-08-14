@@ -5,13 +5,14 @@
 
 import sys
 
-from xpra.platform.gl_context import GLContext
-if not GLContext:
-    raise ImportError("no OpenGL context implementation for %s" % sys.platform)
 from xpra.client.gl.gl_window_backing_base import GLWindowBackingBase
 from xpra.gtk_common.gobject_compat import import_glib, import_gtk, gtk_version
 from xpra.gtk_common.gtk_util import POINTER_MOTION_MASK, POINTER_MOTION_HINT_MASK
+from xpra.platform.gl_context import GLContext
 from xpra.log import Logger
+
+if not GLContext:
+    raise ImportError("no OpenGL context implementation for %s" % sys.platform)
 
 log = Logger("opengl", "paint")
 
@@ -28,7 +29,7 @@ class GLDrawingArea(GLWindowBackingBase):
         glib.idle_add(*args, **kwargs)
 
     def init_gl_config(self, window_alpha):
-        self.context = GLContext(window_alpha)
+        self.context = GLContext(window_alpha)  #pylint: disable=not-callable
         self.window_context = None
 
     def is_double_buffered(self):
@@ -45,7 +46,7 @@ class GLDrawingArea(GLWindowBackingBase):
         da.show()
         self._backing = da
 
-    def get_bit_depth(self, pixel_depth):
+    def get_bit_depth(self, pixel_depth=0):
         return self.context.get_bit_depth() or pixel_depth or 24
 
     def gl_context(self):
@@ -57,17 +58,16 @@ class GLDrawingArea(GLWindowBackingBase):
         self.window_context = self.context.get_paint_context(gdk_window)
         return self.window_context
 
-    def do_gl_show(self, _rect_count):
+    def do_gl_show(self, rect_count):
         if self.is_double_buffered():
             # Show the backbuffer on screen
-            log("%s.gl_show() swapping buffers now", self)
+            log("%s.do_gl_show(%s) swapping buffers now", rect_count, self)
             self.window_context.swap_buffers()
         else:
             #glFlush was enough
             pass
 
-    def close(self):
-        GLWindowBackingBase.close(self)
+    def close_gl_config(self):
         c = self.context
         if c:
             self.context = None

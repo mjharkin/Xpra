@@ -6,8 +6,9 @@
 #cython: auto_pickle=False, cdivision=True, language_level=3
 from __future__ import absolute_import
 
-import time
 import os
+import time
+import math
 from collections import deque
 
 from xpra.log import Logger
@@ -16,7 +17,7 @@ log = Logger("encoder", "vpx")
 from xpra.codecs.codec_constants import video_spec
 from xpra.os_util import get_cpu_count, bytestostr, WIN32, OSX, POSIX, BITS
 from xpra.util import AtomicInteger, envint, envbool
-from xpra.buffers.membuf cimport object_as_buffer
+from xpra.buffers.membuf cimport object_as_buffer   #pylint: disable=syntax-error
 
 from libc.stdint cimport uint8_t
 from libc.stdlib cimport free, malloc
@@ -26,7 +27,8 @@ from xpra.monotonic_time cimport monotonic_time
 
 SAVE_TO_FILE = os.environ.get("XPRA_SAVE_TO_FILE")
 
-cdef int VPX_THREADS = envint("XPRA_VPX_THREADS", max(1, get_cpu_count()-1))
+cdef int default_nthreads = max(1, int(math.sqrt(get_cpu_count()+1)))
+cdef int VPX_THREADS = envint("XPRA_VPX_THREADS", default_nthreads)
 
 cdef inline int roundup(int n, int m):
     return (n + m - 1) & ~(m - 1)
@@ -199,8 +201,8 @@ PACKET_KIND = {
 #"RGB is not supported.  You need to convert your source to YUV, and then compress that."
 COLORSPACES = {}
 
-CODECS = ["vp8", "vp9"]
-COLORSPACES["vp8"] = ["YUV420P"]
+CODECS = ("vp8", "vp9")
+COLORSPACES["vp8"] = ("YUV420P", )
 vp9_cs = ["YUV420P"]
 #this is the ABI version with libvpx 1.4.0:
 if ENABLE_VP9_YUV444:
@@ -208,7 +210,7 @@ if ENABLE_VP9_YUV444:
         vp9_cs.append("YUV444P")
     else:
         log("encoder abi is too low to enable YUV444P: %s", VPX_ENCODER_ABI_VERSION)
-COLORSPACES["vp9"] = vp9_cs
+COLORSPACES["vp9"] = tuple(vp9_cs)
 
 VP9_RANGE = 3
 #as of 1.8:

@@ -67,7 +67,7 @@ class ClientWindowBase(ClientWidgetBase):
         self._sticky = False
         self._iconified = False
         self._focused = False
-        self.gravity = OVERRIDE_GRAVITY or DEFAULT_GRAVITY
+        self.window_gravity = OVERRIDE_GRAVITY or DEFAULT_GRAVITY
         self.border = border
         self.cursor_data = None
         self.default_cursor_data = default_cursor_data
@@ -106,7 +106,7 @@ class ClientWindowBase(ClientWidgetBase):
             metadata[b"size-constraints"] = {}
         #initialize gravity early:
         sc = typedict(metadata.dictget("size-constraints", {}))
-        self.gravity = OVERRIDE_GRAVITY or sc.intget("gravity", DEFAULT_GRAVITY)
+        self.window_gravity = OVERRIDE_GRAVITY or sc.intget("gravity", DEFAULT_GRAVITY)
 
 
     def get_desktop_workspace(self):
@@ -124,7 +124,7 @@ class ClientWindowBase(ClientWidgetBase):
         self._backing = self.make_new_backing(backing_class, w, h, bw, bh)
         self._backing.border = self.border
         self._backing.default_cursor_data = self.default_cursor_data
-        self._backing.gravity = self.gravity
+        self._backing.gravity = self.window_gravity
         return self._backing._backing
 
 
@@ -518,7 +518,7 @@ class ClientWindowBase(ClientWidgetBase):
             #save them so the window hooks can use the last value used:
             self.geometry_hints = hints
             self.apply_geometry_hints(hints)
-        except:
+        except Exception:
             geomlog("set_size_constraints%s", (size_constraints, max_window_size), exc_info=True)
             geomlog.error("Error setting window hints:")
             for k,v in hints.items():
@@ -526,10 +526,10 @@ class ClientWindowBase(ClientWidgetBase):
             geomlog.error(" from size constraints:")
             for k,v in size_constraints.items():
                 geomlog.error(" %s=%s", k, v)
-        self.gravity = OVERRIDE_GRAVITY or size_constraints.intget("gravity", DEFAULT_GRAVITY)
+        self.window_gravity = OVERRIDE_GRAVITY or size_constraints.intget("gravity", DEFAULT_GRAVITY)
         b = self._backing
         if b:
-            b.gravity = self.gravity
+            b.gravity = self.window_gravity
 
 
     def set_window_type(self, window_types):
@@ -664,9 +664,9 @@ class ClientWindowBase(ClientWidgetBase):
                     rx, ry = 0, 0
                 else:
                     rx, ry, rw, rh = self._client.srect(x, y, width, height)
-                if self.window_offset:
-                    rx += self.window_offset[0]
-                    ry += self.window_offset[1]
+                #if self.window_offset:
+                #    rx -= self.window_offset[0]
+                #    ry -= self.window_offset[1]
                 self.idle_add(self.queue_draw_area, rx, ry, rw, rh)
         #only register this callback if we actually need it:
         if backing.draw_needs_refresh:

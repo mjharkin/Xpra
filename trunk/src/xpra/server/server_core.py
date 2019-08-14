@@ -13,6 +13,7 @@ import socket
 import signal
 import threading
 import traceback
+from collections import OrderedDict
 from weakref import WeakKeyDictionary
 from time import sleep, time
 
@@ -737,7 +738,6 @@ class ServerCore(object):
             if bit_depth:
                 extra = " with %i bit colors" % bit_depth
             log.info(" connected to X11 display %s%s", display, extra)
-        now = monotonic_time()
 
 
     ######################################################################
@@ -761,6 +761,8 @@ class ServerCore(object):
                     assert st=="ssh"
                     host = "*"
                     iport = get_ssh_port()
+                    if not iport:
+                        continue
                 else:
                     host, iport = info
                 for h in hosts(host):
@@ -772,10 +774,10 @@ class ServerCore(object):
         mdns_info = self.get_mdns_info()
         self.mdns_publishers = {}
         for mdns_mode, listen_on in mdns_recs.items():
-            info = dict(mdns_info)
+            info = OrderedDict(mdns_info)
             info["mode"] = mdns_mode
-            ap = mdns_publish(self.display_name, listen_on, info)
-            if ap:
+            aps = mdns_publish(self.display_name, listen_on, info)
+            for ap in aps:
                 ap.start()
                 self.mdns_publishers[ap] = mdns_mode
 
@@ -811,13 +813,13 @@ class ServerCore(object):
 
     def get_mdns_info(self):
         from xpra.platform.info import get_username
-        mdns_info = {
+        mdns_info = OrderedDict({
             "display"  : self.display_name,
             "username" : get_username(),
             "uuid"     : self.uuid,
             "platform" : sys.platform,
             "type"     : self.session_type,
-            }
+            })
         MDNS_EXPOSE_NAME = envbool("XPRA_MDNS_EXPOSE_NAME", True)
         if MDNS_EXPOSE_NAME and self.session_name:
             mdns_info["name"] = self.session_name

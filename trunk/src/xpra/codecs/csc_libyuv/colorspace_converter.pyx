@@ -17,7 +17,7 @@ from xpra.os_util import is_Ubuntu
 from xpra.codecs.codec_checks import do_testcsc
 from xpra.codecs.codec_constants import get_subsampling_divs, csc_spec
 from xpra.codecs.image_wrapper import ImageWrapper
-from xpra.buffers.membuf cimport memalign, object_as_buffer, memory_as_pybuffer
+from xpra.buffers.membuf cimport memalign, object_as_buffer, memory_as_pybuffer #pylint: disable=syntax-error
 
 from xpra.monotonic_time cimport monotonic_time
 from libc.stdint cimport uint8_t, uintptr_t
@@ -91,8 +91,8 @@ def get_version():
 #hardcoded for now:
 MAX_WIDTH = 32768
 MAX_HEIGHT = 32768
-IN_COLORSPACES = ["BGRX"]
-OUT_COLORSPACES = ["YUV420P"]
+IN_COLORSPACES = ("BGRX", )
+OUT_COLORSPACES = ("YUV420P", )
 def get_info():
     global IN_COLORSPACES, OUT_COLORSPACES, MAX_WIDTH, MAX_HEIGHT
     return {
@@ -347,7 +347,7 @@ cdef class ColorspaceConverter:
                 strides.append(self.scaled_stride[i])
                 planes.append(memory_as_pybuffer(<void *> scaled_planes[i], self.scaled_size[i], True))
             self.frames += 1
-            out_image = YUVImageWrapper(0, 0, self.dst_width, self.dst_height, planes, self.dst_format, 24, strides, 1, ImageWrapper._3_PLANES)
+            out_image = YUVImageWrapper(0, 0, self.dst_width, self.dst_height, planes, self.dst_format, 24, strides, 1, ImageWrapper.PLANAR_3)
             out_image.cython_buffer = <uintptr_t> scaled_buffer
         else:
             #use output buffer directly:
@@ -355,7 +355,7 @@ cdef class ColorspaceConverter:
                 strides.append(self.out_stride[i])
                 planes.append(memory_as_pybuffer(<void *> out_planes[i], self.out_size[i], True))
             self.frames += 1
-            out_image = YUVImageWrapper(0, 0, self.dst_width, self.dst_height, planes, self.dst_format, 24, strides, 1, ImageWrapper._3_PLANES)
+            out_image = YUVImageWrapper(0, 0, self.dst_width, self.dst_height, planes, self.dst_format, 24, strides, 1, ImageWrapper.PLANAR_3)
             out_image.cython_buffer = <uintptr_t> output_buffer
         return out_image
 

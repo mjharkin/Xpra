@@ -18,7 +18,7 @@ from xpra.os_util import path_permission_info
 from xpra.util import nonl, print_nested_dict
 from xpra.codecs.image_wrapper import ImageWrapper
 from xpra.codecs.codec_constants import get_subsampling_divs
-from xpra.buffers.membuf cimport memalign, object_as_buffer
+from xpra.buffers.membuf cimport memalign, object_as_buffer #pylint: disable=syntax-error
 
 
 from libc.stdint cimport uint32_t, uint8_t
@@ -446,7 +446,7 @@ cdef class Pusher:
         cdef int Vhdiv = divs[2][1]
 
         iplanes = image.get_planes()
-        assert iplanes==ImageWrapper._3_PLANES, "invalid input format: %s planes" % iplanes
+        assert iplanes==ImageWrapper.PLANAR_3, "invalid input format: %s planes" % iplanes
         assert image.get_width()>=self.width, "invalid image width: %s (minimum is %s)" % (image.get_width(), self.width)
         assert image.get_height()>=self.height, "invalid image height: %s (minimum is %s)" % (image.get_height(), self.height)
         planes = image.get_pixels()

@@ -27,7 +27,7 @@ from xpra.version_util import get_version_info, XPRA_VERSION
 from xpra.platform.info import get_name
 from xpra.os_util import (
     get_machine_id, get_user_uuid,
-    load_binary_file,
+    load_binary_file, force_quit,
     SIGNAMES, PYTHON3, BITS,
     strtobytes, bytestostr, hexstr, monotonic_time, use_tty,
     )
@@ -208,7 +208,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         sys.stderr.write("\ngot deadly signal %s, exiting\n" % SIGNAMES.get(signum, signum))
         sys.stderr.flush()
         self.cleanup()
-        os._exit(128 + signum)
+        force_quit(128 + signum)
     def handle_app_signal(self, signum, _frame=None):
         try:
             log.info("exiting")
@@ -245,7 +245,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         self.disconnect_and_quit(exit_code, reason)
         self.quit(exit_code)
         self.exit()
-        os._exit(exit_code)
+        force_quit(exit_code)
 
     def signal_cleanup(self):
         #placeholder for stuff that can be cleaned up from the signal handler
@@ -654,7 +654,9 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
             if local and ALLOW_LOCALHOST_PASSWORDS:
                 return True
             if not encrypted and not ALLOW_UNENCRYPTED_PASSWORDS:
-                self.auth_error(EXIT_ENCRYPTION, "server requested '%s' digest, cowardly refusing to use it without encryption" % digest, "invalid digest")
+                self.auth_error(EXIT_ENCRYPTION,
+                                "server requested '%s' digest, cowardly refusing to use it without encryption" % digest,
+                                "invalid digest")
                 return False
         salt_digest = "xor"
         if len(packet)>=5:
@@ -720,7 +722,8 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         challenge_response = gendigest(actual_digest, password, salt)
         if not challenge_response:
             log("invalid digest module '%s': %s", actual_digest)
-            self.auth_error(EXIT_UNSUPPORTED, "server requested '%s' digest but it is not supported" % actual_digest, "invalid digest")
+            self.auth_error(EXIT_UNSUPPORTED,
+                            "server requested '%s' digest but it is not supported" % actual_digest, "invalid digest")
             return
         authlog("%s(%s, %s)=%s", actual_digest, repr(password), repr(salt), repr(challenge_response))
         self.do_send_challenge_reply(challenge_response, client_salt)
@@ -741,13 +744,16 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         #either from hello response or from challenge packet:
         self.server_padding_options = caps.strlistget("cipher.padding.options", [DEFAULT_PADDING])
         if not cipher or not cipher_iv:
-            self.warn_and_quit(EXIT_ENCRYPTION, "the server does not use or support encryption/password, cannot continue with %s cipher" % self.encryption)
+            self.warn_and_quit(EXIT_ENCRYPTION,
+                               "the server does not use or support encryption/password, cannot continue with %s cipher" % self.encryption)
             return False
         if cipher not in ENCRYPTION_CIPHERS:
-            self.warn_and_quit(EXIT_ENCRYPTION, "unsupported server cipher: %s, allowed ciphers: %s" % (cipher, csv(ENCRYPTION_CIPHERS)))
+            self.warn_and_quit(EXIT_ENCRYPTION,
+                               "unsupported server cipher: %s, allowed ciphers: %s" % (cipher, csv(ENCRYPTION_CIPHERS)))
             return False
         if padding not in ALL_PADDING_OPTIONS:
-            self.warn_and_quit(EXIT_ENCRYPTION, "unsupported server cipher padding: %s, allowed ciphers: %s" % (padding, csv(ALL_PADDING_OPTIONS)))
+            self.warn_and_quit(EXIT_ENCRYPTION,
+                               "unsupported server cipher padding: %s, allowed ciphers: %s" % (padding, csv(ALL_PADDING_OPTIONS)))
             return False
         p = self._protocol
         if not p:

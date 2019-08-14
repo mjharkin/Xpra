@@ -200,7 +200,7 @@ class WindowIconSource(object):
         use_png = self.has_png and (must_scale or not self.has_premult or w*h>=MAX_ARGB_PIXELS)
         log("compress_and_send_window_icon: %sx%s (max-size=%s, standard-size=%s), sending as png=%s, pixel_format=%s",
             w, h, self.window_icon_max_size, self.window_icon_size, use_png, pixel_format)
-        must_convert = (use_png and pixel_format!="png") or (pixel_format=="BGRA" and not self.has_premult)
+        must_convert = (use_png and pixel_format!="png") or (pixel_format=="png" and not use_png) or (pixel_format=="BGRA" and not self.has_premult)
         log(" must convert=%s, must scale=%s", must_convert, must_scale)
 
         image = None

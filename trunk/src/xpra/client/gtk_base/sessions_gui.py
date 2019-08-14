@@ -109,12 +109,16 @@ class SessionsGUI(gtk.Window):
 
     def do_quit(self):
         log("do_quit()")
+        self.cleanup()
         gtk.main_quit()
 
     def app_signal(self, signum):
         self.exit_code = 128 + signum
         log("app_signal(%s) exit_code=%i", signum, self.exit_code)
         self.do_quit()
+
+    def cleanup(self):
+        self.destroy()
 
 
     def update(self):
@@ -283,9 +287,10 @@ class SessionsGUI(gtk.Window):
         if not mode:
             #guess the mode from the service name,
             #ie: "localhost.localdomain :2 (wss)" -> "wss"
+            #ie: "localhost.localdomain :2 (ssh-2)" -> "ssh"
             pos = name.rfind("(")
             if name.endswith(")") and pos>0:
-                mode = name[pos+1:-1]
+                mode = name[pos+1:-1].split("-")[0]
                 if mode not in ("tcp", "ws", "wss", "ssl", "ssh"):
                     return ""
             else:

@@ -16,7 +16,10 @@ from Quartz import (
     CGWindowListCopyWindowInfo, kCGDisplaySetModeFlag, kCGWindowListOptionOnScreenOnly, #@UnresolvedImport
     kCGNullWindowID, kCGWindowListOptionAll,    #@UnresolvedImport
     )
-from Quartz.CoreGraphics import CGDisplayRegisterReconfigurationCallback, CGDisplayRemoveReconfigurationCallback #@UnresolvedImport
+from Quartz.CoreGraphics import (
+    CGDisplayRegisterReconfigurationCallback,   #@UnresolvedImport
+    CGDisplayRemoveReconfigurationCallback,     #@UnresolvedImport
+    )
 from AppKit import NSAppleEventManager, NSScreen, NSObject, NSBeep   #@UnresolvedImport
 from AppKit import (
     NSApp, NSApplication, NSWorkspace,              #@UnresolvedImport
@@ -24,7 +27,10 @@ from AppKit import (
     NSWorkspaceWillSleepNotification,               #@UnresolvedImport
     NSWorkspaceDidWakeNotification,                 #@UnresolvedImport
     )
-from Foundation import NSUserNotification, NSUserNotificationCenter, NSUserNotificationDefaultSoundName #@UnresolvedImport
+from Foundation import (
+    NSUserNotification, NSUserNotificationCenter,   #@UnresolvedImport
+    NSUserNotificationDefaultSoundName,             #@UnresolvedImport
+    )
 
 from xpra.os_util import PYTHON2
 from xpra.util import envbool, envint, roundup
@@ -216,7 +222,7 @@ def get_double_click_time():
         #what are ticks? just an Apple retarded way of measuring elapsed time.
         #They must have considered gigaparsecs divided by teapot too, which is just as useful.
         #(but still call it "Time" you see)
-        MS_PER_TICK = 1000/60
+        MS_PER_TICK = 1000.0/60
         return int(GetDblTime() * MS_PER_TICK)
     except:
         return -1
@@ -793,6 +799,7 @@ class ClientExtras(object):
                         self.client.suspend()
                     else:
                         self.client.resume()
+            return True
         except Exception:
             log.error("Error checking display sleep status", exc_info=True)
             self.check_display_timer = 0

@@ -12,7 +12,7 @@ log = Logger("decoder", "jpeg")
 
 from xpra.util import envbool, reverse_dict
 from xpra.codecs.image_wrapper import ImageWrapper
-from xpra.buffers.membuf cimport getbuf, MemBuf, object_as_buffer
+from xpra.buffers.membuf cimport getbuf, MemBuf, object_as_buffer  #pylint: disable=syntax-error
 
 from libc.stdint cimport uint8_t, uint32_t, uintptr_t
 from xpra.monotonic_time cimport monotonic_time
@@ -192,7 +192,7 @@ def decompress_to_yuv(data, int width, int height, options={}):
         elapsed = monotonic_time()-start
         log("decompress jpeg to %s: %4i MB/s (%9i bytes in %2.1fms)",
             subsamp_str, float(total_size)/elapsed//1024//1024, total_size, 1000*elapsed)
-    return ImageWrapper(0, 0, w, h, pyplanes, subsamp_str, 24, pystrides, ImageWrapper._3_PLANES)
+    return ImageWrapper(0, 0, w, h, pyplanes, subsamp_str, 24, pystrides, ImageWrapper.PLANAR_3)
 
 
 def decompress_to_rgb(rgb_format, data, int width, int height, options={}):

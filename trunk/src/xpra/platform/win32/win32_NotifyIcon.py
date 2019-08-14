@@ -235,8 +235,6 @@ class win32NotifyIcon(object):
                 pass
             self.current_icon = self.LoadImage(iconPathName) or FALLBACK_ICON
         self.create_tray_window()
-        #register callbacks:
-        win32NotifyIcon.instances[self.hwnd] = self
 
     def __repr__(self):
         return "win32NotifyIcon(%#x)" % self.app_id
@@ -256,6 +254,8 @@ class win32NotifyIcon(object):
             raise ctypes.WinError(ctypes.get_last_error())
         log("create_window() hwnd=%#x", self.hwnd)
         UpdateWindow(self.hwnd)
+        #register callbacks:
+        win32NotifyIcon.instances[self.hwnd] = self
 
     def register_tray(self):
         r = Shell_NotifyIconW(NIM_ADD, self.make_nid(NIF_ICON | NIF_MESSAGE | NIF_TIP))
@@ -328,7 +328,7 @@ class win32NotifyIcon(object):
         self.current_icon = hicon
         Shell_NotifyIconW(NIM_MODIFY, self.make_nid(NIF_ICON))
 
-    def set_icon_from_data(self, pixels, has_alpha, w, h, rowstride, options={}):
+    def set_icon_from_data(self, pixels, has_alpha, w, h, rowstride, options=None):
         #this is convoluted but it works..
         log("set_icon_from_data%s", ("%s pixels" % len(pixels), has_alpha, w, h, rowstride, options))
         from PIL import Image   #@UnresolvedImport
@@ -336,7 +336,7 @@ class win32NotifyIcon(object):
             img_format = "RGBA"
         else:
             img_format = "RGBX"
-        rgb_format = options.get("rgb_format", "RGBA")
+        rgb_format = (options or {}).get("rgb_format", "RGBA")
         img = Image.frombuffer(img_format, (w, h), pixels, "raw", rgb_format, rowstride, 1)
         assert img, "failed to load image from buffer (%i bytes for %ix%i %s)" % (len(pixels), w, h, rgb_format)
         #apparently, we have to use SM_CXSMICON (small icon) and not SM_CXICON (regular size):

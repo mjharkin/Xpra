@@ -4,9 +4,11 @@
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
+#pylint: disable=line-too-long
+
 import unittest
 
-from xpra.os_util import PYTHON3
+from xpra.os_util import PYTHON3, WIN32
 from xpra.util import AdHocStruct
 from xpra.client.mixins.audio import AudioClient
 from xpra.sound.gstreamer_util import CODEC_ORDER
@@ -115,6 +117,7 @@ class AudioClientReceiveTest(AudioClientTestUtil):
 				return True
 			self.verify_packet(0, ("sound-control", "start", "opus"))
 			self.glib.timeout_add(100, feed_data)
+			return False
 		self.glib.timeout_add(100, check_start)
 		self.glib.timeout_add(5000, stop)
 		#self.debug_all()
@@ -127,7 +130,7 @@ class AudioClientReceiveTest(AudioClientTestUtil):
 
 
 def main():
-	if PYTHON3:
+	if PYTHON3 and not WIN32:
 		unittest.main()
 
 

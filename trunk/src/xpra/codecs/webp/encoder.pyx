@@ -12,8 +12,8 @@ import os
 from xpra.log import Logger
 log = Logger("encoder", "webp")
 
-from libc.stdlib cimport free
-from libc.string cimport memset
+from libc.stdlib cimport free   #pylint: disable=syntax-error
+from libc.string cimport memset #pylint: disable=syntax-error
 
 from xpra.buffers.membuf cimport object_as_buffer
 from xpra.os_util import bytestostr
@@ -345,10 +345,10 @@ def get_info():
             "encodings"     : get_encodings(),
             "threading"     : bool(WEBP_THREADING),
             "image-hint"    : DEFAULT_IMAGE_HINT,
-            "image-hints"   : IMAGE_HINT.values(),
+            "image-hints"   : tuple(IMAGE_HINT.values()),
             "preset"        : DEFAULT_PRESET,
             "preset-small"  : PRESET_SMALL,
-            "presets"       : PRESETS.values(),
+            "presets"       : tuple(PRESETS.values()),
             }
 
 def webp_check(int ret):

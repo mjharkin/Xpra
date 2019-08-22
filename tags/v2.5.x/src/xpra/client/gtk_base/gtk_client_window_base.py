@@ -24,7 +24,7 @@ from xpra.util import (
     MOVERESIZE_SIZE_LEFT, MOVERESIZE_MOVE,
     )
 from xpra.gtk_common.gobject_compat import import_gtk, import_gdk, import_cairo, is_gtk3
-from xpra.gtk_common.gobject_util import no_arg_signal
+from xpra.gtk_common.gobject_util import no_arg_signal, one_arg_signal
 from xpra.gtk_common.gtk_util import (
     get_xwindow, get_pixbuf_from_data, get_default_root_window,
     is_realized, display_get_default, drag_status,
@@ -191,6 +191,8 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
 
     __common_gsignals__ = {
         "state-updated"         : no_arg_signal,
+        "xpra-focus-out-event"  : one_arg_signal,
+        "xpra-focus-in-event"   : one_arg_signal,
         }
 
     #maximum size of the actual window:

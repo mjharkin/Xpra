@@ -23,7 +23,7 @@ from xpra.util import (
     MOVERESIZE_SIZE_LEFT, MOVERESIZE_MOVE,
     )
 from xpra.gtk_common.gobject_compat import import_gtk, import_gdk, import_cairo, is_gtk3
-from xpra.gtk_common.gobject_util import no_arg_signal
+from xpra.gtk_common.gobject_util import no_arg_signal, one_arg_signal
 from xpra.gtk_common.gtk_util import (
     get_xwindow, get_pixbuf_from_data, get_default_root_window,
     is_realized, display_get_default, drag_status,
@@ -36,6 +36,7 @@ from xpra.gtk_common.gtk_util import (
     DEST_DEFAULT_MOTION, DEST_DEFAULT_HIGHLIGHT, ACTION_COPY,
     BUTTON_PRESS_MASK, BUTTON_RELEASE_MASK, POINTER_MOTION_MASK,
     POINTER_MOTION_HINT_MASK, ENTER_NOTIFY_MASK, LEAVE_NOTIFY_MASK,
+    WINDOW_EVENT_MASK,
     )
 from xpra.gtk_common.keymap import KEY_TRANSLATIONS
 from xpra.client.client_window_base import ClientWindowBase
@@ -65,6 +66,7 @@ CAN_SET_WORKSPACE = False
 HAS_X11_BINDINGS = False
 USE_X11_BINDINGS = POSIX and envbool("XPRA_USE_X11_BINDINGS", is_X11())
 prop_get, prop_set, prop_del = None, None, None
+NotifyInferior = None
 if USE_X11_BINDINGS:
     try:
         from xpra.gtk_common.error import xlog, verify_sync
@@ -76,6 +78,7 @@ if USE_X11_BINDINGS:
         set_context_check(verify_sync)
         X11Window = X11WindowBindings()
         X11Core = X11CoreBindings()
+        NotifyInferior = constants["NotifyInferior"]
         HAS_X11_BINDINGS = True
 
         SubstructureNotifyMask = constants["SubstructureNotifyMask"]
@@ -189,6 +192,8 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
 
     __common_gsignals__ = {
         "state-updated"         : no_arg_signal,
+        "xpra-focus-out-event"  : one_arg_signal,
+        "xpra-focus-in-event"   : one_arg_signal,
         }
 
     #maximum size of the actual window:
@@ -226,7 +231,7 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
         #add platform hooks
         self.connect_after("realize", self.on_realize)
         self.connect('unrealize', self.on_unrealize)
-        self.add_events(self.WINDOW_EVENT_MASK)
+        self.add_events(WINDOW_EVENT_MASK)
         if DRAGNDROP and not self._client.readonly:
             self.init_dragndrop()
         self.init_focus()
@@ -240,7 +245,7 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
         self.add(widget)
 
     def init_widget_events(self, widget):
-        widget.add_events(self.WINDOW_EVENT_MASK)
+        widget.add_events(WINDOW_EVENT_MASK)
         def motion(_w, event):
             self._do_motion_notify_event(event)
             return True
@@ -441,6 +446,11 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
 
     def do_xpra_focus_out_event(self, event):
         focuslog("do_xpra_focus_out_event(%s)", event)
+        if NotifyInferior is not None:
+            detail = getattr(event, "detail", None)
+            if detail==NotifyInferior:
+                log("dropped NotifyInferior focus event")
+                return True
         self._focus_latest = False
         return self.schedule_recheck_focus()
 
@@ -805,6 +815,8 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
             #or when we get the configure event - which should come straight after
             #if we're changing the maximized state
             state_updates["maximized"] = bool(event.new_window_state & self.WINDOW_STATE_MAXIMIZED)
+        if event.changed_mask & self.WINDOW_STATE_FOCUSED:
+            state_updates["focused"] = bool(event.new_window_state & self.WINDOW_STATE_FOCUSED)
         self.update_window_state(state_updates)
 
     def update_window_state(self, state_updates):
@@ -1115,11 +1127,12 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
 
 
     def property_changed(self, widget, event):
-        statelog("property_changed(%s, %s) : %s", widget, event, event.atom)
-        if event.atom=="_NET_WM_DESKTOP":
+        atom = str(event.atom)
+        statelog("property_changed(%s, %s) : %s", widget, event, atom)
+        if atom=="_NET_WM_DESKTOP":
             if self._been_mapped and not self._override_redirect and self._can_set_workspace:
                 self.do_workspace_changed(event)
-        elif event.atom=="_NET_FRAME_EXTENTS":
+        elif atom=="_NET_FRAME_EXTENTS":
             if prop_get:
                 v = prop_get(self.get_window(), "_NET_FRAME_EXTENTS", ["u32"], ignore_errors=False)
                 statelog("_NET_FRAME_EXTENTS: %s", v)
@@ -1141,12 +1154,12 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
                     statelog("sending configure event to update _NET_FRAME_EXTENTS to %s", v)
                     self._window_state["frame"] = self._client.crect(*v)
                     self.send_configure_event(True)
-        elif event.atom=="XKLAVIER_STATE":
+        elif atom=="XKLAVIER_STATE":
             if prop_get:
                 #unused for now, but log it:
                 xklavier_state = prop_get(self.get_window(), "XKLAVIER_STATE", ["integer"], ignore_errors=False)
                 keylog("XKLAVIER_STATE=%s", [hex(x) for x in (xklavier_state or [])])
-        elif event.atom=="_NET_WM_STATE":
+        elif atom=="_NET_WM_STATE":
             if prop_get:
                 wm_state_atoms = prop_get(self.get_window(), "_NET_WM_STATE", ["atom"], ignore_errors=False)
                 #code mostly duplicated from gtk_x11/window.py:

@@ -885,6 +885,9 @@ cdef class _X11WindowBindings(_X11CoreBindings):
         self.context_check()
         return bool(XMoveResizeWindow(self.display, xwindow, x, y, width, height))
 
+    def addDefaultEvents(self, Window xwindow):
+        ADDMASK = StructureNotifyMask | PropertyChangeMask | FocusChangeMask | PointerMotionMask | PointerMotionHintMask | ButtonMotionMask
+        self.addXSelectInput(xwindow, ADDMASK)
 
     def addXSelectInput(self, Window xwindow, add_mask):
         self.context_check()

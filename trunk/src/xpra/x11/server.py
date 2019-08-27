@@ -12,7 +12,7 @@ import math
 from collections import deque, namedtuple
 
 from xpra.version_util import XPRA_VERSION
-from xpra.util import updict, rindex, envbool, envint
+from xpra.util import updict, rindex, envbool, envint, typedict
 from xpra.os_util import memoryview_to_bytes, strtobytes, bytestostr, monotonic_time
 from xpra.server import server_features
 from xpra.gtk_common.gobject_util import one_arg_signal
@@ -58,6 +58,7 @@ REPARENT_ROOT = envbool("XPRA_REPARENT_ROOT", True)
 CONFIGURE_DAMAGE_RATE = envint("XPRA_CONFIGURE_DAMAGE_RATE", 250)
 SHARING_SYNC_SIZE = envbool("XPRA_SHARING_SYNC_SIZE", True)
 CLAMP_WINDOW_TO_ROOT = envbool("XPRA_CLAMP_WINDOW_TO_ROOT", False)
+ALWAYS_RAISE_WINDOW = envbool("XPRA_ALWAYS_RAISE_WINDOW", False)
 
 WINDOW_SIGNALS = os.environ.get("XPRA_WINDOW_SIGNALS", "SIGINT,SIGTERM,SIGQUIT,SIGCONT,SIGUSR1,SIGUSR2").split(",")
 
@@ -846,14 +847,15 @@ class XpraServer(gobject.GObject, X11ServerBase):
         assert proto in self._server_sources
         if not new_window_state:
             return []
+        nws = typedict(new_window_state)
         metadatalog("set_window_state%s", (wid, window, new_window_state))
         changes = []
         if "frame" in new_window_state:
             #the size of the window frame may have changed
-            frame = new_window_state.get("frame") or (0, 0, 0, 0)
+            frame = nws.intlistget("frame", (0, 0, 0, 0))
             window.set_property("frame", frame)
         #boolean: but not a wm_state and renamed in the model... (iconic vs inconified!)
-        iconified = new_window_state.get("iconified")
+        iconified = nws.boolget("iconified")
         if iconified is not None:
             if window.is_OR():
                 log("ignoring iconified=%s on OR window %s", iconified, window)
@@ -868,14 +870,15 @@ class XpraServer(gobject.GObject, X11ServerBase):
             "sticky", "shaded",
             "skip-pager", "skip-taskbar", "focused",
             ):
-            if k in new_window_state:
-                #metadatalog.info("window.get_property=%s", window.get_property)
-                new_state = bool(new_window_state.get(k, False))
-                cur_state = bool(window.get_property(k))
-                #metadatalog.info("set window state for '%s': current state=%s, new state=%s", k, cur_state, new_state)
-                if cur_state!=new_state:
-                    window.update_wm_state(k, new_state)
-                    changes.append(k)
+            #metadatalog.info("window.get_property=%s", window.get_property)
+            new_state = nws.boolget(k, None)
+            if new_state is None:
+                continue
+            cur_state = bool(window.get_property(k))
+            #metadatalog.info("set window state for '%s': current state=%s, new state=%s", k, cur_state, new_state)
+            if cur_state!=new_state:
+                window.update_wm_state(k, new_state)
+                changes.append(k)
         metadatalog("set_window_state: changes=%s", changes)
         return changes
 
@@ -901,8 +904,8 @@ class XpraServer(gobject.GObject, X11ServerBase):
         self._window_mapped_at(proto, wid, window, (x, y, w, h))
         if len(packet)>=7:
             self._set_client_properties(proto, wid, window, packet[6])
-        #if not self.ui_driver:
-        #    self.set_ui_driver(ss)
+        if not self.ui_driver:
+            self.set_ui_driver(ss)
         if self.ui_driver==ss.uuid or not self._desktop_manager.is_shown(window):
             if len(packet)>=8:
                 self._set_window_state(proto, wid, window, packet[7])
@@ -974,8 +977,8 @@ class XpraServer(gobject.GObject, X11ServerBase):
             if cprops:
                 metadatalog("window client properties updates: %s", cprops)
                 self._set_client_properties(proto, wid, window, cprops)
-        #if not self.ui_driver:
-        #    self.set_ui_driver(ss)
+        if not self.ui_driver:
+            self.set_ui_driver(ss)
         is_ui_driver = self.ui_driver==ss.uuid
         shown = self._desktop_manager.is_shown(window)
         if window.is_OR() or window.is_tray() or skip_geometry or self.readonly:
@@ -1004,7 +1007,8 @@ class XpraServer(gobject.GObject, X11ServerBase):
                 self.last_client_configure_event = monotonic_time()
                 if is_ui_driver and len(packet)>=9:
                     changes = self._set_window_state(proto, wid, window, packet[8])
-                    damage |= len(changes)>0
+                    if changes:
+                        damage = True
                 if not skip_geometry:
                     owx, owy, oww, owh = self._desktop_manager.window_geometry(window)
                     resize_counter = 0
@@ -1079,7 +1083,7 @@ class XpraServer(gobject.GObject, X11ServerBase):
     """ override so we can raise the window under the cursor
         (gtk raise does not change window stacking, just focus) """
     def _move_pointer(self, wid, pos, *args):
-        if wid>0 and self.last_raised!=wid:
+        if wid>0 and (self.last_raised!=wid or ALWAYS_RAISE_WINDOW):
             window = self._lookup_window(wid)
             if not window:
                 mouselog("_move_pointer(%s, %s) invalid window id", wid, pos)

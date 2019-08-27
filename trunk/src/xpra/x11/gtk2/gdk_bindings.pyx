@@ -17,7 +17,7 @@ from gtk import gdk
 from xpra.gtk_common.quit import gtk_main_quit_really
 from xpra.gtk_common.error import trap, XError
 from xpra.x11.common import X11Event
-from xpra.monotonic_time cimport monotonic_time
+from xpra.monotonic_time cimport monotonic_time  #pylint: disable=syntax-error
 from xpra.util import csv
 
 from xpra.log import Logger
@@ -32,7 +32,7 @@ from xpra.gtk_common.gtk2.gdk_bindings import get_display_for
 
 from xpra.x11.common import REPR_FUNCTIONS
 def get_window_xid(window):
-    return hex(window.xid)
+    return hex(int(window.xid))
 REPR_FUNCTIONS[gdk.Window] = get_window_xid
 def get_display_name(display):
     return display.get_name()

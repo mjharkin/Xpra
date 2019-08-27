@@ -142,12 +142,18 @@ if [ "${DO_SERVICE}" == "1" ]; then
 	echo "* Compiling system service shim"
 	pushd "win32/service" > /dev/null
 	rm -f event_log.rc event_log.res MSG00409.bin Xpra-Service.exe
-	WINDOWS_KITS="C:\Program Files (x86)\\Windows Kits"
-	if [ -d "C:\\Program Files\\Windows Kits" ]; then
-		WINDOWS_KITS="C:\Program Files\\Windows Kits"
-	fi
-	MC="${WINDOWS_KITS}\\8.1\\bin\\x86\\mc.exe"
-	RC="${WINDOWS_KITS}\\8.1\\bin\\x86\\rc.exe"
+	for KIT_DIR in "C:\Program Files\\Windows Kits" "C:\\Program Files (x86)\\Windows Kits"; do
+		for V in 8.1 10; do
+			for B in x64 x86; do
+				MC="${KIT_DIR}\\$V\\bin\\$B\\mc.exe"
+				RC="${KIT_DIR}\\$V\\bin\\$B\\rc.exe"
+				if [ -e "$MC" ]; then
+					echo "  using SDK $V $B found in $KIT_DIR"
+					break 3
+				fi
+			done
+		done
+	done
 	LINK="C:\\Program Files\\Microsoft Visual Studio 14.0\\VC\\bin\\link.exe"
 	if  [ ! -e "${LINK}" ]; then
 		LINK="C:\\Program Files (x86)\\Microsoft Visual Studio 14.0\\VC\\bin\\link.exe"
@@ -224,6 +230,10 @@ if [ "$?" != "0" ]; then
 	tail -n 20 "${CX_FREEZE_LOG}"
 	exit 1
 fi
+#fix case sensitive mess:
+mv ${DIST}/lib/girepository-1.0/Glib-2.0.typelib ${DIST}/lib/girepository-1.0/GLib-2.0.typelib.tmp
+mv ${DIST}/lib/girepository-1.0/GLib-2.0.typelib.tmp ${DIST}/lib/girepository-1.0/GLib-2.0.typelib
+
 #fixup cx_Logging, required by the service class before we can patch sys.path to find it:
 if [ -e "${DIST}/lib/cx_Logging.pyd" ]; then
 	mv "${DIST}/lib/cx_Logging.pyd" "${DIST}/"
@@ -353,11 +363,11 @@ fi
 if [ "${DO_VERPATCH}" == "1" ]; then
 	for exe in `ls dist/*exe | grep -v Plink.exe`; do
 		tool_name=`echo $exe | sed 's+dist/++g;s+Xpra_++g;s+Xpra-++g;s+_+ +g;s+-+ +g;s+\.exe++g'`
-		verpatch $exe				//s desc "Xpra $tool_name"		//va "${ZERO_PADDED_VERSION}" //s company "xpra.org" //s copyright "(c) xpra.org 2017" //s product "xpra" //pv "${ZERO_PADDED_VERSION}"
+		verpatch $exe				//s desc "Xpra $tool_name"		//va "${ZERO_PADDED_VERSION}" //s company "xpra.org" //s copyright "(c) xpra.org 2019" //s product "xpra" //pv "${ZERO_PADDED_VERSION}"
 	done
-	verpatch dist/Xpra_cmd.exe 		//s desc "Xpra command line"	//va "${ZERO_PADDED_VERSION}" //s company "xpra.org" //s copyright "(c) xpra.org 2017" //s product "xpra" //pv "${ZERO_PADDED_VERSION}"
-	verpatch dist/Xpra-Proxy.exe	//s desc "Xpra Proxy Server"	//va "${ZERO_PADDED_VERSION}" //s company "xpra.org" //s copyright "(c) xpra.org 2017" //s product "xpra" //pv "${ZERO_PADDED_VERSION}"
-	verpatch dist/Xpra.exe 			//s desc "Xpra" 				//va "${ZERO_PADDED_VERSION}" //s company "xpra.org" //s copyright "(c) xpra.org 2017" //s product "xpra" //pv "${ZERO_PADDED_VERSION}"
+	verpatch dist/Xpra_cmd.exe 		//s desc "Xpra command line"	//va "${ZERO_PADDED_VERSION}" //s company "xpra.org" //s copyright "(c) xpra.org 2019" //s product "xpra" //pv "${ZERO_PADDED_VERSION}"
+	verpatch dist/Xpra-Proxy.exe	//s desc "Xpra Proxy Server"	//va "${ZERO_PADDED_VERSION}" //s company "xpra.org" //s copyright "(c) xpra.org 2019" //s product "xpra" //pv "${ZERO_PADDED_VERSION}"
+	verpatch dist/Xpra.exe 			//s desc "Xpra" 				//va "${ZERO_PADDED_VERSION}" //s company "xpra.org" //s copyright "(c) xpra.org 2019" //s product "xpra" //pv "${ZERO_PADDED_VERSION}"
 fi
 
 ################################################################################

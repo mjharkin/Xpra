@@ -153,7 +153,9 @@ class AudioClient(StubClientMixin):
         return caps
 
     def get_caps(self):
-        return updict({}, "sound", self.get_audio_capabilities())
+        d = {"av-sync" : self.av_sync}
+        updict(d, "sound", self.get_audio_capabilities())
+        return d
 
 
     def setup_connection(self, _conn):

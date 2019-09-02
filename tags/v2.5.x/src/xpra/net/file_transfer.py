@@ -179,7 +179,7 @@ class FileTransferHandler(FileTransferAttributes):
         self.receive_chunks_in_progress = {}
         for x in tuple(self.file_descriptors):
             try:
-                x.close()
+                os.open(x)
             except:
                 pass
         self.file_descriptors = set()

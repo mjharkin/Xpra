@@ -36,6 +36,7 @@ from xpra.gtk_common.gtk_util import (
     DEST_DEFAULT_MOTION, DEST_DEFAULT_HIGHLIGHT, ACTION_COPY,
     BUTTON_PRESS_MASK, BUTTON_RELEASE_MASK, POINTER_MOTION_MASK,
     POINTER_MOTION_HINT_MASK, ENTER_NOTIFY_MASK, LEAVE_NOTIFY_MASK,
+    WINDOW_EVENT_MASK,
     )
 from xpra.gtk_common.keymap import KEY_TRANSLATIONS
 from xpra.client.client_window_base import ClientWindowBase
@@ -66,6 +67,7 @@ CAN_SET_WORKSPACE = False
 HAS_X11_BINDINGS = False
 USE_X11_BINDINGS = POSIX and envbool("XPRA_USE_X11_BINDINGS", is_X11())
 prop_get, prop_set = None, None
+NotifyInferior = None
 if USE_X11_BINDINGS:
     try:
         from xpra.gtk_common.error import xsync, verify_sync
@@ -229,7 +231,7 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
         #add platform hooks
         self.connect_after("realize", self.on_realize)
         self.connect('unrealize', self.on_unrealize)
-        self.add_events(self.WINDOW_EVENT_MASK)
+        self.add_events(WINDOW_EVENT_MASK)
         if DRAGNDROP:
             self.init_dragndrop()
         self.init_focus()
@@ -417,7 +419,7 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
     def do_xpra_focus_out_event(self, event):
         focuslog("do_xpra_focus_out_event(%s)", event)
         detail = getattr(event, "detail", 0)
-        if detail==NotifyInferior:
+        if NotifyInferior is not None and detail==NotifyInferior:
             log("dropped NotifyInferior focus event")
             return True
         self._focus_latest = False

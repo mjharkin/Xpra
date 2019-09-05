@@ -297,7 +297,7 @@ class XpraServer(gobject.GObject, X11ServerBase):
                 with xsync:
                     cleanup_all_event_receivers()
                     #all went well, we're done
-                    return
+                    break
             except Exception as e:
                 l("failed to remove event receivers: %s", e)
         if self._wm:

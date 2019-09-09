@@ -407,7 +407,7 @@ class ProxyInstanceProcess(Process):
 
     def do_process_control_packet(self, proto, packet):
         log("process_control_packet(%s, %s)", proto, packet)
-        packet_type = packet[0]
+        packet_type = bytestostr(packet[0])
         if packet_type==Protocol.CONNECTION_LOST:
             log.info("Connection lost")
             if proto in self.potential_protocols:

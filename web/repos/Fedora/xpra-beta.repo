@@ -1,5 +1,5 @@
-[winswitch-beta]
-name=Winswitch Beta $releasever - $basearch
+[xpra-beta]
+name=Xpra Beta $releasever - $basearch
 enabled=1
 metadata_expire=1d
 gpgcheck=1

@@ -173,7 +173,7 @@ def get_version_from_url(url):
             from urllib.request import urlopen
         else:
             from urllib2 import urlopen
-    except ImportError:
+    except (ImportError, TypeError):
         log("get_version_from_url(%s) urllib2 not found: %s", url, e)
         return None
     try:

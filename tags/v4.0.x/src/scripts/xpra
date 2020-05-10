@@ -1,0 +1,10 @@
+#!/usr/bin/python3
+
+import sys
+
+from xpra.platform import init, set_default_name
+set_default_name("Xpra")
+init()
+
+from xpra.scripts.main import main
+sys.exit(main(sys.argv[0], sys.argv))

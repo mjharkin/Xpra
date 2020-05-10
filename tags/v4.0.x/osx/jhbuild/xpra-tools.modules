@@ -1,0 +1,186 @@
+<?xml version="1.0"?>
+<!DOCTYPE moduleset SYSTEM "moduleset.dtd">
+<?xml-stylesheet type="text/xsl" href="moduleset.xsl"?>
+<moduleset>
+
+	<repository name="openssl" type="tarball" href="https://www.openssl.org/source/"/>
+	<repository type="tarball" name="cpan.org" href="http://www.cpan.org/"/>
+	<repository type="tarball" name="sourceforge.net" href="http://downloads.sourceforge.net"/>
+	<repository type="tarball" name="ftp.gnu.org" href="ftp://ftp.gnu.org"/>
+	<repository type="tarball" name="ftp.pcre.org" href="https://ftp.pcre.org"/>
+	<repository type="tarball" name="gmplib.org" href="http://gmplib.org/"/>
+	<repository type="tarball" name="www.mpfr.org" href="http://www.mpfr.org"/>
+	<repository type="tarball" name="download.oracle.com" href="http://download.oracle.com"/>
+	<repository type="tarball" name="xpra.org" href="https://xpra.org"/>
+	<repository type="tarball" name="storage.googleapis.com" href="http://storage.googleapis.com/"/>
+	<repository type="tarball" name="ftp.gnome.org" default="yes" href="ftp://ftp.gnome.org/pub/gnome/sources/"/>
+	<repository type="tarball" name="oberhumer.com" default="yes" href="http://www.oberhumer.com/"/>
+	<repository type="tarball" name="github.com" default="yes" href="https://codeload.github.com/"/>
+	<repository type="tarball" name="archive.mozilla.org" href="https://archive.mozilla.org"/>
+	<repository type="tarball" name="curl.haxx.se" href="https://curl.haxx.se"/>
+	<repository type="tarball" name="pypi.python.org" href="https://pypi.python.org"/>
+
+	<repository type="tarball" name="apache.org" href="http://www.apache.org/"/>
+	<repository type="tarball" name="sqlite.org" href="http://sqlite.org"/>
+
+
+	<!-- of the many arguments such as prefix and libdir that jhbuild might pass
+		to configure, openssl only understands prefix, and only with =. -->
+	<autotools id="openssl" autogen-sh="./config" autogenargs="shared"
+		autogen-template="%(srcdir)s/%(autogen-sh)s --prefix=%(prefix)s --openssldir=%(prefix)s/etc/ssl"
+		makeinstallargs="install_sw" supports-non-srcdir-builds="no">
+	    <branch module="openssl-1.1.1g.tar.gz" version="1.1.1g"
+			hash="sha256:ddb04774f1e32f0c49751e21b67216ac87852ceb056b75209af2443400636d46" repo="openssl"/>
+	</autotools>
+
+
+	<autotools id="perl"
+		autogen-sh="Configure"
+		autogen-template="%(srcdir)s/%(autogen-sh)s -Dprefix=%(prefix)s %(autogenargs)s"
+		autogenargs="-des">
+		<branch module="/src/5.0/perl-5.24.0.tar.gz"
+			version="5.24.0"
+			hash="md5:c5bf7f3285439a2d3b6a488e14503701"
+			repo="cpan.org"/>
+	</autotools>
+
+	<autotools id="lz4" skip-autogen="true" supports-non-srcdir-builds="no">
+		<branch module="/lz4/lz4/tar.gz/v1.9.2"
+			version="1.9.2"
+			checkoutdir="lz4-1.9.2"
+			hash="sha256:658ba6191fa44c92280d4aa2c271b0f4fbc0e34d249578dd05e50e76d0e5efcc"
+			repo="github.com"/>
+	</autotools>
+
+	<autotools id="sshpass" autogen-sh="configure">
+		<branch module="/project/sshpass/sshpass/1.06/sshpass-1.06.tar.gz"
+			version="1.06"
+			hash="sha256:c6324fcee608b99a58f9870157dfa754837f8c48be3df0f5e2f3accf145dee60"
+			repo="sourceforge.net"/>
+	</autotools>
+
+	<autotools id="cpio" autogen-sh="configure">
+		<branch module="/gnu/cpio/cpio-2.12.tar.bz2"
+			version="2.12"
+			hash="md5:93eea9f07c0058c097891c73e4955456"
+			repo="ftp.gnu.org"/>
+	</autotools>
+
+	<autotools id="pcre" autogenargs="--enable-utf8" autogen-sh="configure">
+		<branch module="/pub/pcre/pcre-8.44.tar.gz"
+			version="8.44"
+			hash="sha256:aecafd4af3bd0f3935721af77b889d9024b2e01d96b58471bd91a3063fb47728"
+			repo="ftp.pcre.org"/>
+	</autotools>
+
+	<autotools id="grep" autogen-sh="configure">
+		<branch module="/gnu/grep/grep-3.4.tar.xz"
+			version="3.4"
+			hash="sha256:58e6751c41a7c25bfc6e9363a41786cff3ba5709cf11d5ad903cf7cce31cc3fb"
+			repo="ftp.gnu.org"/>
+		<dependencies>
+			<dep package="pcre"/>
+		</dependencies>
+	</autotools>
+
+	<autotools id="bomutils" autogen-sh="" skip-autogen="true" supports-non-srcdir-builds="no">
+		<branch module="/hogliux/bomutils/archive/debian/0.2-1.tar.gz"
+			version="0.2-1"
+			checkoutdir="bomutils-debian-0.2-1"
+			repo="github.com">
+			<patch file="https://xpra.org/svn/Xpra/trunk/osx/jhbuild/patches/bomutils-jhbuild-changeprefix.patch" strip="0" />
+		</branch>
+	</autotools>
+
+	<autotools id="xar" autogen-sh="configure">
+		<branch module="/downloads/mackyle/xar/xar-1.6.1.tar.gz"
+			version="1.6.1"
+			hash="sha256:5e7d50dab73f5cb1713b49fa67c455c2a0dd2b0a7770cbc81b675e21f6210e25"
+			repo="github.com"/>
+	</autotools>
+
+	<cmake id="brotli" autogen-sh="configure">
+		<branch module="/google/brotli/archive/v1.0.7.tar.gz"
+			version="1.0.7" checkoutdir="brotli-1.0.7"
+			hash="sha256:4c61bfb0faca87219ea587326c467b95acb25555b53d1a421ffa3c8a9296ee2c"
+			repo="github.com"/>
+	</cmake>
+
+	<autotools id="gmplib" autogen-sh="configure">
+		<branch module="/download/gmp/gmp-6.2.0.tar.xz"
+			version="6.2.0"
+			hash="sha256:258e6cd51b3fbdfc185c716d55f82c08aff57df0c6fbd143cf6ed561267a1526"
+			checkoutdir="gmp-6.2.0"
+			repo="gmplib.org"/>
+	</autotools>
+
+	<autotools id="mpfr" autogen-sh="configure">
+		<branch module="/mpfr/mpfr-4.0.2.tar.xz"
+			hash="sha256:1d3be708604eae0e42d578ba93b390c2a145f17743a744d8f3f8c2ad5855a38a"
+			version="4.0.2"
+			repo="www.mpfr.org">
+		</branch>
+		<dependencies>
+			<dep package="gmplib"/>
+		</dependencies>
+		<after>
+			<dep package="gmplib"/>
+		</after>
+	</autotools>
+
+	<!--HACK: skip-install but do make install during autogen phase instead this allows us to bypass the error with DESTDIR since it doesn't actually install anywhere -->
+	<autotools id="gtk-mac-bundler"
+		skip-install="True" supports-non-srcdir-builds="no"
+		autogen-template="make install">
+		<branch module="/pub/gnome/sources/gtk-mac-bundler/0.7/gtk-mac-bundler-0.7.4.tar.xz"
+			version="0.7.4"
+			repo="ftp.gnome.org">
+			<patch file="https://xpra.org/svn/Xpra/trunk/osx/jhbuild/patches/gtk-mac-bundler-pangofix.patch" strip="1"/>
+		</branch>
+		<dependencies>
+			<dep package="python"/>
+		</dependencies>
+	</autotools>
+
+	<autotools id="lzo" autogen-sh="configure">
+		<branch module="/opensource/lzo/download/lzo-2.10.tar.gz"
+			version="2.10"
+			hash="sha256:c0f892943208266f9b6543b3ae308fab6284c5c90e627931446fb49b4221a072"
+			checkoutdir="lzo-2.10"
+			repo="oberhumer.com"/>
+	</autotools>
+
+	<autotools id="curl" autogen-sh="configure">
+		<branch module="/download/curl-7.70.0.tar.xz"
+			version="7.70.0"
+			hash="sha256:032f43f2674008c761af19bf536374128c16241fb234699a55f9fb603fcfbae7"
+			repo="curl.haxx.se"/>
+		<dependencies>
+			<dep package="openssl"/>
+		</dependencies>
+	</autotools>
+
+
+	<autotools id="sqlite" autogenargs="" autogen-sh="configure">
+		<branch module="/2017/sqlite-autoconf-3210000.tar.gz"
+			hash="sha256:d7dd516775005ad87a57f428b6f86afd206cb341722927f104d3f0cf65fbbbe3"
+			version="3210000"
+			repo="sqlite.org"/>
+	</autotools>
+
+	<metamodule id="meta-osx-xpra-pkgtools">
+		<dependencies>
+			<!-- dep package="xar"/ doesn't work with openssl 1.1-->
+			<dep package="cpio"/>
+			<dep package="bomutils"/>
+		</dependencies>
+	</metamodule>
+
+	<metamodule id="meta-osx-xpra-tools-deps">
+		<dependencies>
+			<dep package="sshpass"/>
+			<dep package="gtk-mac-bundler"/>
+		</dependencies>
+	</metamodule>
+
+</moduleset>

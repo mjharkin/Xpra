@@ -1,0 +1,6 @@
+#!/usr/bin/python3
+
+import sys
+
+from xpra.gtk_common.auth_dialog import main
+sys.exit(main())

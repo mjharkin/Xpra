@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Xpra Attach
+Comment=Connect to an Xpra session
+Exec=xpra attach %u
+Icon=xpra
+Terminal=false
+NoDisplay=true
+Type=Application
+StartupNotify=false
+Categories=Network;RemoteAccess;
+MimeType=x-scheme-handler/xpra;x-scheme-handler/xpras;x-scheme-handler/xpra+tls;x-scheme-handler/xpra+ssl;x-scheme-handler/xpra+tcp;x-scheme-handler/xpra+ssh;x-scheme-handler/xpra+ws;x-scheme-handler/xpra+wss;

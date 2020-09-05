@@ -1331,13 +1331,14 @@ def connect_to(display_desc, opts=None, debug_cb=None, ssh_fail_cb=None):
     if dtype == "unix-domain":
         if not hasattr(socket, "AF_UNIX"):  # pragma: no cover
             raise InitExit(EXIT_UNSUPPORTED, "unix domain sockets are not available on this operating system")
-        sockpath = get_sockpath(display_desc, sockpathfail_cb)
-        display_desc["socket_path"] = sockpath
-        sock = socket.socket(socket.AF_UNIX)
-        sock.settimeout(SOCKET_TIMEOUT)
+        
         def sockpathfail_cb(msg):
             raise InitException(msg)
         try:
+            sockpath = get_sockpath(display_desc, sockpathfail_cb)
+            display_desc["socket_path"] = sockpath
+            sock = socket.socket(socket.AF_UNIX)
+            sock.settimeout(SOCKET_TIMEOUT)
             sock.connect(sockpath)
         except Exception as e:
             get_util_logger().debug("failed to connect using %s%s", sock.connect, sockpath, exc_info=True)

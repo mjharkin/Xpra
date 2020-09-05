@@ -60,14 +60,14 @@ def install_html5(install_dir="www", minifier="uglifyjs", gzip=True, brotli=True
         from xpra.src_info import REVISION, LOCAL_MODIFICATIONS
     except ImportError:
         try:
-            from add_build_info import get_svn_props
-            svn_props = get_svn_props(False)
-            REVISION = int(svn_props.get("REVISION", 0))
+            from add_build_info import get_git_props
+            git_props = get_git_props(False)
+            REVISION = git_props.get("REVISION", 0)
             LOCAL_MODIFICATIONS = int(svn_props.get("LOCAL_MODIFICATIONS", 0))
         except (ImportError, ValueError):
             print("WARNING: source information is missing")
             print(" this build should not be used")
-            REVISION  = 0
+            REVISION  = '0'
             LOCAL_MODIFICATIONS = 0
     #those are used to replace the file we ship in source form
     #with one that is maintained by the distribution:
@@ -119,7 +119,7 @@ def install_html5(install_dir="www", minifier="uglifyjs", gzip=True, brotli=True
                     print("adding revision info to %s" % (bname,))
                     if REVISION:
                         data = data.replace('REVISION : "0",',
-                                            'REVISION : "%i",' % REVISION)
+                                            'REVISION : "%s",' % REVISION)
                     if LOCAL_MODIFICATIONS:
                         data = data.replace('LOCAL_MODIFICATIONS : "0",',
                                             'LOCAL_MODIFICATIONS : "%i",' % LOCAL_MODIFICATIONS)

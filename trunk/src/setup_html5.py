@@ -122,7 +122,7 @@ def install_html5(install_dir="www", minifier="uglifyjs", gzip=True, brotli=True
                                             'REVISION : "%s",' % REVISION)
                     if LOCAL_MODIFICATIONS:
                         data = data.replace('LOCAL_MODIFICATIONS : "0",',
-                                            'LOCAL_MODIFICATIONS : "%i",' % LOCAL_MODIFICATIONS)
+                                            'LOCAL_MODIFICATIONS : "%s",' % LOCAL_MODIFICATIONS)
                 for regexp, replacewith in {
                     r"^\s*for\s*\(\s*let\s+"     : "for(var ",
                     r"^\s*let\s+"                : "var ",

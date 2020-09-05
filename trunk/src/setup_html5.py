@@ -63,7 +63,7 @@ def install_html5(install_dir="www", minifier="uglifyjs", gzip=True, brotli=True
             from add_build_info import get_git_props
             git_props = get_git_props(False)
             REVISION = git_props.get("REVISION", 0)
-            LOCAL_MODIFICATIONS = int(svn_props.get("LOCAL_MODIFICATIONS", 0))
+            LOCAL_MODIFICATIONS = int(git_props.get("LOCAL_MODIFICATIONS", 0))
         except (ImportError, ValueError):
             print("WARNING: source information is missing")
             print(" this build should not be used")

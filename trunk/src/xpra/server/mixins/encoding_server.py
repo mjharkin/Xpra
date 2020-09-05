@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 #pylint: disable-msg=E1101
 
 from xpra.scripts.config import parse_bool_or_int
-from xpra.codecs.codec_constants import PREFERED_ENCODING_ORDER, PROBLEMATIC_ENCODINGS
+from xpra.codecs.codec_constants import PREFERRED_ENCODING_ORDER, PROBLEMATIC_ENCODINGS
 from xpra.codecs.loader import get_codec, has_codec, codec_versions, load_codec
 from xpra.codecs.video_helper import getVideoHelper
 from xpra.server.mixins.stub_server_mixin import StubServerMixin
@@ -45,6 +45,9 @@ class EncodingServer(StubServerMixin):
         getVideoHelper().set_modules(video_encoders=opts.video_encoders, csc_modules=opts.csc_modules)
 
     def setup(self):
+        #always load pillow early,
+        #so we have png and jpeg support before calling threaded_setup
+        load_codec("enc_pillow")
         self.init_encodings()
 
     def threaded_setup(self):
@@ -65,23 +68,12 @@ class EncodingServer(StubServerMixin):
         getVideoHelper().cleanup()
 
 
-    def parse_hello(self, _ss, _caps, _send_ui):
-        self.wait_for_threaded_init()
-
-
     def get_server_features(self, _source=None):
         return {
-            "auto-video-encoding"   : True,
-            "change-quality"        : True,
-            "change-min-quality"    : True,
-            "change-speed"          : True,
-            "change-min-speed"      : True,
-            "encoding" : {
-                "generic" : True,
-                },
+            "auto-video-encoding"   : True,     #from v4.0, clients assume this is available
             }
 
-    def get_info(self, _proto):
+    def get_info(self, _proto) -> dict:
         info = {
             "encodings" : self.get_encoding_info(),
             "video"     : getVideoHelper().get_info(),
@@ -90,7 +82,7 @@ class EncodingServer(StubServerMixin):
             info.setdefault("encoding", {}).setdefault(k, {})["version"] = v
         return info
 
-    def get_encoding_info(self):
+    def get_encoding_info(self) -> dict:
         return  {
              ""                     : self.encodings,
              "core"                 : self.core_encodings,
@@ -102,8 +94,9 @@ class EncodingServer(StubServerMixin):
                                                     "h264", "vp8", "vp9",
                                                     "rgb24", "rgb32",
                                                     "png", "png/P", "png/L", "webp",
+                                                    "scroll",
                                                     ))),
-             "with_quality"         : [x for x in self.core_encodings if x in ("jpeg", "webp", "h264", "vp8", "vp9")],
+             "with_quality"         : [x for x in self.core_encodings if x in ("jpeg", "webp", "h264", "vp8", "vp9", "scroll")],
              "with_lossless_mode"   : self.lossless_mode_encodings,
              }
 
@@ -114,15 +107,20 @@ class EncodingServer(StubServerMixin):
             log("add_encodings(%s)", encodings)
             for ce in encodings:
                 e = {"rgb32" : "rgb", "rgb24" : "rgb"}.get(ce, ce)
-                if self.allowed_encodings is not None and e not in self.allowed_encodings:
-                    #not in whitelist (if it exists)
-                    continue
+                if self.allowed_encodings is not None:
+                    if e not in self.allowed_encodings and ce not in self.allowed_encodings:
+                        #not in whitelist (if it exists)
+                        continue
                 if e not in encs:
                     encs.append(e)
                 if ce not in core_encs:
                     core_encs.append(ce)
 
-        add_encodings(["rgb24", "rgb32"])
+        add_encodings(["rgb24", "rgb32", "scroll"])
+        if "scroll" in self.allowed_encodings and "scroll" not in self.lossless_mode_encodings:
+            #scroll is lossless, but it also uses other picture codecs
+            #and those allow changes in quality
+            self.lossless_mode_encodings.append("scroll")
 
         #video encoders (empty when first called - see threaded_init)
         ve = getVideoHelper().get_encodings()
@@ -130,8 +128,10 @@ class EncodingServer(StubServerMixin):
         add_encodings(ve)  #ie: ["vp8", "h264"]
         #Pithon Imaging Libary:
         enc_pillow = get_codec("enc_pillow")
+        log("enc_pillow=%s", enc_pillow)
         if enc_pillow:
             pil_encs = enc_pillow.get_encodings()
+            log("pillow encodings: %s", pil_encs)
             add_encodings(x for x in pil_encs if x!="webp")
             #Note: webp will only be enabled if we have a Python-PIL fallback
             #(either "webp" or "png")
@@ -149,13 +149,14 @@ class EncodingServer(StubServerMixin):
                             self.lossless_mode_encodings.append(e)
                             break
         #now update the variables:
+        encs.append("grayscale")
         self.encodings = encs
         self.core_encodings = core_encs
         self.lossless_encodings = [x for x in self.core_encodings
                                    if (x.startswith("png") or x.startswith("rgb") or x=="webp")]
         log("allowed encodings=%s, encodings=%s, core encodings=%s, lossless encodings=%s",
             self.allowed_encodings, encs, core_encs, self.lossless_encodings)
-        pref = [x for x in PREFERED_ENCODING_ORDER if x in self.encodings]
+        pref = [x for x in PREFERRED_ENCODING_ORDER if x in self.encodings]
         if pref:
             self.default_encoding = pref[0]
         else:
@@ -170,7 +171,7 @@ class EncodingServer(StubServerMixin):
 
 
     def _process_encoding(self, proto, packet):
-        encoding = packet[1]
+        encoding = packet[1].decode("latin1")
         ss = self.get_server_source(proto)
         if ss is None:
             return

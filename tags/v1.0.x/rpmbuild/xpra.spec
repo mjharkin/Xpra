@@ -3,7 +3,7 @@
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-%define version 1.0.14
+%define version 1.0.15
 %if ! %{defined build_no}
 %define build_no 0
 %endif
@@ -151,7 +151,7 @@ Requires: x264-xpra
 Requires: ffmpeg-xpra
 Requires: python2-pynvml
 Requires: %{numpy}
-Requires: xpra-common = %{version}-%{build_no}%{dist}
+Requires: xpra-common >= %{version}-%{build_no}%{dist}
 %if 0%{?el6}%{?el7}
 #sshpass is not available!
 %else
@@ -229,7 +229,7 @@ getent group xpra > /dev/null || groupadd -r xpra
 %prep
 rm -rf $RPM_BUILD_DIR/xpra-%{version}-python2 $RPM_BUILD_DIR/xpra-%{version}
 bzcat $RPM_SOURCE_DIR/xpra-%{version}.tar.bz2 | tar -xf -
-pushd $RPM_BUILD_DIR/xpra-%{version}
+cd $RPM_BUILD_DIR/xpra-%{version}
 %if 0%{?el6}
 %patch0 -p1
 %endif
@@ -246,9 +246,6 @@ pushd $RPM_BUILD_DIR/xpra-%{version}
 %patch3 -p1
 %endif
 
-popd
-mv $RPM_BUILD_DIR/xpra-%{version}
-
 
 %debug_package
 
@@ -259,8 +256,8 @@ rm -rf build install
 # set pkg_config_path for xpra video libs
 CFLAGS="%{CFLAGS}" LDFLAGS="%{?LDFLAGS}" %{__python2} setup.py build \
 	%{build_args} \
--pkg-config-path=%{_libdir}/xpra/pkgconfig \
--rpath=%{_libdir}/xpra
+	--pkg-config-path=%{_libdir}/xpra/pkgconfig \
+	--rpath=%{_libdir}/xpra
 %if 0%{?with_selinux}
 pushd selinux/cups_xpra
 for selinuxvariant in %{selinux_variants}
@@ -461,7 +458,66 @@ fi
 
 
 %changelog
-* Tue Jul 30 2019 Antoine Martin <antoine@devloop.org.uk> 1.0.14-2
+* Fri Jul 24 2020 Antoine Martin <antoine@devloop.org.uk> 1.0.15-1
+- fix avcodec2 race condition crash
+- fix csc_swscale converter getting recycled every time
+- fix memory contents of the swscale pixel format object
+- fix tray geometry errors
+- fix window initialization errors causing server startup failures
+- fix race condition in window statistics
+- fix crashes on X11 displays lacking RandR support
+- fix clients not exposing webcam capability flag
+- fix DPI value from the command line with desktop-scaling
+- fix minor RPM packaging issues, add CentOS 8
+- fix null bytes in X11 error text properly
+- fix GDK window scaling setting wrongly propagated to the server
+- fix GDK scaling causing window painting issues (force off)
+- fix server hangs and unpainted windows due to invalid dimensions
+- fix unresponsive appindicator system tray
+- fix NVENC h264 stream compatibility with HTML5 client
+- fix scoring of NVENC codec (should be used ahead of sofware encoders)
+- fix NVENC error when pynvml is not installed
+- fix NVENC temporary failure retry code path
+- fix pacKaging with newer versions of py2app (MacOS)
+- fix build errors caused by pygtk bindings build warnings
+- fix race condition error during window cleanup
+- fix CUDA reset_state function
+- fix remote logging failures with some message formats
+- fix slow / lost video screen updates
+- fix ghost dialog windows on MacOS and MS Windows
+- fix fullscreen / maximized window on macos
+- fix transient popup window workaround not firing
+- fix very slow startup on Debian due to missing libfakeXinerama
+- fix control commands argument error handling
+- fix systemd-run errors: verify it does work before trying to use it
+- fix HMAC hashes exposed, keep only valid options
+- fix some empty keyboard layout group strings parsed as non-empty
+- fix errors when re-initializing windows (ie: toggling OpenGL on or off)
+- fix deiconification error when there are system trays forwarded
+- fix malformed XSettings due to invalid color data format
+- fix handling of dpi command line switch
+- fix geometry debug logging error
+- fix session info errors during client exit
+- fix webp image dimensions for transparency encoding
+- fix quality and speed changes from the system tray (compatibility issue with newer clients)
+- try harder not to use video for tiny areas
+- fix suspend / resume errors with tray windows
+- fix compatibility with CUDA 11.0
+- log CUDA device actually used - mutiple GPU setups
+- support CUDA 10.2
+- skip display number warnings when upgrading
+- more correct code for locating the 'Downloads' folder on MS Windows
+- disable GDK window scaling
+- blacklist VirtualBox's SVGA3D OpenGL driver (fixes black windows)
+- ignore OpenGL clear errors with some buggy drivers
+- disable OpenGL on more ancient Intel chipsets
+- make it possible to disable colourspace synchronization
+- support parallel installations of a newer python3 package
+- disable CSD on MS Windows (GTK3 CSD bug workaround)
+- don't try to read /proc if not on Posix
+- convert invalid map events to warnings (no scary crash reports)
+
+* Sun Oct 06 2019 Antoine Martin <antoine@devloop.org.uk> 1.0.14-1
 - fix html5 clipboard wrongly disabled
 - fix html5 handling of websocket frames with more than one packet
 - fix desktop-scaling normalization calculations
@@ -486,7 +542,13 @@ fi
 - fix mmap leak which can cause the client to stop painting
 - fix HTML5 client authentication issue when going through a proxy server
 - fix errors if md5 is not available: use sha1
+- fix win32 system tray not responding to clicks after re-initialization
+- fix file descriptors not closed on exit
+- fix proxy instances emulation of glib repeating calls
+- fix unlikely (impossible?) error with virtual webcams
+- fix man page headers alignment
 - silence annoying atk warnings
+- silence ffmpeg build warnings with GCC 9
 - avoid running invalid lpinfo commands
 - support newer nvidia encode shared libraries
 - prevent hash collisions in motion search
@@ -605,7 +667,7 @@ fi
 - remove outdated option from the man page, fix missing paragraphs
 - disable VP9 decoding via ffmpeg on MS Windows (crashes with latest libraries)
 
-* Mon Feb 12 2018 Antoine Martin <antoine@devloop.org.uk> 1.0.14-1
+* Mon Feb 12 2018 Antoine Martin <antoine@devloop.org.uk> 1.0.15-1
 - fix crash with invalid tray docking requests
 - fix client authentication failures with multiple challenges
 - fix errors with some unauthenticated connections

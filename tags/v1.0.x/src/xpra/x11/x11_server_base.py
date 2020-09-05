@@ -51,6 +51,7 @@ from xpra.x11.server_keyboard_config import KeyboardConfig
 
 MAX_CONCURRENT_CONNECTIONS = envint("XPRA_MAX_CONCURRENT_CONNECTIONS", 20)
 ALWAYS_NOTIFY_MOTION = envbool("XPRA_ALWAYS_NOTIFY_MOTION", False)
+SYNC_ICC = envbool("XPRA_SYNC_ICC", True)
 
 
 def window_name(window):
@@ -288,13 +289,14 @@ class X11ServerBase(GTKServerBase):
                 "XTest"                 : X11Keyboard.hasXTest(),
                 })
         #randr:
-        try:
-            with xsync:
-                sizes = RandR.get_screen_sizes()
-                if self.randr and len(sizes)>=0:
-                    sinfo["randr"] = {"options" : list(reversed(sorted(sizes)))}
-        except:
-            pass
+        if self.randr:
+            try:
+                with xsync:
+                    sizes = RandR.get_screen_sizes()
+                    if self.randr and len(sizes)>=0:
+                        sinfo["randr"] = {"options" : list(reversed(sorted(sizes)))}
+            except:
+                pass
         return info
 
 
@@ -390,12 +392,13 @@ class X11ServerBase(GTKServerBase):
     def get_max_screen_size(self):
         from xpra.x11.gtk2.models import MAX_WINDOW_SIZE
         max_w, max_h = self.root_window.get_size()
-        with xsync:
-            sizes = RandR.get_screen_sizes()
-        if self.randr and len(sizes)>=1:
-            for w,h in sizes:
-                max_w = max(max_w, w)
-                max_h = max(max_h, h)
+        if self.randr:
+            with xsync:
+                sizes = RandR.get_screen_sizes()
+            if len(sizes)>=1:
+                for w,h in sizes:
+                    max_w = max(max_w, w)
+                    max_h = max(max_h, h)
         if max_w>MAX_WINDOW_SIZE or max_h>MAX_WINDOW_SIZE:
             screenlog.warn("maximum size is very large: %sx%s, you may encounter window sizing problems", max_w, max_h)
         screenlog("get_max_screen_size()=%s", (max_w, max_h))
@@ -565,6 +568,8 @@ class X11ServerBase(GTKServerBase):
 
 
     def set_icc_profile(self):
+        if not SYNC_ICC:
+            return
         ui_clients = [s for s in self._server_sources.values() if s.ui_client]
         if len(ui_clients)!=1:
             screenlog("%i UI clients, not setting ICC profile")

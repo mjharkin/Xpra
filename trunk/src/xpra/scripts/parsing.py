@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # This file is part of Xpra.
 # Copyright (C) 2011 Serviware (Arthur Huillet, <ahuillet@serviware.com>)
-# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -15,7 +15,7 @@ from xpra.platform.features import LOCAL_SERVERS_SUPPORTED, SHADOW_SUPPORTED, CA
 from xpra.util import envbool, csv
 from xpra.os_util import getuid, WIN32, OSX, POSIX
 from xpra.scripts.config import (
-    OPTION_TYPES,
+    OPTION_TYPES, FALSE_OPTIONS,
     InitException, InitInfo, InitExit,
     fixup_debug_option, fixup_options,
     make_defaults_struct, parse_bool, print_number,
@@ -23,7 +23,7 @@ from xpra.scripts.config import (
     )
 
 
-def enabled_str(v, true_str="yes", false_str="no"):
+def enabled_str(v, true_str="yes", false_str="no") -> str:
     if v:
         return true_str
     return false_str
@@ -54,7 +54,7 @@ def info(msg):
     try:
         sys.stderr.write(msg+"\n")
         sys.stderr.flush()
-    except (IOError, OSError):
+    except OSError:
         if POSIX:
             import syslog
             syslog.syslog(syslog.LOG_INFO, msg)
@@ -67,7 +67,7 @@ def warn(msg):
     try:
         sys.stderr.write(msg+"\n")
         sys.stderr.flush()
-    except (IOError, OSError):
+    except OSError:
         if POSIX:
             import syslog
             syslog.syslog(syslog.LOG_WARNING, msg)
@@ -80,7 +80,7 @@ def error(msg):
     try:
         sys.stderr.write(msg+"\n")
         sys.stderr.flush()
-    except (IOError, OSError):
+    except OSError:
         if POSIX:
             import syslog
             syslog.syslog(syslog.LOG_ERR, msg)
@@ -158,7 +158,7 @@ def ignore_options(args, options):
                 args.remove(r)
 
 
-def parse_env(env):
+def parse_env(env) -> dict:
     d = {}
     for ev in env:
         try:
@@ -176,11 +176,7 @@ def parse_env(env):
 
 
 def parse_URL(url):
-    try:
-        #py2:
-        from urlparse import urlparse, parse_qs
-    except ImportError:
-        from urllib.parse import urlparse, parse_qs
+    from urllib.parse import urlparse, parse_qs
     up = urlparse(url)
     address = up.netloc
     qpos = url.find("?")
@@ -203,6 +199,53 @@ def parse_URL(url):
     return address, options
 
 
+def get_server_modes():
+    server_modes = []
+    if supports_server:
+        server_modes.append("start")
+        server_modes.append("start-desktop")
+        server_modes.append("upgrade")
+    if supports_shadow:
+        server_modes.append("shadow")
+    return server_modes
+
+
+def get_subcommands():
+    return tuple(x.split(" ")[0] for x in get_usage())
+
+
+def get_usage():
+    command_options = [""]
+    if supports_server:
+        command_options += ["start [DISPLAY]",
+                           "start-desktop [DISPLAY]",
+                           "upgrade [DISPLAY]",
+                           ]
+    if supports_shadow:
+        command_options.append("shadow [DISPLAY]")
+
+    command_options += [
+                        "attach [DISPLAY]",
+                        "detach [DISPLAY]",
+                        "info [DISPLAY]",
+                        "version [DISPLAY]",
+                        "stop [DISPLAY]",
+                        "exit [DISPLAY]",
+                        "screenshot filename [DISPLAY]",
+                        "control DISPLAY command [arg1] [arg2]..",
+                        "print DISPLAY filename",
+                        "shell [DISPLAY]",
+                        "showconfig",
+                        "list",
+                        "list-windows",
+                        "sessions",
+                        "launcher",
+                      ]
+    if supports_mdns:
+        command_options.append("list-mdns")
+        command_options.append("mdns-gui")
+    return command_options
+
 def parse_cmdline(cmdline):
     defaults = make_defaults_struct()
     return do_parse_cmdline(cmdline, defaults)
@@ -216,41 +259,12 @@ def do_parse_cmdline(cmdline, defaults):
     ##
     ## NOTE NOTE NOTE
     #################################################################
-    command_options = [
-                        "\t%prog attach [DISPLAY]\n",
-                        "\t%prog detach [DISPLAY]\n",
-                        "\t%prog screenshot filename [DISPLAY]\n",
-                        "\t%prog info [DISPLAY]\n",
-                        "\t%prog control DISPLAY command [arg1] [arg2]..\n",
-                        "\t%prog print DISPLAY filename\n",
-                        "\t%prog version [DISPLAY]\n"
-                        "\t%prog showconfig\n"
-                        "\t%prog list\n"
-                        "\t%prog sessions\n"
-                        "\t%prog launcher\n"
-                        "\t%prog stop [DISPLAY]\n"
-                        "\t%prog exit [DISPLAY]\n"
-                      ]
-    if supports_mdns:
-        command_options.append("\t%prog list-mdns\n")
-        command_options.append("\t%prog mdns-gui\n")
-    server_modes = []
-    if supports_server:
-        server_modes.append("start")
-        server_modes.append("start-desktop")
-        server_modes.append("upgrade")
-        command_options = ["\t%prog start [DISPLAY]\n",
-                           "\t%prog start-desktop [DISPLAY]\n",
-                           "\t%prog upgrade [DISPLAY]\n",
-                           ] + command_options
-    if supports_shadow:
-        server_modes.append("shadow")
-        command_options.append("\t%prog shadow [DISPLAY]\n")
-    if not supports_server:
-        command_options.append("(This xpra installation does not support starting local servers.)")
 
     version = "xpra v%s" % full_version_str()
-    parser = ModifiedOptionParser(version=version, usage="\n" + "".join(command_options))
+    usage_strs = ["\t%%prog %s\n" % x for x in get_usage()]
+    if not supports_server:
+        usage_strs = ["(this xpra installation does not support starting local servers)\n"]+usage_strs
+    parser = ModifiedOptionParser(version=version, usage="\n" + "".join(usage_strs))
     hidden_options = {
                       "display"         : defaults.display,
                       "wm-name"         : defaults.wm_name,
@@ -266,7 +280,7 @@ def do_parse_cmdline(cmdline, defaults):
             hidden_options[k.replace("-", "_")] = v
     group = optparse.OptionGroup(parser, "Server Options",
                 "These options are only relevant on the server when using the %s mode." %
-                " or ".join(["'%s'" % x for x in server_modes]))
+                " or ".join(["'%s'" % x for x in get_server_modes()]))
     parser.add_option_group(group)
     #we support remote start, so we need those even if we don't have server support:
     group.add_option("--start", action="append",
@@ -337,6 +351,14 @@ def do_parse_cmdline(cmdline, defaults):
                       dest="dbus_launch", metavar="CMD", default=defaults.dbus_launch,
                       help="Start the session within a dbus-launch context,"
                       +" leave empty to turn off. Default: %default.")
+    group.add_option("--source", action="append",
+                      dest="source", default=list(defaults.source or []),
+                      help="Script to source into the server environment. Default: %s." % csv(
+                          ("'%s'" % x) for x in (defaults.source or []) if not x.startswith("#")))
+    group.add_option("--source-start", action="append",
+                      dest="source_start", default=list(defaults.source_start or []),
+                      help="Script to source into the environment used for starting commands. Default: %s." % csv(
+                          ("'%s'" % x) for x in (defaults.source_start or []) if not x.startswith("#")))
     group.add_option("--start-env", action="append",
                       dest="start_env", default=list(defaults.start_env or []),
                       help="Define environment variables used with 'start-child' and 'start',"
@@ -432,6 +454,9 @@ def do_parse_cmdline(cmdline, defaults):
     group.add_option("--printing", action="store", metavar="yes|no|ask",
                       dest="printing", default=defaults.printing,
                       help="Support printing. Default: %s." % enabled_str(defaults.printing))
+    group.add_option("--file-size-limit", action="store", metavar="SIZE",
+                      dest="file_size_limit", default=defaults.file_size_limit,
+                      help="Maximum size of file transfers. Default: %s." % defaults.file_size_limit)
     if supports_server:
         group.add_option("--lpadmin", action="store",
                           dest="lpadmin", default=defaults.lpadmin,
@@ -450,7 +475,6 @@ def do_parse_cmdline(cmdline, defaults):
     hidden_options["pdf-printer"] = defaults.pdf_printer
     hidden_options["postscript-printer"] = defaults.postscript_printer
     hidden_options["add-printer-options"] = defaults.add_printer_options
-    hidden_options["file-size-limit"] = defaults.file_size_limit
 
     legacy_bool_parse("exit-with-client")
     if (supports_server or supports_shadow):
@@ -471,7 +495,7 @@ def do_parse_cmdline(cmdline, defaults):
     legacy_bool_parse("fake-xinerama")
     legacy_bool_parse("use-display")
     if supports_server:
-        group.add_option("--use-display", action="store", metavar="yes|no",
+        group.add_option("--use-display", action="store", metavar="yes|no|auto",
                           dest="use_display", default=defaults.use_display,
                           help="Use an existing display rather than starting one with the xvfb command."
                           +" Default: %s" % enabled_str(defaults.use_display))
@@ -487,7 +511,8 @@ def do_parse_cmdline(cmdline, defaults):
         group.add_option("--fake-xinerama", action="store", metavar="path|auto|no",
                           dest="fake_xinerama",
                           default=defaults.fake_xinerama,
-                          help="Setup fake xinerama support for the session. You can specify the path to the libfakeXinerama.so library or a boolean."
+                          help="Setup fake xinerama support for the session. "+
+                          "You can specify the path to the libfakeXinerama.so library or a boolean."
                           +" Default: %s." % enabled_str(defaults.fake_xinerama))
     else:
         ignore({
@@ -497,7 +522,7 @@ def do_parse_cmdline(cmdline, defaults):
             "fake-xinerama" : defaults.fake_xinerama,
             })
     group.add_option("--resize-display", action="store",
-                      dest="resize_display", default=defaults.resize_display, metavar="yes|no",
+                      dest="resize_display", default=defaults.resize_display, metavar="yes|no|widthxheight",
                       help="Whether the server display should be resized to match the client resolution."
                       +" Default: %s." % enabled_str(defaults.resize_display))
     defaults_bind = defaults.bind
@@ -658,7 +683,8 @@ def do_parse_cmdline(cmdline, defaults):
     legacy_bool_parse("mousewheel")
     group.add_option("--mousewheel", action="store",
                       dest="mousewheel", default=defaults.mousewheel,
-                      help="Mouse wheel forwarding, can be used to disable the device or invert some axes."
+                      help="Mouse wheel forwarding, can be used to disable the device ('no') or invert some axes "
+                      "('invert-all', 'invert-x', invert-y', 'invert-z')."
                       +" Default: %s." % defaults.webcam)
     from xpra.platform.features import INPUT_DEVICES
     if len(INPUT_DEVICES)>1:
@@ -694,7 +720,7 @@ def do_parse_cmdline(cmdline, defaults):
                       help="Prevent sessions from being taken over by new clients. "
                       +" Default: %s." % enabled_or_auto(defaults.lock))
     legacy_bool_parse("remote-logging")
-    group.add_option("--remote-logging", action="store", metavar="yes|no|both",
+    group.add_option("--remote-logging", action="store", metavar="no|send|receive|both",
                       dest="remote_logging", default=defaults.remote_logging,
                       help="Forward all the client's log output to the server. "
                       +" Default: %s." % enabled_str(defaults.remote_logging))
@@ -823,6 +849,14 @@ def do_parse_cmdline(cmdline, defaults):
     group.add_option("--opengl", action="store", metavar="(yes|no|auto)[:backends]",
                       dest="opengl", default=defaults.opengl,
                       help="Use OpenGL accelerated rendering. Default: %s." % defaults.opengl)
+    legacy_bool_parse("splash")
+    group.add_option("--splash", action="store", metavar="yes|no|auto",
+                      dest="splash", default=defaults.splash,
+                      help="Show a splash screen whilst loading the client. Default: %s." % enabled_or_auto(defaults.splash))
+    legacy_bool_parse("headerbar")
+    group.add_option("--headerbar", action="store", metavar="yes|no",
+                      dest="headerbar", default=defaults.headerbar,
+                      help="Add a headerbar with menu to decorated windows. Default: %s." % defaults.headerbar)
     legacy_bool_parse("windows")
     group.add_option("--windows", action="store", metavar="yes|no",
                       dest="windows", default=defaults.windows,
@@ -1039,8 +1073,12 @@ def do_parse_cmdline(cmdline, defaults):
                       help="How often to synchronize the virtual framebuffer used for X11 seamless servers "
                       +"(0 to disable)."
                       +" Default: %s." % defaults.sync_xvfb)
-    group.add_option("--socket-dirs", action="append",
-                      dest="socket_dirs", default=[],
+    group.add_option("--client-socket-dirs", action="store",
+                      dest="client_socket_dirs", default=defaults.client_socket_dirs,
+                      help="Directories where the clients create their control socket."
+                      +" Default: %s." % os.path.pathsep.join("'%s'" % x for x in defaults.client_socket_dirs))
+    group.add_option("--socket-dirs", action="store",
+                      dest="socket_dirs", default=defaults.socket_dirs,
                       help="Directories to look for the socket files in."
                       +" Default: %s." % os.path.pathsep.join("'%s'" % x for x in defaults.socket_dirs))
     default_socket_dir_str = defaults.socket_dir or "$XPRA_SOCKET_DIR or the first valid directory in socket-dirs"
@@ -1203,10 +1241,10 @@ def do_parse_cmdline(cmdline, defaults):
         from xpra.sound.gstreamer_util import NAME_TO_INFO_PLUGIN
         try:
             from xpra.sound.wrapper import query_sound
-            source_plugins = query_sound().strlistget("sources", ())
+            source_plugins = query_sound().strtupleget("sources", ())
             source_default = query_sound().strget("source.default", "")
         except Exception as e:
-            raise InitInfo(e)
+            raise InitInfo(e) from None
         if source_plugins:
             raise InitInfo("The following sound source plugins may be used (default: %s):\n" % source_default+
                            "\n".join([" * "+p.ljust(16)+NAME_TO_INFO_PLUGIN.get(p, "") for p in source_plugins]))
@@ -1251,14 +1289,22 @@ def do_parse_cmdline(cmdline, defaults):
                 args[1] = address
                 break
 
-    #special case for things stored as lists, but command line option is a CSV string:
-    #and may have "none" or "all" special values
-    fixup_options(options, defaults)
+    NEED_ENCODING_MODES = ("attach", "start", "start-desktop", "shadow",
+                           "listen", "launcher",
+                           "bug-report", "encoding", "gui-info")
+    fixup_options(options, skip_encodings=len(args)==0 or args[0] not in NEED_ENCODING_MODES)
 
-    try:
-        options.dpi = int(options.dpi)
-    except Exception as e:
-        raise InitException("invalid dpi value '%s': %s" % (options.dpi, e))
+    for x in ("dpi", "sync_xvfb"):
+        try:
+            s = getattr(options, x, None)
+            if x=="sync_xvfb" and (s or "").lower() in FALSE_OPTIONS:
+                v = 0
+            else:
+                v = int(s)
+            setattr(options, x, v)
+        except Exception as e:
+            raise InitException("invalid value for %s: '%s': %s" % (x, s, e)) from None
+
     def parse_window_size(v, attribute="max-size"):
         try:
             #split on "," or "x":
@@ -1268,7 +1314,7 @@ def do_parse_cmdline(cmdline, defaults):
             assert 0<w<32768 and 0<h<32768
             return w, h
         except:
-            raise InitException("invalid %s: %s" % (attribute, v))
+            raise InitException("invalid %s: %s" % (attribute, v)) from None
     if options.min_size:
         options.min_size = "%sx%s" % parse_window_size(options.min_size, "min-size")
     if options.max_size:
@@ -1281,11 +1327,11 @@ def do_parse_cmdline(cmdline, defaults):
 
 def validated_encodings(encodings):
     try:
-        from xpra.codecs.codec_constants import PREFERED_ENCODING_ORDER
+        from xpra.codecs.codec_constants import PREFERRED_ENCODING_ORDER
     except ImportError:
         return []
     lower_encodings = [x.lower() for x in encodings]
-    validated = [x for x in PREFERED_ENCODING_ORDER if x.lower() in lower_encodings]
+    validated = [x for x in PREFERRED_ENCODING_ORDER if x.lower() in lower_encodings]
     if not validated:
         raise InitException("no valid encodings specified")
     return validated
@@ -1305,7 +1351,7 @@ def do_validate_encryption(auth, tcp_auth,
     pass_key = os.environ.get("XPRA_PASSWORD")
     from xpra.net.crypto import ENCRYPTION_CIPHERS
     if not ENCRYPTION_CIPHERS:
-        raise InitException("cannot use encryption: no ciphers available (a crypto library must be installed)")
+        raise InitException("cannot use encryption: no ciphers available (the python-cryptography library must be installed)")
     if encryption=="help" or tcp_encryption=="help":
         raise InitInfo("the following encryption ciphers are available: %s" % csv(ENCRYPTION_CIPHERS))
     if encryption and encryption not in ENCRYPTION_CIPHERS:
@@ -1316,8 +1362,9 @@ def do_validate_encryption(auth, tcp_auth,
         raise InitException("encryption %s cannot be used without an authentication module or keyfile"
                             +" (see --encryption-keyfile option)" % encryption)
     if tcp_encryption and not tcp_encryption_keyfile and not env_key and not tcp_auth:
-        raise InitException("tcp-encryption %s cannot be used without a tcp authentication module or keyfile "
-                            +" (see --tcp-encryption-keyfile option)" % tcp_encryption)
+        raise InitException("tcp-encryption %s cannot be used " % tcp_encryption+
+                            "without a tcp authentication module or keyfile "
+                            +" (see --tcp-encryption-keyfile option)")
     if pass_key and env_key and pass_key==env_key:
         raise InitException("encryption and authentication should not use the same value")
     #discouraged but not illegal:
@@ -1335,19 +1382,15 @@ def show_sound_codec_help(is_server, speaker_codecs, microphone_codecs):
     if not props:
         return ["sound is not supported - gstreamer not present or not accessible"]
     codec_help = []
-    all_speaker_codecs = props.strlistget("encoders" if is_server else "decoders")
+    all_speaker_codecs = props.strtupleget("encoders" if is_server else "decoders")
     invalid_sc = [x for x in speaker_codecs if x not in all_speaker_codecs]
     hs = "help" in speaker_codecs
     if hs:
         codec_help.append("speaker codecs available: %s" % csv(all_speaker_codecs))
     elif invalid_sc:
         codec_help.append("WARNING: some of the specified speaker codecs are not available: %s" % csv(invalid_sc))
-        for x in invalid_sc:
-            speaker_codecs.remove(x)
-    elif not speaker_codecs:
-        speaker_codecs += all_speaker_codecs
 
-    all_microphone_codecs = props.strlistget("decoders" if is_server else "encoders")
+    all_microphone_codecs = props.strtupleget("decoders" if is_server else "encoders")
     invalid_mc = [x for x in microphone_codecs if x not in all_microphone_codecs]
     hm = "help" in microphone_codecs
     if hm:
@@ -1355,11 +1398,7 @@ def show_sound_codec_help(is_server, speaker_codecs, microphone_codecs):
     elif invalid_mc:
         codec_help.append("WARNING: some of the specified microphone codecs are not available:"
                           +" %s" % csv(invalid_mc))
-        for x in invalid_mc:
-            microphone_codecs.remove(x)
-    elif not microphone_codecs:
-        microphone_codecs += all_microphone_codecs
-    return info
+    return codec_help
 
 
 def parse_vsock(vsock_str):
@@ -1373,18 +1412,18 @@ def parse_vsock(vsock_str):
         try:
             cid = int(cid_str)
         except ValueError:
-            cid = STR_TO_CID.get(cid_str.upper())
+            cid = STR_TO_CID.get(cid_str.upper())  # @UndefinedVariable
             if cid is None:
-                raise InitException("invalid vsock cid '%s'" % cid_str)
+                raise InitException("invalid vsock cid '%s'" % cid_str) from None
     if port_str.lower() in ("auto", "any"):
         iport = PORT_ANY
     else:
         try:
             iport = int(port_str)
         except ValueError:
-            raise InitException("invalid vsock port '%s'" % port_str)
+            raise InitException("invalid vsock port '%s'" % port_str) from None
     return cid, iport
 
 
-def is_local(host):
+def is_local(host) -> bool:
     return host.lower() in ("localhost", "127.0.0.1", "::1")

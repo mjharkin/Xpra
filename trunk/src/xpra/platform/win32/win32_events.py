@@ -7,6 +7,11 @@
 import ctypes
 
 from xpra.util import envbool
+from xpra.platform.win32.wtsapi import (
+    NOTIFY_FOR_THIS_SESSION,
+    WM_WTSSESSION_CHANGE, WM_DWMNCRENDERINGCHANGED, WM_DWMCOMPOSITIONCHANGED,
+    WTSRegisterSessionNotification, WTSUnRegisterSessionNotification,
+    )
 from xpra.platform.win32.wndproc_events import WNDPROC_EVENT_NAMES
 from xpra.platform.win32 import constants as win32con
 from xpra.platform.win32.common import (
@@ -21,14 +26,6 @@ from xpra.log import Logger
 
 log = Logger("events", "win32")
 
-try:
-    wtsapi32 = ctypes.WinDLL("WtsApi32")
-except Exception as e:
-    log.error("Error: cannot load WtsApi2 DLL, session events will not be detected")
-    log.error(" %s", e)
-    del e
-    wtsapi32 = None
-NOTIFY_FOR_THIS_SESSION = 0
 
 KNOWN_EVENTS = {}
 POWER_EVENTS = {}
@@ -40,10 +37,6 @@ for x in dir(win32con):
         v = getattr(win32con, x)
         POWER_EVENTS[v] = x
 
-#no idea where we're supposed to get those from:
-WM_WTSSESSION_CHANGE        = 0x02b1
-WM_DWMNCRENDERINGCHANGED    = 0x031F
-WM_DWMCOMPOSITIONCHANGED    = 0x031E
 IGNORE_EVENTS = {
             win32con.WM_ACTIVATEAPP         : "WM_ACTIVATEAPP",
             win32con.WM_TIMECHANGE          : "WM_TIMECHANGE",
@@ -98,7 +91,7 @@ def get_win32_event_listener(create=True):
 WINDOW_EVENTS = envbool("XPRA_WIN32_WINDOW_EVENTS", True)
 
 
-class Win32EventListener(object):
+class Win32EventListener:
 
     def __init__(self):
         assert singleton is None
@@ -128,20 +121,19 @@ class Win32EventListener(object):
         if self.wc_atom==0:
             raise ctypes.WinError(ctypes.get_last_error())
 
-        self.hwnd = CreateWindowExA(0, self.wc_atom, u"For xpra event listener only",
+        self.hwnd = CreateWindowExA(0, self.wc_atom, "For xpra event listener only",
             win32con.WS_CAPTION,
             0, 0, win32con.CW_USEDEFAULT, win32con.CW_USEDEFAULT,
             0, 0, self.wc.hInstance, None)
         if self.hwnd==0:
             raise ctypes.WinError(ctypes.get_last_error())
 
-        if wtsapi32:
-            #register our interest in session events:
-            #http://timgolden.me.uk/python/win32_how_do_i/track-session-events.html#isenslogon
-            #http://stackoverflow.com/questions/365058/detect-windows-logout-in-python
-            #http://msdn.microsoft.com/en-us/library/aa383841.aspx
-            #http://msdn.microsoft.com/en-us/library/aa383828.aspx
-            wtsapi32.WTSRegisterSessionNotification(self.hwnd, NOTIFY_FOR_THIS_SESSION)
+        #register our interest in session events:
+        #http://timgolden.me.uk/python/win32_how_do_i/track-session-events.html#isenslogon
+        #http://stackoverflow.com/questions/365058/detect-windows-logout-in-python
+        #http://msdn.microsoft.com/en-us/library/aa383841.aspx
+        #http://msdn.microsoft.com/en-us/library/aa383828.aspx
+        WTSRegisterSessionNotification(self.hwnd, NOTIFY_FOR_THIS_SESSION)
         log("Win32EventListener created with hwnd=%s", self.hwnd)
 
 
@@ -151,8 +143,7 @@ class Win32EventListener(object):
 
         hwnd = self.hwnd
         if hwnd:
-            if wtsapi32:
-                wtsapi32.WTSUnRegisterSessionNotification(hwnd)
+            WTSUnRegisterSessionNotification(hwnd)
 
             self.hwnd = None
             try:
@@ -181,14 +172,14 @@ class Win32EventListener(object):
 
     def WndProc(self, hWnd, msg, wParam, lParam):
         callbacks = self.event_callbacks.get(msg)
-        event_name = KNOWN_WM_EVENTS.get(msg, hex(msg))
+        event_name = KNOWN_WM_EVENTS.get(msg, hex(int(msg)))
         log("callbacks for event %s: %s", event_name, callbacks)
         if hWnd==self.hwnd:
             if callbacks:
                 for c in callbacks:
                     try:
                         c(wParam, lParam)
-                    except:
+                    except Exception:
                         log.error("error in callback %s", c, exc_info=True)
             elif msg in self.ignore_events:
                 log("%s: %s / %s", self.ignore_events.get(msg), wParam, lParam)
@@ -208,10 +199,10 @@ class Win32EventListener(object):
                 else:
                     ut = "/ unexpected"
                 l("unknown %s message: %s / %#x / %#x", ut, event_name, int(wParam), int(lParam))
+            if msg==win32con.WM_DESTROY:
+                self.cleanup()
         elif self.hwnd and hWnd!=None:
             log.warn("invalid hwnd: %s (expected %s)", hWnd, self.hwnd)
-        if msg==win32con.WM_DESTROY:
-            self.cleanup()
         r = DefWindowProcW(hWnd, msg, wParam, lParam)
         log("DefWindowProc%s=%s", (hWnd, msg, wParam, lParam), r)
         return r

@@ -51,6 +51,8 @@ PAINT_FLUSH = envbool("XPRA_PAINT_FLUSH", True)
 LOG_THEME_DEFAULT_ICONS = envbool("XPRA_LOG_THEME_DEFAULT_ICONS", False)
 SAVE_WINDOW_ICONS = envbool("XPRA_SAVE_WINDOW_ICONS", False)
 
+MAX_WINDOW_SIZE = 2**15-2**13
+
 
 from xpra.os_util import StringIOClass, memoryview_to_bytes
 from xpra.server.window.window_stats import WindowPerformanceStatistics
@@ -796,8 +798,10 @@ class WindowSource(object):
             return "rgb32"
         if "png" in self.common_encodings and quality>75:
             return "png"
-        for x in ("rgb32", "png", "webp", "rgb32"):
+        for x in ("rgb32", "png", "webp"):
             if x in self.common_encodings:
+                if x=="webp" and (depth not in (24, 32) or w>16383 or w<2 or h>16383 or h<2):
+                    continue
                 return x
         return self.common_encodings[0]
 
@@ -1049,6 +1053,11 @@ class WindowSource(object):
             self.statistics.last_resized = now
             self.window_dimensions = ww, wh
             self.encode_queue_max_size = max(2, min(30, MAX_SYNC_BUFFER_SIZE/(ww*wh*4)))
+        if ww>MAX_WINDOW_SIZE or wh>MAX_WINDOW_SIZE:
+            if first_time("window-oversize-%i" % self.wid):
+                damagelog.warn("Warning: invalid window dimensions %ix%i for window %i", ww, wh, self.wid)
+                damagelog.warn(" window updates will be dropped until this is corrected")
+            return
         if self.full_frames_only:
             x, y, w, h = 0, 0, ww, wh
 
@@ -1527,6 +1536,9 @@ class WindowSource(object):
                 #figure out the proportion of pixels updated:
                 pixels = region.width*region.height
                 ww, wh = self.window_dimensions
+                if ww<=0 or wh<=0:
+                    #window cleaned up?
+                    return
                 pct = 100*pixels/(ww*wh)
                 #try to take into account speed and quality:
                 #delay more when quality is low

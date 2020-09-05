@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-from xpra.util import envint, IDLE_TIMEOUT, XPRA_IDLE_NOTIFICATION_ID
+from xpra.util import envint, typedict, IDLE_TIMEOUT, XPRA_IDLE_NOTIFICATION_ID
 from xpra.os_util import monotonic_time
 from xpra.server.source.stub_source_mixin import StubSourceMixin
 from xpra.log import Logger
@@ -16,8 +16,18 @@ GRACE_PERCENT = envint("XPRA_GRACE_PERCENT", 90)
 
 class IdleMixin(StubSourceMixin):
 
+    @classmethod
+    def is_needed(cls, caps : typedict) -> bool:
+        #the 'keyboard' and 'mouse' capability were only added in v4,
+        #so we have to enable the mixin by default:
+        return caps.boolget("keyboard", True) or caps.boolget("mouse", True) or caps.boolget("windows", False)
+
     def __init__(self):
         self.idle_timeout = 0
+        #duplicated from clientconnection:
+        self.notification_callbacks = {}
+        self.send_notifications = False
+        self.send_notifications_actions = False
 
     def init_from(self, _protocol, server):
         self.idle_timeout = server.idle_timeout
@@ -34,14 +44,14 @@ class IdleMixin(StubSourceMixin):
         self.cancel_idle_grace_timeout()
         self.cancel_idle_timeout()
 
-    def get_info(self):
+    def get_info(self) -> dict:
         return {
                 "idle_time"         : int(monotonic_time()-self.last_user_event),
                 "idle"              : self.idle,
                 }
 
 
-    def parse_client_caps(self, _c):
+    def parse_client_caps(self, _c : typedict):
         #start the timer
         self.schedule_idle_grace_timeout()
         self.schedule_idle_timeout()

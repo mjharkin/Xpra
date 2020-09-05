@@ -1,7 +1,9 @@
 # This file is part of Xpra.
-# Copyright (C) 2011-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2011-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
+
+from gi.repository import GLib, Gtk
 
 from xpra.util import envbool, csv
 from xpra.gtk_common.gtk_util import scaled_image
@@ -11,19 +13,15 @@ from xpra.client.gtk_base.gtk_tray_menu_base import (
     CLIPBOARD_LABEL_TO_NAME, CLIPBOARD_NAME_TO_LABEL, CLIPBOARD_LABELS,
     CLIPBOARD_DIRECTION_LABELS, CLIPBOARD_DIRECTION_NAME_TO_LABEL,
     SHOW_UPLOAD, SHOW_VERSION_CHECK, RUNCOMMAND_MENU, SHOW_SERVER_COMMANDS, SHOW_SHUTDOWN,
+    SHOW_QR,
     )
 from xpra.platform.paths import get_icon
 from xpra.platform.darwin.gui import get_OSXApplication
 from xpra.client import mixin_features
-from xpra.gtk_common.gobject_compat import import_gtk, import_glib
 from xpra.log import Logger
 
 log = Logger("osx", "tray", "menu")
 clipboardlog = Logger("osx", "menu", "clipboard")
-
-gtk = import_gtk()
-glib = import_glib()
-
 
 #control which menus are shown in the OSX global menu:
 SHOW_FEATURES_MENU = True
@@ -62,7 +60,7 @@ class OSXMenuHelper(GTKTrayMenuBase):
     """
 
     def __init__(self, client=None):
-        GTKTrayMenuBase.__init__(self, client)
+        super().__init__(client)
         log("OSXMenuHelper(%s)", client)
         self.menu_bar = None
         self.hidden_window = None
@@ -87,7 +85,7 @@ class OSXMenuHelper(GTKTrayMenuBase):
     def build(self):
         log("OSXMenuHelper.build()")
         if self.menu_bar is None:
-            self.menu_bar = gtk.MenuBar()
+            self.menu_bar = Gtk.MenuBar()
             self.menu_bar.show_all()
         return self.menu_bar
 
@@ -129,7 +127,7 @@ class OSXMenuHelper(GTKTrayMenuBase):
             item.show_all()
         else:
             if label.startswith(SEPARATOR):
-                item = gtk.SeparatorMenuItem()
+                item = Gtk.SeparatorMenuItem()
             else:
                 item = self.menuitem(label)
                 item.set_submenu(submenu)
@@ -188,6 +186,8 @@ class OSXMenuHelper(GTKTrayMenuBase):
         if SHOW_INFO_MENU:
             info_menu = self.make_menu()
             info_menu.append(self.make_sessioninfomenuitem())
+            if SHOW_QR:
+                info_menu.append(self.make_qrmenuitem())
             if SHOW_VERSION_CHECK:
                 info_menu.append(self.make_updatecheckmenuitem())
             info_menu.append(self.make_bugreportmenuitem())
@@ -206,7 +206,7 @@ class OSXMenuHelper(GTKTrayMenuBase):
             menus.append(("Clipboard", clipboard_menu))
             for label in CLIPBOARD_LABELS:
                 clipboard_menu.add(self.make_clipboard_submenuitem(label, self._remote_clipboard_changed))
-            clipboard_menu.add(gtk.SeparatorMenuItem())
+            clipboard_menu.add(Gtk.SeparatorMenuItem())
             for label in CLIPBOARD_DIRECTION_LABELS:
                 clipboard_menu.add(self.make_clipboard_submenuitem(label, self._clipboard_direction_changed))
             clipboard_menu.show_all()
@@ -221,12 +221,11 @@ class OSXMenuHelper(GTKTrayMenuBase):
         if mixin_features.windows and SHOW_ENCODINGS_MENU:
             encodings_menu = self.make_menu()
             def set_encodings_menu(*_args):
-                from xpra.codecs.codec_constants import PREFERED_ENCODING_ORDER
+                from xpra.codecs.codec_constants import PREFERRED_ENCODING_ORDER
                 server_encodings = list(self.client.server_encodings)
-                encodings = [x for x in PREFERED_ENCODING_ORDER if x in self.client.get_encodings()]
-                if self.client.server_auto_video_encoding:
-                    encodings.insert(0, "auto")
-                    server_encodings.insert(0, "auto")
+                encodings = [x for x in PREFERRED_ENCODING_ORDER if x in self.client.get_encodings()]
+                encodings.insert(0, "auto")
+                server_encodings.insert(0, "auto")
                 populate_encodingsmenu(encodings_menu, self.get_current_encoding, self.set_current_encoding, encodings, server_encodings)
             self.client.after_handshake(set_encodings_menu)
             menus.append(("Encoding", encodings_menu))
@@ -272,7 +271,7 @@ class OSXMenuHelper(GTKTrayMenuBase):
             return
         remote_clipboard = CLIPBOARD_LABEL_TO_NAME[label]
         clipboardlog("will select clipboard menu item with label=%s, for remote_clipboard=%s", label, remote_clipboard)
-        glib.timeout_add(0, self._do_clipboard_change, remote_clipboard)
+        GLib.timeout_add(0, self._do_clipboard_change, remote_clipboard)
 
     def _do_clipboard_change(self, remote_clipboard):
         #why do we look it up again when we could just pass it in
@@ -328,7 +327,11 @@ class OSXMenuHelper(GTKTrayMenuBase):
         #find the menu item matching the current settings,
         #and select it
         try:
-            label = CLIPBOARD_NAME_TO_LABEL.get(self.client.clipboard_helper.remote_clipboard)
+            ch = self.client.clipboard_helper
+            rc_setting = "Clipboard"
+            if len(ch._local_to_remote)==1:
+                rc_setting = tuple(ch._local_to_remote.values())[0]
+            label = CLIPBOARD_NAME_TO_LABEL.get(rc_setting)
             self.select_clipboard_menu_option(None, label, CLIPBOARD_LABELS)
         except Exception:
             clipboardlog("failed to select remote clipboard option in menu", exc_info=True)
@@ -424,7 +427,7 @@ class OSXMenuHelper(GTKTrayMenuBase):
                 return  None
             if size:
                 return scaled_image(pixbuf, size)
-            return gtk.image_new_from_pixbuf(pixbuf)
+            return Gtk.Image.new_from_pixbuf(pixbuf)
         except Exception:
             log.error("get_image(%s, %s)", icon_name, size, exc_info=True)
             return  None

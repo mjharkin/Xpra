@@ -12,9 +12,11 @@ import os
 import sys
 import glob
 from io import BytesIO
+from typing import Generator as generator       #@UnresolvedImport, @UnusedImport
+from threading import Lock
 
-from xpra.util import envbool, envint, print_nested_dict, first_time
-from xpra.os_util import load_binary_file, OSEnvContext, PYTHON3
+from xpra.util import envbool, envint, print_nested_dict, first_time, engs
+from xpra.os_util import load_binary_file, OSEnvContext
 from xpra.log import Logger, add_debug_category
 
 log = Logger("exec", "menu")
@@ -23,11 +25,8 @@ LOAD_GLOB = envbool("XPRA_XDG_LOAD_GLOB", True)
 EXPORT_ICONS = envbool("XPRA_XDG_EXPORT_ICONS", True)
 MAX_ICON_SIZE = envint("XPRA_XDG_MAX_ICON_SIZE", 65536)
 DEBUG_COMMANDS = os.environ.get("XPRA_XDG_DEBUG_COMMANDS", "").split(",")
-if PYTHON3:
-    unicode = str           #@ReservedAssignment
-    from typing import Generator as generator       #@UnresolvedImport, @UnusedImport
-else:
-    from types import GeneratorType as generator    #@Reimport
+
+large_icons = []
 
 
 def isvalidtype(v):
@@ -35,7 +34,7 @@ def isvalidtype(v):
         if not v:
             return True
         return all(isvalidtype(x) for x in v)
-    return isinstance(v, (bytes, str, unicode, bool, int))
+    return isinstance(v, (bytes, str, bool, int))
 
 def export(entry, properties):
     name = entry.getName()
@@ -76,10 +75,10 @@ def load_icon_from_file(filename):
     log("load_icon_from_file(%s)", filename)
     if filename.endswith("xpm"):
         try:
-            from xpra.gtk_common.gobject_compat import import_pixbufloader
             from xpra.gtk_common.gtk_util import pixbuf_save_to_memory
             data = load_binary_file(filename)
-            loader = import_pixbufloader()()
+            from gi.repository import GdkPixbuf
+            loader = GdkPixbuf.PixbufLoader()
             loader.write(data)
             loader.close()
             pixbuf = loader.get_pixbuf()
@@ -108,8 +107,8 @@ def load_icon_from_file(filename):
         return None
     log("got icon data from '%s': %i bytes", filename, len(icondata))
     if len(icondata)>MAX_ICON_SIZE and first_time("icon-size-warning-%s" % filename):
-        log.warn("Warning: icon is quite large (%i KB):", len(icondata)//1024)
-        log.warn(" '%s'", filename)
+        global large_icons
+        large_icons.append((filename, len(icondata)))
     return icondata, os.path.splitext(filename)[1].lstrip(".")
 
 def load_icon_from_theme(icon_name, theme=None):
@@ -230,11 +229,22 @@ def remove_icons(menu_data):
     return filt
 
 
+load_lock = Lock()
 xdg_menu_data = None
 def load_xdg_menu_data(force_reload=False):
-    global xdg_menu_data
-    if not xdg_menu_data or force_reload:
-        xdg_menu_data = do_load_xdg_menu_data()
+    global xdg_menu_data, large_icons
+    with load_lock:
+        if not xdg_menu_data or force_reload:
+            large_icons = []
+            xdg_menu_data = do_load_xdg_menu_data()
+            if xdg_menu_data:
+                l = sum(len(x) for x in xdg_menu_data.values())
+                log.info("loaded %i start menu entries from %i sub-menus", l, len(xdg_menu_data))
+            if large_icons:
+                log.warn("Warning: found %i large icon%s:", len(large_icons), engs(large_icons))
+                for filename, size in large_icons:
+                    log.warn(" '%s' (%i KB)", filename, size//1024)
+                log.warn(" more bandwidth will used by the start menu data")
     return xdg_menu_data
 
 def do_load_xdg_menu_data():
@@ -267,7 +277,7 @@ def do_load_xdg_menu_data():
                 try:
                     menu = parse()
                     break
-                except ParsingError as e:
+                except Exception as e:
                     log("do_load_xdg_menu_data()", exc_info=True)
                     error = e
                     menu = None
@@ -302,7 +312,10 @@ def main():
         def icon_fmt(icondata):
             return "%i bytes" % len(icondata)
         menu = load_xdg_menu_data()
-        print_nested_dict(menu, vformat={"IconData" : icon_fmt})
+        if menu:
+            print_nested_dict(menu, vformat={"IconData" : icon_fmt})
+        else:
+            print("no menu data found")
     return 0
 
 if __name__ == "__main__":

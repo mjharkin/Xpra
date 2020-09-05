@@ -123,6 +123,9 @@ svn revert Info.plist Xpra.bundle
 sed -i '' -e "s+%VERSION%+$VERSION+g" "./Info.plist"
 sed -i '' -e "s+%REVISION%+$REVISION$REV_MOD+g" "./Info.plist"
 sed -i '' -e "s+%BUILDNO%+$BUILDNO+g" "./Info.plist"
+if [ "${PYTHON_MAJOR_VERSION}" == "3" ]; then
+	patch -p0 < bundle.patch
+fi
 if [ "${CLIENT_ONLY}" == "1" ]; then
 	sed -i '' -e "s+Xpra+Xpra-Client+g" "./Info.plist"
 	sed -i '' -e "s+org.xpra.xpra+org.xpra.xpra-client+g" "./Info.plist"

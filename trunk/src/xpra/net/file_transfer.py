@@ -1,5 +1,5 @@
 # This file is part of Xpra.
-# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008, 2010 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -10,9 +10,9 @@ import hashlib
 import uuid
 
 from xpra.child_reaper import getChildReaper
-from xpra.os_util import monotonic_time, bytestostr, strtobytes, POSIX, WIN32
+from xpra.os_util import monotonic_time, bytestostr, strtobytes, umask_context, POSIX, WIN32
 from xpra.util import typedict, csv, nonl, envint, envbool, engs
-from xpra.scripts.config import parse_bool
+from xpra.scripts.config import parse_bool, parse_with_unit
 from xpra.simple_stats import std_unit
 from xpra.make_thread import start_thread
 from xpra.log import Logger
@@ -37,38 +37,62 @@ DENY = 0
 ACCEPT = 1
 OPEN = 2
 
+def osclose(fd):
+    try:
+        os.close(fd)
+    except OSError as e:
+        filelog("os.close(%s)", fd, exc_info=True)
+        filelog.error("Error closing file download:")
+        filelog.error(" %s", e)
+
+def basename(filename):
+    #we can't use os.path.basename,
+    #because the remote end may have sent us a filename
+    #which is using a different pathsep
+    tmp = filename
+    for sep in ("\\", "/", os.sep):
+        i = tmp.rfind(sep) + 1
+        tmp = tmp[i:]
+    filename = tmp
+    if WIN32:   # pragma: no cover
+        #many characters aren't allowed at all on win32:
+        tmp = ""
+        for char in filename:
+            if ord(char)<32 or char in ("<", ">", ":", "\"", "|", "?", "*"):
+                char = "_"
+            tmp += char
+    return tmp
 
 def safe_open_download_file(basefilename, mimetype):
     from xpra.platform.paths import get_download_dir
-    #make sure we use a filename that does not exist already:
     dd = os.path.expanduser(get_download_dir())
-    base = os.path.basename(basefilename)
-    wanted_filename = os.path.abspath(os.path.join(dd, base))
+    filename = os.path.abspath(os.path.join(dd, basename(basefilename)))
     ext = MIMETYPE_EXTS.get(mimetype)
-    if ext:
+    if ext and not filename.endswith("."+ext):
         #on some platforms (win32),
         #we want to force an extension
         #so that the file manager can display them properly when you double-click on them
-        if not wanted_filename.endswith("."+ext):
-            wanted_filename += "."+ext
-    filename = wanted_filename
+        filename += "."+ext
+    #make sure we use a filename that does not exist already:
+    root, ext = os.path.splitext(filename)
     base = 0
     while os.path.exists(filename):
         filelog("cannot save file as %s: file already exists", filename)
-        root, ext = os.path.splitext(wanted_filename)
         base += 1
         filename = root+("-%s" % base)+ext
+    filelog("safe_open_download_file(%s, %s) will use '%s'", basefilename, mimetype, filename)
     flags = os.O_CREAT | os.O_RDWR | os.O_EXCL
     try:
         flags |= os.O_BINARY                #@UndefinedVariable (win32 only)
     except AttributeError:
         pass
-    fd = os.open(filename, flags)
-    filelog("using filename '%s'", filename)
+    with umask_context(0o133):
+        fd = os.open(filename, flags)
+    filelog("using filename '%s', file descriptor=%s", filename, fd)
     return filename, fd
 
 
-class FileTransferAttributes(object):
+class FileTransferAttributes:
 
     def __init__(self):
         self.init_attributes()
@@ -89,8 +113,8 @@ class FileTransferAttributes(object):
         fta = pask(file_transfer)
         self.file_transfer_ask = fta and can_ask
         self.file_transfer = fta or pbool("file-transfer", file_transfer)
-        self.file_size_limit = file_size_limit
-        self.file_chunks = min(self.file_size_limit*1024*1024, FILE_CHUNKS_SIZE)
+        self.file_size_limit = parse_with_unit("file-size-limit", file_size_limit, "B", min_value=0)
+        self.file_chunks = FILE_CHUNKS_SIZE
         pa = pask(printing)
         self.printing_ask = pa and can_ask
         self.printing = pa or pbool("printing", printing)
@@ -105,12 +129,13 @@ class FileTransferAttributes(object):
         self.open_command = open_command
         filelog("file transfer attributes=%s", self.get_file_transfer_features())
 
-    def get_file_transfer_features(self):
+    def get_file_transfer_features(self) -> dict:
         #used in hello packets
         return {
                 "file-transfer"     : self.file_transfer,
                 "file-transfer-ask" : self.file_transfer_ask,
-                "file-size-limit"   : self.file_size_limit,
+                "file-size-limit"   : self.file_size_limit//1024//1024,     #legacy name (use max-file-size)
+                "max-file-size"     : self.file_size_limit,
                 "file-chunks"       : self.file_chunks,
                 "open-files"        : self.open_files,
                 "open-files-ask"    : self.open_files_ask,
@@ -121,7 +146,7 @@ class FileTransferAttributes(object):
                 "file-ask-timeout"  : self.file_ask_timeout,
                 }
 
-    def get_info(self):
+    def get_info(self) -> dict:
         #slightly different from above... for legacy reasons
         #this one is used for get_info() in a proper "file." namespace from server_base.py
         return {
@@ -146,7 +171,7 @@ class FileTransferHandler(FileTransferAttributes):
     """
 
     def init_attributes(self, *args):
-        FileTransferAttributes.init_attributes(self, *args)
+        super().init_attributes(*args)
         self.remote_file_transfer = False
         self.remote_file_transfer_ask = False
         self.remote_printing = False
@@ -164,11 +189,10 @@ class FileTransferHandler(FileTransferAttributes):
         self.receive_chunks_in_progress = {}
         self.file_descriptors = set()
         if not getattr(self, "timeout_add", None):
-            from xpra.gtk_common.gobject_compat import import_glib
-            glib = import_glib()
-            self.timeout_add = glib.timeout_add
-            self.idle_add = glib.idle_add
-            self.source_remove = glib.source_remove
+            from gi.repository import GLib
+            self.timeout_add = GLib.timeout_add
+            self.idle_add = GLib.idle_add
+            self.source_remove = GLib.source_remove
 
     def cleanup(self):
         for t in self.pending_send_data_timers.values():
@@ -180,8 +204,8 @@ class FileTransferHandler(FileTransferAttributes):
         self.receive_chunks_in_progress = {}
         for x in tuple(self.file_descriptors):
             try:
-                x.close()
-            except (OSError, IOError):
+                os.close(x)
+            except OSError:
                 pass
         self.file_descriptors = set()
         self.init_attributes()
@@ -196,21 +220,21 @@ class FileTransferHandler(FileTransferAttributes):
         self.remote_open_url = c.boolget("open-url")
         self.remote_open_url_ask = c.boolget("open-url-ask")
         self.remote_file_ask_timeout = c.intget("file-ask-timeout")
-        self.remote_file_size_limit = c.intget("file-size-limit")
-        self.remote_file_chunks = max(0, min(self.remote_file_size_limit*1024*1024, c.intget("file-chunks")))
+        self.remote_file_size_limit = c.intget("max-file-size") or c.intget("file-size-limit")*1024*1024
+        self.remote_file_chunks = max(0, min(self.remote_file_size_limit, c.intget("file-chunks")))
         self.dump_remote_caps()
 
     def dump_remote_caps(self):
-        filelog("file transfer remote caps: file-transfer=%s   (ask=%s)",
+        filelog("file transfer remote caps: file-transfer=%-5s   (ask=%s)",
                 self.remote_file_transfer, self.remote_file_transfer_ask)
-        filelog("file transfer remote caps: printing=%s        (ask=%s)",
+        filelog("file transfer remote caps: printing=%-5s        (ask=%s)",
                 self.remote_printing, self.remote_printing_ask)
-        filelog("file transfer remote caps: open-files=%s      (ask=%s)",
+        filelog("file transfer remote caps: open-files=%-5s      (ask=%s)",
                 self.remote_open_files, self.remote_open_files_ask)
-        filelog("file transfer remote caps: open-url=%s        (ask=%s)",
+        filelog("file transfer remote caps: open-url=%-5s        (ask=%s)",
                 self.remote_open_url, self.remote_open_url_ask)
 
-    def get_info(self):
+    def get_info(self) -> dict:
         info = FileTransferAttributes.get_info(self)
         info["remote"] = {
             "file-transfer"     : self.remote_file_transfer,
@@ -227,23 +251,59 @@ class FileTransferHandler(FileTransferAttributes):
             }
         return info
 
-    def check_digest(self, filename, digest, expected_digest, algo="sha1"):
-        if digest!=expected_digest:
-            filelog.error("Error: data does not match, invalid %s file digest for '%s'", algo, filename)
-            filelog.error(" received %s, expected %s", digest, expected_digest)
-            raise Exception("failed %s digest verification" % algo)
-        else:
-            filelog("%s digest matches: %s", algo, digest)
+
+    def digest_mismatch(self, filename, digest, expected_digest, algo="sha1"):
+        filelog.error("Error: data does not match, invalid %s file digest for '%s'", algo, filename)
+        filelog.error(" received %s, expected %s", digest, expected_digest)
+        raise Exception("failed %s digest verification" % algo)
 
 
     def _check_chunk_receiving(self, chunk_id, chunk_no):
         chunk_state = self.receive_chunks_in_progress.get(chunk_id)
         filelog("_check_chunk_receiving(%s, %s) chunk_state=%s", chunk_id, chunk_no, chunk_state)
         if chunk_state:
+            if chunk_state[-4]:
+                #transfer has been cancelled
+                return
             chunk_state[-2] = 0     #this timer has been used
             if chunk_state[-1]==0:
                 filelog.error("Error: chunked file transfer timed out")
-                del self.receive_chunks_in_progress[chunk_id]
+                self.receive_chunks_in_progress.pop(chunk_id, None)
+
+    def cancel_download(self, send_id, message="Cancelled"):
+        filelog("cancel_download(%s, %s)", send_id, message)
+        for chunk_id, chunk_state in dict(self.receive_chunks_in_progress).items():
+            if chunk_state[-3]==send_id:
+                self.cancel_file(chunk_id, message)
+                return
+        filelog.error("Error: cannot cancel download %s, entry not found!", bytestostr(send_id))
+
+    def cancel_file(self, chunk_id, message, chunk=0):
+        filelog("cancel_file%s", (chunk_id, message, chunk))
+        chunk_state = self.receive_chunks_in_progress.get(chunk_id)
+        if chunk_state:
+            #mark it as cancelled:
+            chunk_state[-4] = True
+            timer = chunk_state[-2]
+            if timer:
+                chunk_state[-2] = 0
+                self.source_remove(timer)
+            fd = chunk_state[1]
+            osclose(fd)
+            #remove this transfer after a little while,
+            #so in-flight packets won't cause errors
+            def clean_receive_state():
+                self.receive_chunks_in_progress.pop(chunk_id, None)
+                return False
+            self.timeout_add(20000, clean_receive_state)
+            filename = chunk_state[2]
+            try:
+                os.unlink(filename)
+            except OSError as e:
+                filelog("os.unlink(%s)", filename, exc_info=True)
+                filelog.error("Error: failed to delete temporary download file")
+                filelog.error(" '%s' : %s", filename, e)
+        self.send("ack-file-chunk", chunk_id, False, message, chunk)
 
     def _process_send_file_chunk(self, packet):
         chunk_id, chunk, file_data, has_more = packet[1:5]
@@ -251,14 +311,22 @@ class FileTransferHandler(FileTransferAttributes):
         chunk_state = self.receive_chunks_in_progress.get(chunk_id)
         if not chunk_state:
             filelog.error("Error: cannot find the file transfer id '%s'", nonl(bytestostr(chunk_id)))
-            self.send("ack-file-chunk", chunk_id, False, "file transfer id not found", chunk)
+            self.cancel_file(chunk_id, "file transfer id %s not found" % chunk_id, chunk)
             return
+        if chunk_state[-4]:
+            filelog("got chunk for a cancelled file transfer, ignoring it")
+            return
+        def progress(position, error=None):
+            start = chunk_state[0]
+            send_id = chunk_state[-3]
+            filesize = chunk_state[6]
+            self.transfer_progress_update(False, send_id, monotonic_time()-start, position, filesize, error)
         fd = chunk_state[1]
         if chunk_state[-1]+1!=chunk:
             filelog.error("Error: chunk number mismatch, expected %i but got %i", chunk_state[-1]+1, chunk)
-            self.send("ack-file-chunk", chunk_id, False, "chunk number mismatch", chunk)
-            del self.receive_chunks_in_progress[chunk_id]
-            os.close(fd)
+            self.cancel_file(chunk_id, "chunk number mismatch", chunk)
+            osclose(fd)
+            progress(-1, "chunk no mismatch")
             return
         #update chunk number:
         chunk_state[-1] = chunk
@@ -272,15 +340,13 @@ class FileTransferHandler(FileTransferAttributes):
         except OSError as e:
             filelog.error("Error: cannot write file chunk")
             filelog.error(" %s", e)
-            self.send("ack-file-chunk", chunk_id, False, "write error: %s" % e, chunk)
-            del self.receive_chunks_in_progress[chunk_id]
-            try:
-                os.close(fd)
-            except (OSError, IOError):
-                pass
+            self.cancel_file(chunk_id, "write error: %s" % e, chunk)
+            osclose(fd)
+            progress(-1, "write error (%s)" % e)
             return
         self.send("ack-file-chunk", chunk_id, True, "", chunk)
         if has_more:
+            progress(written)
             timer = chunk_state[-2]
             if timer:
                 self.source_remove(timer)
@@ -288,18 +354,24 @@ class FileTransferHandler(FileTransferAttributes):
             timer = self.timeout_add(CHUNK_TIMEOUT, self._check_chunk_receiving, chunk_id, chunk)
             chunk_state[-2] = timer
             return
-        del self.receive_chunks_in_progress[chunk_id]
-        os.close(fd)
+        self.receive_chunks_in_progress.pop(chunk_id, None)
+        osclose(fd)
         #check file size and digest then process it:
         filename, mimetype, printit, openit, filesize, options = chunk_state[2:8]
         if written!=filesize:
             filelog.error("Error: expected a file of %i bytes, got %i", filesize, written)
+            progress(-1, "file size mismatch")
             return
         expected_digest = options.get("sha1")
-        if expected_digest:
-            self.check_digest(filename, digest.hexdigest(), expected_digest)
+        if expected_digest and digest.hexdigest()!=expected_digest:
+            progress(-1, "checksum mismatch")
+            self.digest_mismatch(filename, digest, expected_digest, "sha1")
+            return
+
+        progress(written)
         start_time = chunk_state[0]
         elapsed = monotonic_time()-start_time
+        mimetype = bytestostr(mimetype)
         filelog("%i bytes received in %i chunks, took %ims", filesize, chunk, elapsed*1000)
         t = start_thread(self.do_process_downloaded_file, "process-download", daemon=False,
                          args=(filename, mimetype, printit, openit, filesize, options))
@@ -315,13 +387,15 @@ class FileTransferHandler(FileTransferAttributes):
                 self.file_transfer, self.file_transfer_ask)
         filelog("accept_data: open-files=%s, open-files-ask=%s",
                 self.open_files, self.open_files_ask)
-        if printit:
-            return self.printing and not self.printing_ask
         if not self.file_transfer or self.file_transfer_ask:
-            return False
-        if openit:
-            return self.open_files and not self.open_files_ask
-        return True
+            return None
+        if printit and (not self.printing or self.printing_ask):
+            printit = False
+        if openit and (not self.open_files or self.open_files_ask):
+            #we can't ask in this implementation,
+            #so deny the request to open it:
+            openit = False
+        return (printit, openit)
 
     def _process_send_file(self, packet):
         #the remote end is sending us a file
@@ -329,9 +403,12 @@ class FileTransferHandler(FileTransferAttributes):
         send_id = ""
         if len(packet)>=9:
             send_id = packet[8]
-        if not self.accept_data(send_id, b"file", basefilename, printit, openit):
+        r = self.accept_data(send_id, b"file", basefilename, printit, openit)
+        if r is None:
             filelog.warn("Warning: file transfer rejected for file '%s'", bytestostr(basefilename))
             return
+        #accept_data can override the flags:
+        printit, openit = r
         options = typedict(options)
         if printit:
             l = printlog
@@ -342,22 +419,32 @@ class FileTransferHandler(FileTransferAttributes):
         l("receiving file: %s",
           [basefilename, mimetype, printit, openit, filesize, "%s bytes" % len(file_data), options])
         assert filesize>0, "invalid file size: %s" % filesize
-        if filesize>self.file_size_limit*1024*1024:
+        if filesize>self.file_size_limit:
             l.error("Error: file '%s' is too large:", basefilename)
-            l.error(" %iMB, the file size limit is %iMB", filesize//1024//1024, self.file_size_limit)
+            l.error(" %sB, the file size limit is %sB",
+                    std_unit(filesize), std_unit(self.file_size_limit))
             return
+        chunk_id = options.strget("file-chunk-id")
         #basefilename should be utf8:
         try:
             base = basefilename.decode("utf8")
-        except:
+        except UnicodeDecodeError:
             base = bytestostr(basefilename)
-        filename, fd = safe_open_download_file(base, mimetype)
+        try:
+            filename, fd = safe_open_download_file(base, mimetype)
+        except OSError as e:
+            filelog("cannot save file %s / %s", base, mimetype, exc_info=True)
+            filelog.error("Error: failed to save downloaded file")
+            filelog.error(" %s", e)
+            if chunk_id:
+                self.send("ack-file-chunk", chunk_id, False, "failed to create file: %s" % e, 0)
+            return
         self.file_descriptors.add(fd)
-        chunk_id = options.strget("file-chunk-id")
         if chunk_id:
             chunk_id = strtobytes(chunk_id)
-            if len(self.receive_chunks_in_progress)>=MAX_CONCURRENT_FILES:
-                self.send("ack-file-chunk", chunk_id, False, "too many file transfers in progress", 0)
+            l = len(self.receive_chunks_in_progress)
+            if l>=MAX_CONCURRENT_FILES:
+                self.send("ack-file-chunk", chunk_id, False, "too many file transfers in progress: %i" % l, 0)
                 os.close(fd)
                 return
             digest = hashlib.sha1()
@@ -367,7 +454,8 @@ class FileTransferHandler(FileTransferAttributes):
                 monotonic_time(),
                 fd, filename, mimetype,
                 printit, openit, filesize,
-                options, digest, 0, timer, chunk,
+                options, digest, 0, False, send_id,
+                timer, chunk,
                 ]
             self.receive_chunks_in_progress[chunk_id] = chunk_state
             self.send("ack-file-chunk", chunk_id, True, "", chunk)
@@ -385,7 +473,8 @@ class FileTransferHandler(FileTransferAttributes):
                 u = libfn()
                 u.update(file_data)
                 l("%s digest: %s - expected: %s", algo, u.hexdigest(), digest)
-                self.check_digest(basefilename, u.hexdigest(), digest, algo)
+                if digest!=u.hexdigest():
+                    self.digest_mismatch(filename, digest, u.hexdigest(), algo)
         check_digest("sha1", hashlib.sha1)
         check_digest("md5", hashlib.md5)
         try:
@@ -425,7 +514,7 @@ class FileTransferHandler(FileTransferAttributes):
             if DELETE_PRINTER_FILE:
                 try:
                     os.unlink(filename)
-                except (OSError, IOError):
+                except OSError:
                     printlog("failed to delete print job file '%s'", filename)
         if not printer:
             printlog.error("Error: the printer name is missing")
@@ -517,18 +606,22 @@ class FileTransferHandler(FileTransferAttributes):
 
     def file_size_warning(self, action, location, basefilename, filesize, limit):
         filelog.warn("Warning: cannot %s the file '%s'", action, basefilename)
-        filelog.warn(" this file is too large: %sB", std_unit(filesize, unit=1024))
-        filelog.warn(" the %s file size limit is %iMB", location, limit)
+        filelog.warn(" this file is too large: %sB", std_unit(filesize))
+        filelog.warn(" the %s file size limit is %sB", location, std_unit(limit))
 
     def check_file_size(self, action, filename, filesize):
         basefilename = os.path.basename(filename)
-        if filesize>self.file_size_limit*1024*1024:
+        if filesize>self.file_size_limit:
             self.file_size_warning(action, "local", basefilename, filesize, self.file_size_limit)
             return False
-        if filesize>self.remote_file_size_limit*1024*1024:
+        if filesize>self.remote_file_size_limit:
             self.file_size_warning(action, "remote", basefilename, filesize, self.remote_file_size_limit)
             return False
         return True
+
+
+    def send_request_file(self, filename, openit=True):
+        self.send("request-file", filename, openit)
 
 
     def _process_open_url(self, packet):
@@ -698,17 +791,16 @@ class FileTransferHandler(FileTransferAttributes):
             filelog.error("Error: unknown datatype '%s'", dtype)
 
     def send_data_ask_timeout(self, send_id):
-        v = self.pending_send_data_timers.get(send_id)
-        if not v:
-            filelog.warn("Warning: send timeout, id '%s' not found!", send_id)
-            return False
+        v = self.pending_send_data.pop(send_id, None)
         try:
-            del self.pending_send_data[send_id]
             del self.pending_send_data_timers[send_id]
         except KeyError:
             pass
-        filename = v[0]
-        printit = v[4]
+        if not v:
+            filelog.warn("Warning: send timeout, id '%s' not found!", send_id)
+            return False
+        filename = v[1]
+        printit = v[5]
         filelog.warn("Warning: failed to %s file '%s',", ["send", "print"][printit], filename)
         filelog.warn(" the send approval request timed out")
         return False
@@ -748,7 +840,7 @@ class FileTransferHandler(FileTransferAttributes):
         #convert str to utf8 bytes:
         try:
             base = basefilename.encode("utf8")
-        except:
+        except (AttributeError, UnicodeEncodeError):
             base = strtobytes(basefilename)
         self.send("send-file", base, mimetype, printit, openit, filesize, cdata, options, send_id)
         return True
@@ -757,10 +849,19 @@ class FileTransferHandler(FileTransferAttributes):
         chunk_state = self.send_chunks_in_progress.get(chunk_id)
         filelog("_check_chunk_sending(%s, %s) chunk_state found: %s", chunk_id, chunk_no, bool(chunk_state))
         if chunk_state:
-            chunk_state[-2] = 0         #timer has fired
+            chunk_state[3] = 0         #timer has fired
             if chunk_state[-1]==chunk_no:
                 filelog.error("Error: chunked file transfer timed out on chunk %i", chunk_no)
-                del self.send_chunks_in_progress[chunk_id]
+                self.cancel_sending(chunk_id)
+
+    def cancel_sending(self, chunk_id):
+        chunk_state = self.send_chunks_in_progress.pop(bytestostr(chunk_id), None)
+        filelog("cancel_sending(%s) chunk state found: %s", chunk_id, bool(chunk_state))
+        if chunk_state:
+            timer = chunk_state[3]
+            if timer:
+                chunk_state[3] = 0
+                self.source_remove(timer)
 
     def _process_ack_file_chunk(self, packet):
         #the other end received our send-file or send-file-chunk,
@@ -768,9 +869,9 @@ class FileTransferHandler(FileTransferAttributes):
         filelog("ack-file-chunk: %s", packet[1:])
         chunk_id, state, error_message, chunk = packet[1:5]
         if not state:
-            filelog.error("Error: remote end is cancelling the file transfer:")
-            filelog.error(" %s", error_message)
-            del self.send_chunks_in_progress[chunk_id]
+            filelog.info("the remote end is cancelling the file transfer:")
+            filelog.info(" %s", bytestostr(error_message))
+            self.cancel_sending(chunk_id)
             return
         chunk_id = bytestostr(chunk_id)
         chunk_state = self.send_chunks_in_progress.get(chunk_id)
@@ -779,7 +880,7 @@ class FileTransferHandler(FileTransferAttributes):
             return
         if chunk_state[-1]!=chunk:
             filelog.error("Error: chunk number mismatch (%i vs %i)", chunk_state, chunk)
-            del self.send_chunks_in_progress[chunk_id]
+            self.cancel_sending(chunk_id)
             return
         start_time, data, chunk_size, timer, chunk = chunk_state
         if not data:
@@ -787,7 +888,7 @@ class FileTransferHandler(FileTransferAttributes):
             elapsed = monotonic_time()-start_time
             filelog("%i chunks of %i bytes sent in %ims (%sB/s)",
                     chunk, chunk_size, elapsed*1000, std_unit(chunk*chunk_size/elapsed))
-            del self.send_chunks_in_progress[chunk_id]
+            self.cancel_sending(chunk_id)
             return
         assert chunk_size>0
         #carve out another chunk:
@@ -805,3 +906,7 @@ class FileTransferHandler(FileTransferAttributes):
 
     def compressed_wrapper(self, datatype, data, level=5):
         raise NotImplementedError()
+
+    def transfer_progress_update(self, send=True, transfer_id=0, elapsed=0, position=0, total=0, error=None):
+        #this method is overriden in the gtk client:
+        filelog("transfer_progress_update%s", (send, transfer_id, elapsed, position, total, error))

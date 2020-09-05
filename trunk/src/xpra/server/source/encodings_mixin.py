@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
 # Copyright (C) 2011 Serviware (Arthur Huillet, <ahuillet@serviware.com>)
-# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -14,7 +14,7 @@ from xpra.server.window.batch_config import DamageBatchConfig
 from xpra.server.server_core import ClientException
 from xpra.codecs.video_helper import getVideoHelper
 from xpra.codecs.codec_constants import video_spec
-from xpra.net.compression import use_lz4, use_lzo, use_brotli
+from xpra.net.compression import use
 from xpra.os_util import monotonic_time, strtobytes
 from xpra.server.background_worker import add_work_item
 from xpra.util import csv, typedict, envint
@@ -33,16 +33,14 @@ Runs the encode thread.
 """
 class EncodingsMixin(StubSourceMixin):
 
-    def __init__(self):
-        self.server_core_encodings = []
-        self.server_encodings = []
-        self.default_encoding = None
-        self.scaling_control = None
+    @classmethod
+    def is_needed(cls, caps : typedict) -> bool:
+        return bool(caps.strtupleget("encodings"))
 
-        self.default_quality = 40       #default encoding quality for lossy encodings
-        self.default_min_quality = 10   #default minimum encoding quality
-        self.default_speed = 40         #encoding speed (only used by x264)
-        self.default_min_speed = 10     #default minimum encoding speed
+
+    def init_state(self):
+        self.wants_encodings = False
+        self.wants_features = False
 
         #contains default values, some of which may be supplied by the client:
         self.default_batch_config = DamageBatchConfig()
@@ -53,6 +51,7 @@ class EncodingsMixin(StubSourceMixin):
         self.encoding = None                        #the default encoding for all windows
         self.encodings = ()                         #all the encodings supported by the client
         self.core_encodings = ()
+        self.encodings_packet = False               #supports delayed encodings initialization?
         self.window_icon_encodings = ["premult_argb32"]
         self.rgb_formats = ("RGB",)
         self.encoding_options = typedict()
@@ -61,8 +60,8 @@ class EncodingsMixin(StubSourceMixin):
         self.auto_refresh_delay = 0
 
         self.zlib = True
-        self.lz4 = use_lz4
-        self.lzo = use_lzo
+        self.lz4 = use("lz4")
+        self.lzo = use("lzo")
 
         #for managing the recalculate_delays work:
         self.calculate_window_pixels = {}
@@ -102,7 +101,7 @@ class EncodingsMixin(StubSourceMixin):
         return tuple(window_sources.values())
 
 
-    def get_caps(self):
+    def get_caps(self) -> dict:
         caps = {}
         if self.wants_encodings and self.encoding:
             caps["encoding"] = self.encoding
@@ -218,7 +217,7 @@ class EncodingsMixin(StubSourceMixin):
             self.source_remove(ct)
 
 
-    def parse_client_caps(self, c):
+    def parse_client_caps(self, c : typedict):
         #batch options:
         def batch_value(prop, default, minv=None, maxv=None):
             assert default is not None
@@ -248,15 +247,20 @@ class EncodingsMixin(StubSourceMixin):
 
         #general features:
         self.zlib = c.boolget("zlib", True)
-        self.lz4 = c.boolget("lz4", False) and use_lz4
-        self.lzo = c.boolget("lzo", False) and use_lzo
-        self.brotli = c.boolget("brotli", False) and use_brotli
+        self.lz4 = c.boolget("lz4", False) and use("lz4")
+        self.lzo = c.boolget("lzo", False) and use("lzo")
+        self.brotli = c.boolget("brotli", False) and use("brotli")
         log("compressors: zlib=%s, lz4=%s, lzo=%s, brotli=%s",
             self.zlib, self.lz4, self.lzo, self.brotli)
 
         self.vrefresh = c.intget("vrefresh", -1)
 
-        default_min_delay = max(DamageBatchConfig.MIN_DELAY, 1000//(self.vrefresh or 60))
+        #assume 50Hz:
+        ms_per_frame = 1000//50
+        if 30<=self.vrefresh<=500:
+            #looks like a valid vrefresh value, use it:
+            ms_per_frame = 1000//self.vrefresh
+        default_min_delay = max(DamageBatchConfig.MIN_DELAY, ms_per_frame)
         dbc = self.default_batch_config
         dbc.always      = bool(batch_value("always", DamageBatchConfig.ALWAYS))
         dbc.min_delay   = batch_value("min_delay", default_min_delay, 0, 1000)
@@ -268,16 +272,19 @@ class EncodingsMixin(StubSourceMixin):
         log("default batch config: %s", dbc)
 
         #encodings:
-        self.encodings = c.strlistget("encodings")
-        self.core_encodings = c.strlistget("encodings.core", self.encodings)
+        self.encodings_packet = c.boolget("encodings.packet", False)
+        self.encodings = c.strtupleget("encodings")
+        self.core_encodings = c.strtupleget("encodings.core", self.encodings)
         log("encodings=%s, core_encodings=%s", self.encodings, self.core_encodings)
         #we can't assume that the window mixin is loaded,
         #or that the ui_client flag exists:
         send_ui = getattr(self, "ui_client", True) and getattr(self, "send_windows", True)
         if send_ui and not self.core_encodings:
             raise ClientException("client failed to specify any supported encodings")
-        self.window_icon_encodings = c.strlistget("encodings.window-icon", ["premult_argb32"])
-        self.rgb_formats = c.strlistget("encodings.rgb_formats", ["RGB"])
+        self.window_icon_encodings = c.strtupleget("encodings.window-icon", ("premult_argb32",))
+        #try both spellings for older versions:
+        for x in ("encodings", "encoding",):
+            self.rgb_formats = c.strtupleget(x+".rgb_formats", self.rgb_formats)
         #skip all other encoding related settings if we don't send pixels:
         if not send_ui:
             log("windows/pixels forwarding is disabled for this client")
@@ -310,7 +317,7 @@ class EncodingsMixin(StubSourceMixin):
                 stripped_k = k[len(b"encoding."):]
                 if stripped_k in (b"transparency",
                                   b"rgb_zlib", b"rgb_lz4", b"rgb_lzo",
-                                  b"video_scaling"):
+                                  ):
                     v = c.boolget(k)
                 elif stripped_k in (b"initial_quality", b"initial_speed",
                                     b"min-quality", b"quality",
@@ -351,22 +358,25 @@ class EncodingsMixin(StubSourceMixin):
             self.default_encoding_options["min-speed"] = ms
         log("default encoding options: %s", self.default_encoding_options)
         self.auto_refresh_delay = c.intget("auto_refresh_delay", 0)
-        #check for mmap:
-        if getattr(self, "mmap_size", 0)==0:
-            others = tuple(x for x in self.core_encodings
-                           if x in self.server_core_encodings and x!=self.encoding)
-            if self.encoding=="auto":
-                s = "automatic picture encoding enabled"
-            else:
-                s = "using %s as primary encoding" % self.encoding
-            if others:
-                log.info(" %s, also available:", s)
-                log.info("  %s", csv(others))
-            else:
-                log.warn(" %s", s)
-                log.warn("  no other encodings are available!")
+
+    def print_encoding_info(self):
+        log("print_encoding_info() core-encodings=%s, server-core-encodings=%s",
+            self.core_encodings, self.server_core_encodings)
+        others = tuple(x for x in self.core_encodings
+                       if x in self.server_core_encodings and x!=self.encoding)
+        if self.encoding=="auto":
+            s = "automatic picture encoding enabled"
+        else:
+            s = "using %s as primary encoding" % self.encoding
+        if others:
+            log.info(" %s, also available:", s)
+            log.info("  %s", csv(others))
+        else:
+            log.warn(" %s", s)
+            log.warn("  no other encodings are available!")
 
     def parse_proxy_video(self):
+        self.wait_for_threaded_init()
         from xpra.codecs.enc_proxy.encoder import Encoder
         proxy_video_encodings = self.encoding_options.get("proxy.video.encodings")
         proxylog("parse_proxy_video() proxy.video.encodings=%s", proxy_video_encodings)
@@ -376,7 +386,7 @@ class EncodingsMixin(StubSourceMixin):
                     #make a new spec based on spec_props:
                     spec_prop = typedict(spec_prop)
                     input_colorspace = spec_prop.strget("input_colorspace")
-                    output_colorspaces = spec_prop.strlistget("output_colorspaces")
+                    output_colorspaces = spec_prop.strtupleget("output_colorspaces")
                     if not input_colorspace or not output_colorspaces:
                         log.warn("Warning: invalid proxy video encoding '%s':", encoding)
                         log.warn(" missing colorspace attributes")
@@ -400,7 +410,7 @@ class EncodingsMixin(StubSourceMixin):
     # Functions used by the server to request something
     # (window events, stats, user requests, etc)
     #
-    def set_auto_refresh_delay(self, delay, window_ids):
+    def set_auto_refresh_delay(self, delay : int, window_ids):
         if window_ids is not None:
             wss = (self.window_sources.get(wid) for wid in window_ids)
         else:
@@ -409,7 +419,7 @@ class EncodingsMixin(StubSourceMixin):
             if ws is not None:
                 ws.set_auto_refresh_delay(delay)
 
-    def set_encoding(self, encoding, window_ids, strict=False):
+    def set_encoding(self, encoding : str, window_ids, strict=False):
         """ Changes the encoder for the given 'window_ids',
             or for all windows if 'window_ids' is None.
         """
@@ -445,7 +455,7 @@ class EncodingsMixin(StubSourceMixin):
             self.encoding = encoding
 
 
-    def get_info(self):
+    def get_info(self) -> dict:
         info = {
                 "auto_refresh"      : self.auto_refresh_delay,
                 "lz4"               : self.lz4,
@@ -475,24 +485,24 @@ class EncodingsMixin(StubSourceMixin):
         return info
 
 
-    def set_min_quality(self, min_quality):
+    def set_min_quality(self, min_quality : int):
         for ws in tuple(self.all_window_sources()):
             ws.set_min_quality(min_quality)
 
-    def set_quality(self, quality):
+    def set_quality(self, quality : int):
         for ws in tuple(self.all_window_sources()):
             ws.set_quality(quality)
 
-    def set_min_speed(self, min_speed):
+    def set_min_speed(self, min_speed : int):
         for ws in tuple(self.all_window_sources()):
             ws.set_min_speed(min_speed)
 
-    def set_speed(self, speed):
+    def set_speed(self, speed : int):
         for ws in tuple(self.all_window_sources()):
             ws.set_speed(speed)
 
 
-    def update_batch(self, wid, window, batch_props):
+    def update_batch(self, wid : int, window, batch_props):
         ws = self.window_sources.get(wid)
         if ws:
             if "reset" in batch_props:
@@ -505,7 +515,7 @@ class EncodingsMixin(StubSourceMixin):
                     setattr(ws.batch_config, x, batch_props.intget(x))
             log("batch config updated for window %s: %s", wid, ws.batch_config)
 
-    def make_batch_config(self, wid, window):
+    def make_batch_config(self, wid : int, window):
         batch_config = self.default_batch_config.clone()
         batch_config.wid = wid
         #scale initial delay based on window size

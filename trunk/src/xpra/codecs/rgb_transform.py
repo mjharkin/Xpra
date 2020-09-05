@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -12,7 +12,7 @@ from xpra.util import first_time
 from xpra.log import Logger
 try:
     from xpra.codecs.argb.argb import argb_swap #@UnresolvedImport
-except ImportError:
+except ImportError:     # pragma: no cover
     argb_swap = None
 
 log = Logger("encoding")
@@ -36,7 +36,7 @@ PIL_conv_noalpha = {
              }
 
 
-def rgb_reformat(image, rgb_formats, supports_transparency):
+def rgb_reformat(image, rgb_formats, supports_transparency) -> bool:
     """ convert the RGB pixel data into a format supported by the client """
     #need to convert to a supported format!
     pixel_format = bytestostr(image.get_pixel_format())
@@ -49,10 +49,9 @@ def rgb_reformat(image, rgb_formats, supports_transparency):
         log("rgb_reformat: using argb_swap for %s", image)
         return argb_swap(image, rgb_formats, supports_transparency)
     if supports_transparency:
-        modes = PIL_conv.get(pixel_format)
+        modes = PIL_conv.get(pixel_format, ())
     else:
-        modes = PIL_conv_noalpha.get(pixel_format)
-    assert modes, "no PIL conversion from %s" % (pixel_format)
+        modes = PIL_conv_noalpha.get(pixel_format, ())
     target_rgb = [(im,om) for (im,om) in modes if om in rgb_formats]
     if not target_rgb:
         log("rgb_reformat: no matching target modes for converting %s to %s", image, rgb_formats)

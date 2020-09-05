@@ -11,16 +11,14 @@ Functions for converting to and from X11 properties.
 """
 
 import struct
+from io import BytesIO
 
-from xpra.os_util import hexstr, PYTHON3
+from xpra.os_util import hexstr
 from xpra.x11.bindings.window_bindings import constants     #@UnresolvedImport
 from xpra.log import Logger
 
 log = Logger("x11", "window")
 
-if PYTHON3:
-    long = int              #@ReservedAssignment
-    unicode = str           #@ReservedAssignment
 
 USPosition      = constants["USPosition"]
 PPosition       = constants["PPosition"]
@@ -51,7 +49,7 @@ def _force_length(name, data, length, noerror_length=None):
     return data[:length]
 
 
-class NetWMStrut(object):
+class NetWMStrut:
     def __init__(self, _disp, data):
         # This eats both _NET_WM_STRUT and _NET_WM_STRUT_PARTIAL.  If we are
         # given a _NET_WM_STRUT instead of a _NET_WM_STRUT_PARTIAL, then it
@@ -76,7 +74,7 @@ class NetWMStrut(object):
         return "NetWMStrut(%s)" % self.todict()
 
 
-class MotifWMHints(object):
+class MotifWMHints:
     def __init__(self, _disp, data):
         #some applications use the wrong size (ie: blender uses 16) so pad it:
         sizeof_long = struct.calcsize(b"@L")
@@ -224,11 +222,11 @@ def _read_image(_disp, stream):
         return None
     return width, height, "BGRA", data
 
-# This returns a cairo ImageSurface which contains the largest icon defined in
-# a _NET_WM_ICON property.
+# This returns a list of icons from a _NET_WM_ICON property.
+# each icon is a tuple:
+# (width, height, fmt, data)
 def NetWMIcons(disp, data):
     icons = []
-    from io import BytesIO
     stream = BytesIO(data)
     while True:
         icon = _read_image(disp, stream)
@@ -253,27 +251,24 @@ def _from_utf8(_disp, v):
     return v.decode("UTF-8")
 
 
+def _from_long(_disp, v):
+    return struct.unpack(b"@L", v)[0]
+
+def _to_long(_disp, v):
+    return struct.pack(b"@L", v)
+
 
 PROP_TYPES = {
     # Python type, X type Atom, formatbits, serializer, deserializer, list
     # terminator
-    "utf8": (unicode, "UTF8_STRING", 8, _to_utf8, _from_utf8, b"\0"),
+    "utf8": (str, "UTF8_STRING", 8, _to_utf8, _from_utf8, b"\0"),
     # In theory, there should be something clever about COMPOUND_TEXT here.  I
     # am not sufficiently clever to deal with COMPOUNT_TEXT.  Even knowing
     # that Xutf8TextPropertyToTextList exists.
-    "latin1": (unicode, "STRING", 8, _to_latin1, _from_latin1, b"\0"),
-    "state": ((int, long), "WM_STATE", 32,
-            lambda _disp, c: struct.pack(b"@L", c),
-            lambda _disp, d: struct.unpack(b"@L", d)[0],
-            b""),
-    "u32": ((int, long), "CARDINAL", 32,
-            lambda _disp, c: struct.pack(b"@L", c),
-            lambda _disp, d: struct.unpack(b"@L", d)[0],
-            b""),
-    "integer": ((int, long), "INTEGER", 32,
-            lambda _disp, c: struct.pack(b"@L", c),
-            lambda _disp, d: struct.unpack(b"@L", d)[0],
-            b""),
+    "latin1": (str, "STRING", 8, _to_latin1, _from_latin1, b"\0"),
+    "state": (int, "WM_STATE", 32, _to_long, _from_long, b""),
+    "u32": (int, "CARDINAL", 32, _to_long, _from_long, b""),
+    "integer": (int, "INTEGER", 32, _to_long, _from_long, b""),
     "strut": (NetWMStrut, "CARDINAL", 32,
               unsupported, NetWMStrut, None),
     "strut-partial": (NetWMStrut, "CARDINAL", 32,

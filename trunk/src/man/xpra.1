@@ -14,14 +14,14 @@ xpra \- viewer for remote, persistent X applications
 .SH SYNOPSIS
 .PD 0
 .HP \w'xpra\ 'u
-\fBxpra\fP \fBstart\fP [\fI:DISPLAY\fP] | \fBxpra\fP \fBstart\fP \fIssh:HOST:DISPLAY\fP |
-\fBxpra\fP \fBstart-desktop\fP [\fI:DISPLAY\fP] | \fBxpra\fP \fBstart-desktop\fP \fIssh:HOST:DISPLAY\fP
+\fBxpra\fP \fBstart\fP [CONNECTIONSTRING] |
+\fBxpra\fP \fBstart-desktop\fP [CONNECTIONSTRING]
 [\fBOPTIONS..\fP]
 .HP
 \fBxpra\fP \fBattach\fP [CONNECTIONSTRING]
 [\fBOPTIONS..\fP]
 .HP
-\fBxpra\fP \fBshadow\fP [\fI:DISPLAY\fP] | \fIssh:[USER@]HOST[:DISPLAY]\fP
+\fBxpra\fP \fBshadow\fP [CONNECTIONSTRING]
 [\fBOPTIONS..\fP]
 .HP
 \fBxpra\fP \fBproxy\fP [\fI:DISPLAY\fP]
@@ -29,7 +29,7 @@ xpra \- viewer for remote, persistent X applications
 .HP
 \fBxpra\fP \fBstop\fP | \fBxpra\fP \fBexit\fP | \fBxpra\fP \fBdetach\fP |
 \fBxpra\fP \fBscreenshot\fP \fIfilename\fP | \fBxpra\fP \fBversion\fP |
-\fBxpra\fP \fBinfo\fP [CONNECTIONSTRING]
+\fBxpra\fP \fBinfo\fP [CONNECTIONSTRING] |
 \fBxpra\fP \fBtop\fP [CONNECTIONSTRING]
 [\fBOPTIONS..\fP]
 .HP
@@ -43,16 +43,20 @@ xpra \- viewer for remote, persistent X applications
 .HP
 \fBxpra\fP \fBlist\fP [\fB--socket-dir\fP=\fIDIR\fP]
 .HP
+\fBxpra\fP \fBlist-windows\fP [\fB--socket-dir\fP=\fIDIR\fP]
+.HP
+\fBxpra\fP \fBshell\fP [CONNECTIONSTRING]
+.HP
 \fBxpra\fP \fBshowconfig\fP [\fBOPTIONS..\fP]
 .HP
 \fBxpra\fP \fBshowsetting\fP [\fBSETTING1..\fP]
 .HP
 \fBxpra\fP \fBlist-mdns\fP
 .HP
-\fBxpra\fP \fBupgrade\fP \fI:[DISPLAY]\fP [...any options accepted by
+\fBxpra\fP \fBupgrade\fP \fI[:DISPLAY]\fP [...any options accepted by
 \fBxpra start\fP...]
 .HP
-\fBxpra\fP \fBupgrade-desktop\fP \fI:[DISPLAY]\fP [...any options accepted by
+\fBxpra\fP \fBupgrade-desktop\fP \fI[:DISPLAY]\fP [...any options accepted by
 \fBxpra start-desktop\fP...]
 .PD
 .\" --------------------------------------------------------------------
@@ -105,7 +109,7 @@ and from that host xpra will set up an SSH connection to the xpra server.
 
 .P
 For backwards compatibility, SSH mode also supports the syntax:
-\fBssh:[USERNAME[:PASSWORD]@HOST:DISPLAY\fP but this form does not
+\fBssh:[USERNAME[:PASSWORD]@]HOST:DISPLAY\fP but this form does not
 support specifying the SSH port number.
 Older versions also used the form \fBprotocol:host:port\fP, but users
 are encouraged to move to a more standard URI format using \fB://\fP as
@@ -132,7 +136,7 @@ No window will appear until you attach with \fBxpra attach\fP.
 The start child commands will inherit an environment tailored
 for running under xpra.
 .TP
-\fBxpra start\fP \fIssh:bigbox:7 --start=xterm\fP
+\fBxpra start\fP \fIssh://bigbox/7 --start=xterm\fP
 Start an xpra server on \fIbigbox\fP with an xterm in it,
 and connect to it.
 .TP
@@ -143,8 +147,16 @@ assigned display number.
 \fBxpra list\fP
 Show a list of xpra servers you have running on the current host.
 .TP
+\fBxpra list-windows\fP
+Show a list of xpra servers you have running on the current host,
+including the session name and a list of windows.
+(only if the session can be queried using \fIxpra info\fP)
+.TP
 \fBxpra\fP \fBlist-mdns\fP
 Show a list of xpra servers found via mDNS. (local network)
+.TP
+\fBxpra\fP \fBshell\fP
+Start an interactive debug shell.
 .TP
 \fBxpra showconfig\fP
 Shows the configuration that would be used with other sub-commands,
@@ -158,7 +170,7 @@ configuration directory set this value.
 Attach to the xpra server that is using local display number \fI:7\fP.
 Any apps running on that server will appear on your screen.
 .TP
-\fBxpra attach\fP \fIssh:foo@frodo:7\fP
+\fBxpra attach\fP \fIssh://foo@frodo/7\fP
 Use ssh to attach to the xpra server that is running on machine
 \fIfrodo\fP as user \fIfoo\fP and using display \fI:7\fP.
 Any apps running on that server will appear on your local screen.
@@ -217,13 +229,13 @@ attach\fP, \fBxpra detach\fP, \fBxpra stop\fP, \fBxpra exit\fP,
 \fBxpra version\fP, \fBxpra info\fP, \fBxpra list\fP or \fBxpra screenshot\fP then you
 can use a display of the form
 \fB:\fP\fIDISPLAY\fP to refer to a server on the local host, or one of
-the form \fBssh:\fP\fI[USER@]HOST\fP\fB:\fP\fIDISPLAY\fP to refer to a server
+the form \fBssh://\fP\fI[USER@]HOST\fP\fB/\fP\fIDISPLAY\fP to refer to a server
 on a remote host; xpra will automatically connect to the remote host
 using \fBssh\fP(1).  Generally, if you have only one xpra session
 running on a machine (which you can verify by running \fBxpra list\fP
 on that machine), then you can omit the number entirely; \fBxpra
 attach\fP alone will attach to the lone xpra server on the current
-machine regardless of its number, \fBxpra attach ssh:frodo\fP will
+machine regardless of its number, \fBxpra attach ssh://frodo\fP will
 similarly attach to the lone xpra session on a remote machine.
 
 Connecting using the display number assumes that the client and server
@@ -236,16 +248,15 @@ If the xpra server was given the \fB--bind-tcp\fP, \fB--bind-ssl\fP
 \fB--bind-udp\fP=\fI[HOST]:PORT\fP,
 \fB--bind-ws\fP, \fB--bind-wss\fP or \fB--bind-vsock\fP option
 when started then you can also connect
-to it using a display of the form \fBtcp://HOST:PORT\fP,
-\fBudp://HOST:PORT\fP, \fBssl://HOST:PORT\fP,
-\fBws://HOST:PORT\fP, \fBwss://HOST:PORT\fP or \fBvsock://HOST:PORT\fP.
-(Notice that \fBssh:\fP takes an optional \fIdisplay\fP number,
-while those take a required \fIport\fP number.)
+to it using a display of the form \fBtcp://HOST:PORT[/DISPLAY]\fP,
+\fBudp://HOST:PORT[/DISPLAY]\fP, \fBssl://HOST:PORT[/DISPLAY]\fP,
+\fBws://HOST:PORT[/DISPLAY]\fP, \fBwss://HOST:PORT[/DISPLAY]\fP or
+\fBvsock://HOST:PORT[/DISPLAY]\fP.
 .\" --------------------------------------------------------------------
 .SH SUBCOMMANDS
 .SS xpra start
 This command starts a new xpra server, including any necessary setup.
-(When starting a remote server with the \fBssh:HOST:DISPLAY\fP syntax,
+(When starting a remote server with the \fBssh://HOST/DISPLAY\fP syntax,
 the new session will also be attached.)
 .SS xpra start-desktop
 Starts a nested X11 server, all child commands will be started in the
@@ -535,7 +546,7 @@ The value may be specified using standard units, ie:
 In \fIauto\fP mode, the client will set the bandwidth limit
 value to 80% of the maximum speed of the network interface
 it is using to connect to the server.
-.TP
+
 
 .SS Options for start, start-desktop, upgrade, proxy and shadow
 .TP
@@ -545,11 +556,13 @@ i.e. 'daemonizes', and redirects its output to a log file.
 This can be used to prevent that behavior (useful mostly for debugging).
 .TP
 
-\fB--resize-display\fP=\fIyes\fP|\fIno\fP
+\fB--resize-display\fP=\fIyes\fP|\fIno|WIDTHxHEIGHT\fP
 Resize the virtual display to match the resolution of
 the client currently connected.
 This only applies to the \fIstart\fP and \fIstart-desktop\fP
 subcommands.
+If a resolution is given, this will be the initial resolution
+of the display and the display will be resizable.
 .TP
 
 \fB--fake-xinerama\fP=\fIPATH\fP|\fIauto\fP|\fIno\fP
@@ -576,14 +589,80 @@ If the file has not been replaced,
 it will be deleted when the server exits.
 .TP
 
-\fB--bind\fP=\fIBIND_LOCATION\fP
+\fB--challenge-handlers\fP=\fIMODULE:options\fP
+Configures which challenge handlers are used by the client and in
+which order. This option may be repeated to specify multiple handlers,
+which can be useful if the server sends more than one authentication
+challenge.
+The default value is: \fIall\fP which corresponds to:
+\fIuri,file,env,kerberos,gss,u2f,prompt\fP.
+.RS
+.IP \fBuri\fP
+Use the password specified on the connection string, if any.
+.IP \fBfile\fP
+The filename used to store the password can be specified using the
+\fIfilename\fP option.
+If this option is not specified, it will fallback to using the
+password filename specified with the \fIpassword-file\fP switch.
+.IP \fBenv\fP
+Use the password specified using the environment variable
+specified using the \fIname\fP option, which defaults to
+\fIXPRA_PASSWORD\fP if unspecified.
+.IP \fBkerberos\fP
+Requests a kerberos token for the service specified.
+.IP \fBgss\fP
+Requests a gss token for the service specified.
+.IP \fBu2f\fP
+Requests a token from a U2F device.
+.IP \fBprompt\fP
+Prompt the user for the value.
+Terminal clients prompt using text input, GUI clients
+use a dialog.
+.RE
+.PP
+.TP
+
+\fB--min-port\fP=\fIPORT\fP
+The minimum port number allowed when creating UDP and TCP sockets.
+You can use a lower value to allow unprivileged users to bind to
+privileged ports when starting sessions via the system wide proxy server.
+The default value is 1024 which is the standard value for privileged ports.
+.TP
+\fB--mdns\fP=\fIyes\fP|\fIno\fP
+Enable or disable the publication of new sessions via mDNS.
+.TP
+\fB--dbus-launch\fP=\fICOMMAND\fP|\fIno\fP
+Start the session within a dbus-launch context, you can specify
+the dbus launch command to use, or turn it off completely.
+Some features may not be available without a dbus context.
+.TP
+\fB--dbus-proxy\fP=\fIyes\fP|\fIno\fP
+Allows the client to forward dbus calls to the server.
+.TP
+\fB--dbus-control\fP=\fIyes\fP|\fIno\fP
+Start a dbus server which can be used to interact with the server
+process.
+
+
+.SS Options for start, start-desktop, upgrade and listen:
+In previous versions, the authentication for each connection type
+was configured using a separate command line option which would
+apply to all connections of the same type. ie: \fItcp-auth\fP for
+\fIbind-tcp\fP.
+Although this is still supported as a fallback, the recommended
+way is to specify authentication options using bind properties.
+ie: \fIbind-tcp=0.0.0.0:14500,auth=file:filename=password.txt\fP.
+For more details on authentication configuration, see \fIauth=\fP.
+The properties can also define extra configuration options.
+
+\fB--bind\fP=\fIBIND_LOCATION[,PROPERTIES]\fP
 Create a local Unix domain socket (on Unix)
 or named-pipe (on MS Windows) for each \fBbind\fP option specified.
 
 This option can be specified multiple times to specify multiple
 socket locations.
 These sockets support local connections with the \fB:7\fP-style display
-address, and remote connections with the \fBssh:frodo:7\fP-style
+address, and remote connections with the \fBssh://frodo/7\fP-style
 display address.
 
 Local sockets may also process HTTP / Websocket connections
@@ -604,7 +683,7 @@ create the socket using the path specified
 .RE
 .PP
 .TP
-\fB--bind-tcp\fP=\fI[HOST]:PORT\fP
+\fB--bind-tcp\fP=\fI[HOST]:PORT[,PROPERTIES]\fP
 Create a TCP socket for each \fB--bind-tcp\fP option specified.
 If the host portion is omitted, then 127.0.0.1 (localhost) will be
 used.  If you wish to accept connections on all interfaces, pass
@@ -619,7 +698,7 @@ if the \fBhtml\fP switch is enabled.
 TCP sockets may also be upgraded to SSL sockets if the
 \fBssl\fP switch is enabled.
 .TP
-\fB--bind-udp\fP=\fI[HOST]:PORT\fP
+\fB--bind-udp\fP=\fI[HOST]:PORT[,PROPERTIES]\fP
 Create a UDP socket for each \fB--bind-udp\fP option specified.
 If the host portion is omitted, then 127.0.0.1 (localhost) will be
 used.  If you wish to accept connections on all interfaces, pass
@@ -632,30 +711,30 @@ UDP sessions are trivial to hijack for anyone able to sniff
 even just a single packet, it should only be used in very specific
 use-cases, and never over unsecured networks.
 .TP
-\fB--bind-ws\fP=\fI[HOST]:PORT\fP
+\fB--bind-ws\fP=\fI[HOST]:PORT[,PROPERTIES]\fP
 Create an HTTP / Websocket listener.
 See \fBbind-tcp\fP for host restrictions,
 you should use the \fBauth-ws\fP to secure access.
 .TP
-\fB--bind-wss\fP=\fI[HOST]:PORT\fP
+\fB--bind-wss\fP=\fI[HOST]:PORT[,PROPERTIES]\fP
 Create an HTTPS / Secure Websocket listener.
 See \fBbind-tcp\fP for host restrictions,
 you should use the \fBauth-wss\fP to secure access.
 .TP
-\fB--bind-ssl\fP=\fI[HOST]:PORT\fP
+\fB--bind-ssl\fP=\fI[HOST]:PORT[,PROPERTIES]\fP
 Just like --bind-tcp\fP but for SSL sockets.
 See \fIssl-auth\fP and the other SSL options.
 .TP
-\fB--bind-rfb\fP=\fI[HOST]:PORT\fP
+\fB--bind-rfb\fP=\fI[HOST]:PORT[,PROPERTIES]\fP
 Listens for RFB connections on the given port.
 These sockets are only supported with the \fBstart-desktop\fP and
 \fBshadow\fP modes.
 .TP
-\fB--bind-vsock\fP=\fICID:PORT\fP
+\fB--bind-vsock\fP=\fICID:PORT[,PROPERTIES]\fP
 Create a VSOCK socket for each \fB--bind-vsock\fP option specified.
 .TP
 \fB--auth\fP=\fIMODULE[:OPTION=VALUE]\fP
-Specifies the authentication module to use for unix domain sockets
+Specifies the authentication module to use for all unix domain sockets
 created using the \fBbind\fP switch. Authentication modules can
 validate a username and password against a variety of backend modules:
 .RS
@@ -779,7 +858,7 @@ to UDP sockets (sockets defined using the \fBbind-udp\fP switch).
 \fB--ws-auth\fP=\fIMODULE\fP
 Just like the \fBauth\fP switch, except this one only applies
 to ws sockets: sockets defined using the \fBbind-ws\fP switch,
-or TCP sockets upgraded to websockets. (if the \fBhtmlfP option is enabled).
+or TCP sockets upgraded to websockets. (if the \fBhtml\fP option is enabled).
 .TP
 \fB--wss-auth\fP=\fIMODULE\fP
 Just like the \fBauth\fP switch, except this one only applies
@@ -799,62 +878,6 @@ Authentication module to use for the \fBbind-rfb\fP sockets.
 \fB--vsock-auth\fP=\fIMODULE\fP
 Just like the \fBauth\fP switch, except this one only applies
 to VSOCK sockets (sockets defined using the \fBbind-vsock\fP switch).
-.TP
-\fB--challenge-handlers\fP=\fIMODULE:options\fP
-Configures which challenge handlers are used by the client and in
-which order. This option may be repeated to specify multiple handlers,
-which can be useful if the server sends more than one authentication
-challenge.
-The default value is: \fIall\fP which corresponds to:
-\fIuri,file,env,kerberos,gss,u2f,prompt\fP.
-.RS
-.IP \fBuri\fP
-Use the password specified on the connection string, if any.
-.IP \fBfile\fP
-The filename used to store the password can be specified using the
-\fIfilename\fP option.
-If this option is not specified, it will fallback to using the
-password filename specified with the \fIpassword-file\fP switch
-or if that is also unset, \fIpassword.txt\fP will be used.
-.IP \fBenv\fP
-Use the password specified using the environment variable
-specified using the \fIname\fP option, which defaults to
-\fIXPRA_PASSWORD\fP if unspecified.
-.IP \fBkerberos\fP
-Requests a kerberos token for the service specified.
-.IP \fBgss\fP
-Requests a gss token for the service specified.
-.IP \fBu2f\fP
-Requests a token from a U2F device.
-.IP \fBprompt\fP
-Prompt the user for the value.
-Terminal clients prompt using text input, GUI clients
-use a dialog.
-.RE
-.PP
-.TP
-
-\fB--min-port\fP=\fIPORT\fP
-The minimum port number allowed when creating UDP and TCP sockets.
-You can use a lower value to allow unprivileged users to bind to
-privileged ports when starting sessions via the system wide proxy server.
-The default value is 1024 which is the standard value for privileged ports.
-.TP
-\fB--mdns\fP=\fIyes\fP|\fIno\fP
-Enable or disable the publication of new sessions via mDNS.
-.TP
-\fB--dbus-launch\fP=\fICOMMAND\fP|\fIno\fP
-Start the session within a dbus-launch context, you can specify
-the dbus launch command to use, or turn it off completely.
-Some features may not be available without a dbus context.
-.TP
-\fB--dbus-proxy\fP=\fIyes\fP|\fIno\fP
-Allows the client to forward dbus calls to the server.
-.TP
-\fB--dbus-control\fP=\fIyes\fP|\fIno\fP
-Start a dbus server which can be used to interact with the server
-process.
-.TP
 
 
 .SS Options for start, start-desktop, upgrade
@@ -932,12 +955,14 @@ Wrap server start commands with systemd-run.
 \fB--systemd-run-args\fP=\fIARGS\fP
 Command line arguments passed to systemd-run.
 .TP
-\fB--use-display\fP
+\fB--use-display\fP=\fIyes\fP|\fIno\fP|\fIauto\fP
 Use an existing display rather than starting one with xvfb.
 You are responsible for starting the display yourself.
 This can also be used to rescue an existing display whose
 xpra server instance crashed or for running xpra against
 an accelerated X11 server.
+With \fIauto\fP, xpra will use the existing display
+if it is found.
 .TP
 \fB--displayfd\fP=\fIFD\fP
 The xpra server will write the display number back on this
@@ -967,9 +992,9 @@ it is not enabled by default.
 Once the server has started, immediately connect a client to it.
 With the value \fBauto\fP, a client is started for remote servers
 only. (servers specified via a network URI)
+If a display is specified and a server is already running,
+xpra will not try to start a new one and it will just attach to it.
 .TP
-
-
 .SS Options for start, start-desktop, upgrade, shadow
 .TP
 \fB--tcp-proxy\fP=\fIHOST:PORT\fP
@@ -1017,7 +1042,6 @@ Use the value 'none' to not load any colourspace conversion modules.
 \fB--socket-permissions\fP=\fIACCESS-MODE\fP
 Specifies the file permissions on the server's unix domain sockets.
 Defaults to 600. This is ignored when \fImmap-group\fP is enabled.
-.TP
 
 
 .SS Options for start, start-desktop, upgrade and attach
@@ -1136,18 +1160,39 @@ Enable or disable webcam forwarding.
 .TP
 \fB--mousewheel\fP=\fIon\fP|\fIoff\fP|\fIinvert\fP|\fIinvert-x\fP|\fIinvert-y\fP|\fIinvert-z\fP
 Mouse wheel handling: can be used to disable mouse wheel forwarding
-or to invert some or all axes.
+using the value \fIno\fP, or to invert some or all axes:
+\fIinvert-all\fP, \fIinvert-x\fP, \fIinvert-y\fP, \fIinvert-z\fP.
+
 .TP
-\fB--remote-logging\fP=\fIyes\fP|\fIno\fP|\fIboth\fP
-Allow the client to forward its log output to the server.
-The client can specify the value \fIboth\fP to both send
-it to the server and keep it locally.
+\fB--remote-logging\fP=\fIboth\fP|\fIall\fP|\fIsend\fP|\fIreceive\fP|\fIno\fP
+.RS
+Remote logging is always initiated by the client,
+but the server can restrict which direction log messages are allowed to flow.
+.IP \fBboth\fP
+The log output is both forwarded and sent locally
+(to \fIstdout\fP, \fIstderr\fP or a log file).
+.IP \fBallow\fP
+Used by the server to allow both \fIsend\fP and \fIreceive\fP,
+when sending the log output it will no longer be recorded locally.
+.IP \fBsend\fP
+Used by the client to send its log output to the server.
+Used by the server to allow clients to request log forwarding.
+.IP \fBreceive\fP
+Used by the client to request that the server sends its log
+output to the client.
+Used by the server to allow clients to forward their logging.
+.IP \fBno\fP
+Remote logging is disabled.
+.RE
+.PP
+
 .TP
 \fB--av-sync\fP=\fIyes\fP|\fIno\fP
 Enable or disable audio-video synchronization.
 The video data will be delayed so that it is displayed in sync with the audio.
 Note: this only applies to video regions, either auto-detected via the builtin
 heuristics or specified using the dbus interface.
+
 
 .SS Options for attach
 .TP
@@ -1157,6 +1202,12 @@ This may have undesirable side effects when multiple applications are
 forwarded through the same xpra server: modal windows will be made modal
 for all the applications forwarded by xpra rather than just the one
 application which owns that window.
+.TP
+\fB--headerbar\fP=\fIyes\fP|\fIno\fP|\fIforce\fP
+Replaces the window's standard title bar with a custom one which
+is used to give access to xpra specific window controls.
+This feature can have side effects and it is incompatible with OpenGL
+acceleration on MS Windows.
 .TP
 \fB--password-file\fP=\fIFILENAME\fP
 Supply the password to be used for connecting to a server that
@@ -1497,6 +1548,7 @@ The client and server will exchange ping and echo packets
 which are used to gather latency statistics.
 Those statistics can be seen using the \fBxpra info\fP command.
 
+
 .SS Options for attach, stop, info, screenshot, version
 .TP
 \fB--ssh\fP\=\fICMD\fP
@@ -1513,7 +1565,7 @@ For example, if you want to use arcfour encryption, then you should run
 .\" produces fine output in the terminal, at least:
 .RS
 .RS
-\fBxpra attach --ssh\fP=\fI"ssh -c arcfour" ssh:frodo:7\fP
+\fBxpra attach --ssh\fP=\fI"ssh -c arcfour" ssh://frodo/7\fP
 
 .RE
 \fINote:\fP Don't bother to enable ssh compression; this
@@ -1635,7 +1687,9 @@ There is a global configuration file in \fI/etc\fP or \fI/usr/local/etc\fP,
 and each user may override those defaults by creating the file \fI.xpra/xpra.conf\fP.
 You can also split the options into multiple files by placing them
 in a \fIconf.d\fP directory with the \fI.conf\fP extension.
-Xpra uses the directory \fI~/.xpra\fP to store a number of files.
+Depending on OS and version,
+xpra uses the directory \fI~/.xpra\fP or \fI/run/<uid>/xpra\fP
+to store a number of files.
 (The examples below are given for the display \fI:7\fP.)
 .TP
 \fI~/.xpra/:7\fP
@@ -1673,8 +1727,8 @@ clients will misbehave in other ways (e.g., input events will be
 misdirected).
 .\" --------------------------------------------------------------------
 .SH REPORTING BUGS
-Send any questions or bugs reports to http://xpra.org/trac/
+Send any questions or bugs reports to https://xpra.org/trac/
 .\" --------------------------------------------------------------------
 .SH SEE ALSO
-\fBscreen\fP(1)
+\fBscreen\fP(1),
 \fBwinswitch_applet\fP(1)

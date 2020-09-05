@@ -10,11 +10,8 @@ from OpenGL.GL import GL_VENDOR, GL_RENDERER, glGetString
 from xpra.util import envbool
 from xpra.client.gl.gl_check import check_PyOpenGL_support
 from xpra.x11.bindings.display_source import get_display_ptr        #@UnresolvedImport
-from xpra.gtk_common.gobject_compat import import_gtk
-from xpra.gtk_common.gtk_util import (
-    display_get_default, get_xwindow, enable_alpha,
-    WINDOW_TOPLEVEL,
-    )
+from xpra.gtk_common.error import xsync
+from xpra.gtk_common.gtk_util import set_visual
 from xpra.log import Logger
 
 log = Logger("opengl")
@@ -46,7 +43,10 @@ GLX_ATTRIBUTES = {
 def c_attrs(props):
     attrs = []
     for k,v in props.items():
-        attrs += [k, v]
+        if v is None:
+            attrs += [k]
+        else:
+            attrs += [k, v]
     attrs += [0, 0]
     return (c_int * len(attrs))(*attrs)
 
@@ -57,7 +57,7 @@ def get_xdisplay():
     return cast(ptr, POINTER(struct__XDisplay))
 
 
-class GLXWindowContext(object):
+class GLXWindowContext:
 
     def __init__(self, glx_context, xid):
         self.context = glx_context
@@ -67,8 +67,9 @@ class GLXWindowContext(object):
 
     def __enter__(self):
         log("glXMakeCurrent: xid=%#x, context=%s", self.xid, self.context)
-        if not GLX.glXMakeCurrent(self.xdisplay, self.xid, self.context):
-            raise Exception("glXMakeCurrent failed")
+        with xsync:
+            if not GLX.glXMakeCurrent(self.xdisplay, self.xid, self.context):
+                raise Exception("glXMakeCurrent failed")
         self.valid = True
 
     def __exit__(self, *_args):
@@ -79,29 +80,42 @@ class GLXWindowContext(object):
             log("glXMakeCurrent: NULL for xid=%#x", self.xid)
             GLX.glXMakeCurrent(self.xdisplay, 0, null_context)
 
+    def update_geometry(self):
+        pass
+
     def swap_buffers(self):
-        assert self.valid
+        assert self.valid, "GLX window context is no longer valid"
         GLX.glXSwapBuffers(self.xdisplay, self.xid)
 
     def __repr__(self):
         return "GLXWindowContext(%#x)" % self.xid
 
 
-class GLXContext(object):
+class GLXContext:
 
     def __init__(self, alpha=False):
-        display = display_get_default()
+        self.props = {}
+        self.xdisplay = None
+        self.context = None
+        self.bit_depth = 0
+        from gi.repository import Gdk
+        display = Gdk.Display.get_default()
+        if not display:
+            log.warn("Warning: GLXContext: no default display")
+            return
         screen = display.get_default_screen()
         bpc = 8
-        attrs = c_attrs({
-            GLX.GLX_RGBA            : True,
+        pyattrs = {
+            GLX.GLX_RGBA            : None,
             GLX.GLX_RED_SIZE        : bpc,
             GLX.GLX_GREEN_SIZE      : bpc,
             GLX.GLX_BLUE_SIZE       : bpc,
-            GLX.GLX_ALPHA_SIZE      : int(alpha)*bpc,
-            GLX.GLX_DOUBLEBUFFER    : int(DOUBLE_BUFFERED),
-            })
-        self.props = {}
+            }
+        if alpha:
+            pyattrs[GLX.GLX_ALPHA_SIZE] = int(alpha)*bpc
+        if DOUBLE_BUFFERED:
+            pyattrs[GLX.GLX_DOUBLEBUFFER] = None
+        attrs = c_attrs(pyattrs)
         self.xdisplay = get_xdisplay()
         xvinfo = GLX.glXChooseVisual(self.xdisplay, screen.get_number(), attrs)
         def getconfig(attrib):
@@ -118,9 +132,12 @@ class GLXContext(object):
         self.bit_depth = sum(getconfig(x) for x in (
             GLX.GLX_RED_SIZE, GLX.GLX_GREEN_SIZE, GLX.GLX_BLUE_SIZE, GLX.GLX_ALPHA_SIZE))
         self.props["depth"] = self.bit_depth
-        self.props["has-depth-buffer"] = getconfig(GLX.GLX_DEPTH_SIZE)>0
-        self.props["has-stencil-buffer"] = getconfig(GLX.GLX_STENCIL_SIZE)>0
-        self.props["has-alpha"] = getconfig(GLX.GLX_ALPHA_SIZE)>0
+        #hide those because we don't use them
+        #and because they're misleading: 'has-alpha' may be False
+        #even when we have RGBA support (and therefore very likely to have alpha..)
+        #self.props["has-depth-buffer"] = getconfig(GLX.GLX_DEPTH_SIZE)>0
+        #self.props["has-stencil-buffer"] = getconfig(GLX.GLX_STENCIL_SIZE)>0
+        #self.props["has-alpha"] = getconfig(GLX.GLX_ALPHA_SIZE)>0
         for attrib,name in GLX_ATTRIBUTES.items():
             v = getconfig(attrib)
             if name in ("stereo", "double-buffered", "rgba"):
@@ -134,7 +151,7 @@ class GLXContext(object):
             display_mode.append("ALPHA")
         if getconfig(GLX.GLX_DOUBLEBUFFER):
             display_mode.append("DOUBLE")
-        else:
+        else:   # pragma: no cover
             display_mode.append("SINGLE")
         self.props["display_mode"] = display_mode
         self.context = GLX.glXCreateContext(self.xdisplay, xvinfo, None, True)
@@ -142,7 +159,7 @@ class GLXContext(object):
         def getstr(k):
             try:
                 return glGetString(k)
-            except Exception as e:
+            except Exception as e:  # pragma: no cover
                 self.props["safe"] = False
                 result = getattr(e, "result", None)
                 if result and isinstance(result, str):
@@ -154,12 +171,21 @@ class GLXContext(object):
 
     def check_support(self, force_enable=False):
         i = self.props
-        gtk = import_gtk()
-        tmp = gtk.Window(WINDOW_TOPLEVEL)
+        if not self.xdisplay:
+            return {
+                "success"   : False,
+                "safe"      : False,
+                "enabled"   : False,
+                "message"   : "cannot access X11 display",
+                }
+        from gi.repository import Gtk
+        tmp = Gtk.Window(Gtk.WindowType.TOPLEVEL)
         tmp.resize(1, 1)
         tmp.set_decorated(False)
         tmp.realize()
-        enable_alpha(tmp)
+        da = Gtk.DrawingArea()
+        tmp.add(da)
+        set_visual(da, True)
         win = tmp.get_window()
         log("check_support(%s) using temporary window=%s", force_enable, tmp)
         with self.get_paint_context(win):
@@ -175,7 +201,7 @@ class GLXContext(object):
 
     def get_paint_context(self, gdk_window):
         assert self.context and gdk_window
-        return GLXWindowContext(self.context, get_xwindow(gdk_window))
+        return GLXWindowContext(self.context, gdk_window.get_xid())
 
     def destroy(self):
         c = self.context

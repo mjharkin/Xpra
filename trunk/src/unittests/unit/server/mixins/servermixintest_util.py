@@ -5,9 +5,9 @@
 # later version. See the file COPYING for details.
 
 import unittest
+from gi.repository import GLib
 
 from xpra.util import typedict, AdHocStruct
-from xpra.gtk_common.gobject_compat import import_glib
 from xpra.server.source.stub_source_mixin import StubSourceMixin
 
 
@@ -16,7 +16,7 @@ class ServerMixinTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         super(ServerMixinTest, cls).setUpClass()
-        cls.glib = import_glib()
+        cls.glib = GLib
         cls.main_loop = cls.glib.MainLoop()
 
     def setUp(self):
@@ -72,11 +72,11 @@ class ServerMixinTest(unittest.TestCase):
         return self.source
 
     def create_test_sockets(self):
-        return ()
+        return {}
 
     def _test_mixin_class(self, mclass, opts, caps=None, source_mixin_class=StubSourceMixin):
         x = self.mixin = mclass()
-        x._server_sources = {}
+        x._server_sources = {}  #pylint: disable=protected-access
         x.wait_for_threaded_init = self.wait_for_threaded_init
         x.add_packet_handlers = self.add_packet_handlers
         x.add_packet_handler = self.add_packet_handler

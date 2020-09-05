@@ -1,6 +1,6 @@
 # This file is part of Xpra.
 # Copyright (C) 2008, 2009 Nathaniel Smith <njs@pobox.com>
-# Copyright (C) 2012-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2012-2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -8,14 +8,13 @@ import os
 import sys
 import logging
 import weakref
-from collections import OrderedDict
 # This module is used by non-GUI programs and thus must not import gtk.
 
-from xpra.os_util import bytestostr
+LOG_PREFIX = os.environ.get("XPRA_LOG_PREFIX", "")
+LOG_FORMAT = os.environ.get("XPRA_LOG_FORMAT", "%(asctime)s %(message)s")
+NOPREFIX_FORMAT = "%(message)s"
 
-LOG_PREFIX = bytestostr(os.environ.get("XPRA_LOG_PREFIX", ""))
-LOG_FORMAT = bytestostr(os.environ.get("XPRA_LOG_FORMAT", "%(asctime)s %(message)s"))
-NOPREFIX_FORMAT = u"%(message)s"
+DEBUG_MODULES = os.environ.get("XPRA_DEBUG_MODULES", "").split(",")
 
 logging.basicConfig(format=LOG_FORMAT)
 logging.root.setLevel(logging.INFO)
@@ -47,7 +46,7 @@ def get_all_loggers():
 debug_enabled_categories = set()
 debug_disabled_categories = set()
 
-class FullDebugContext(object):
+class FullDebugContext:
 
     def __enter__(self):
         global debug_enabled_categories
@@ -78,7 +77,7 @@ def remove_debug_category(*cat):
         if c in debug_enabled_categories:
             debug_enabled_categories.remove(c)
 
-def is_debug_enabled(category):
+def is_debug_enabled(category : str):
     if "all" in debug_enabled_categories:
         return True
     if category in debug_enabled_categories:
@@ -110,17 +109,19 @@ def get_loggers_for_categories(*cat):
     return list(matches)
 
 def enable_debug_for(*cat):
-    loggers = get_loggers_for_categories(*cat)
-    for l in loggers:
+    loggers = []
+    for l in get_loggers_for_categories(*cat):
         if not l.is_debug_enabled():
             l.enable_debug()
+            loggers.append(l)
     return loggers
 
 def disable_debug_for(*cat):
-    loggers = get_loggers_for_categories(*cat)
-    for l in loggers:
+    loggers = []
+    for l in get_loggers_for_categories(*cat):
         if l.is_debug_enabled():
             l.disable_debug()
+            loggers.append(l)
     return loggers
 
 
@@ -140,6 +141,7 @@ def standard_logging(log, level, msg, *args, **kwargs):
 global_logging_handler = standard_logging
 
 def set_global_logging_handler(h):
+    assert callable(h)
     global global_logging_handler
     saved = global_logging_handler
     global_logging_handler = h
@@ -167,159 +169,159 @@ def enable_format(format_string):
         pass
 
 
-STRUCT_KNOWN_FILTERS = OrderedDict([
-    ("Client", OrderedDict([
-                ("client"       , "All client code"),
-                ("paint"        , "Client window paint code"),
-                ("draw"         , "Client draw packets"),
-                ("cairo"        , "Cairo paint code used with the GTK3 client"),
-                ("opengl"       , "Client OpenGL rendering"),
-                ("info"         , "About and Session info dialogs"),
-                ("launcher"     , "The client launcher program"),
-                ])),
-    ("General", OrderedDict([
-                ("clipboard"    , "All clipboard operations"),
-                ("notify"       , "Notification forwarding"),
-                ("tray"         , "System Tray forwarding"),
-                ("printing"     , "Printing"),
-                ("file"         , "File transfers"),
-                ("keyboard"     , "Keyboard mapping and key event handling"),
-                ("screen"       , "Screen and workarea dimension"),
-                ("fps"          , "Frames per second"),
-                ("xsettings"    , "XSettings synchronization"),
-                ("dbus"         , "DBUS calls"),
-                ("rpc"          , "Remote Procedure Calls"),
-                ("menu"         , "Menus"),
-                ("events"       , "System and window events"),
-                ])),
-    ("Window", OrderedDict([
-                ("window"       , "All window code"),
-                ("damage"       , "Window X11 repaint events"),
-                ("geometry"     , "Window geometry"),
-                ("shape"        , "Window shape forwarding (XShape)"),
-                ("focus"        , "Window focus"),
-                ("workspace"    , "Window workspace synchronization"),
-                ("metadata"     , "Window metadata"),
-                ("state"        , "Window state"),
-                ("icon"         , "Window icons"),
-                ("frame"        , "Window frame"),
-                ("grab"         , "Window grabs (both keyboard and mouse)"),
-                ("dragndrop"    , "Window drag-n-drop events"),
-                ("filters"      , "Window filters"),
-                ])),
-    ("Encoding", OrderedDict([
-                ("codec"        , "Codec loader and video helper"),
-                ("loader"       , "Pixel compression codec loader"),
-                ("video"        , "Video encoding"),
-                ("score"        , "Video pipeline scoring and selection"),
-                ("encoding"     , "Server side encoding selection and compression"),
-                ("scaling"      , "Picture scaling"),
-                ("delta"        , "Delta pre-compression"),
-                ("scroll"       , "Scrolling detection and compression"),
-                ("xor"          , "XOR delta pre-compression"),
-                ("subregion"    , "Video subregion processing"),
-                ("regiondetect" , "Video region detection"),
-                ("regionrefresh", "Video region refresh"),
-                ("refresh"      , "Refresh of lossy screen updates"),
-                ("compress"     , "Pixel compression (non video)"),
-                ])),
-    ("Codec", OrderedDict([
+STRUCT_KNOWN_FILTERS = {
+    "Client" : {
+                "client"        : "All client code",
+                "paint"         : "Client window paint code",
+                "draw"          : "Client draw packets",
+                "cairo"         : "Cairo paint code used with the GTK3 client",
+                "opengl"        : "Client OpenGL rendering",
+                "info"          : "About and Session info dialogs",
+                "launcher"      : "The client launcher program",
+                },
+    "General" : {
+                "clipboard"     : "All clipboard operations",
+                "notify"        : "Notification forwarding",
+                "tray"          : "System Tray forwarding",
+                "printing"      : "Printing",
+                "file"          : "File transfers",
+                "keyboard"      : "Keyboard mapping and key event handling",
+                "screen"        : "Screen and workarea dimension",
+                "fps"           : "Frames per second",
+                "xsettings"     : "XSettings synchronization",
+                "dbus"          : "DBUS calls",
+                "rpc"           : "Remote Procedure Calls",
+                "menu"          : "Menus",
+                "events"        : "System and window events",
+                },
+    "Window" : {
+                "window"        : "All window code",
+                "damage"        : "Window X11 repaint events",
+                "geometry"      : "Window geometry",
+                "shape"         : "Window shape forwarding (XShape)",
+                "focus"         : "Window focus",
+                "workspace"     : "Window workspace synchronization",
+                "metadata"      : "Window metadata",
+                "alpha"         : "Window Alpha channel (transparency)",
+                "state"         : "Window state",
+                "icon"          : "Window icons",
+                "frame"         : "Window frame",
+                "grab"          : "Window grabs (both keyboard and mouse)",
+                "dragndrop"     : "Window drag-n-drop events",
+                "filters"       : "Window filters",
+                },
+    "Encoding" : {
+                "codec"         : "Codec loader and video helper",
+                "loader"        : "Pixel compression codec loader",
+                "video"         : "Video encoding",
+                "score"         : "Video pipeline scoring and selection",
+                "encoding"      : "Server side encoding selection and compression",
+                "scaling"       : "Picture scaling",
+                "scroll"        : "Scrolling detection and compression",
+                "xor"           : "XOR delta pre-compression",
+                "subregion"     : "Video subregion processing",
+                "regiondetect"  : "Video region detection",
+                "regionrefresh" : "Video region refresh",
+                "refresh"       : "Refresh of lossy screen updates",
+                "compress"      : "Pixel compression (non video)",
+                },
+    "Codec" : {
                 #codecs:
-                ("csc"          , "Colourspace conversion codecs"),
-                ("cuda"         , "CUDA device access (nvenc)"),
-                ("cython"       , "Cython CSC module"),
-                ("swscale"      , "swscale CSC module"),
-                ("libyuv"       , "libyuv CSC module"),
-                ("decoder"      , "All decoders"),
-                ("encoder"      , "All encoders"),
-                ("avcodec"      , "avcodec decoder"),
-                ("libav"        , "libav common code (used by swscale, avcodec and ffmpeg)"),
-                ("ffmpeg"       , "ffmpeg encoder"),
-                ("pillow"       , "Pillow encoder and decoder"),
-                ("jpeg"         , "JPEG codec"),
-                ("vpx"          , "libvpx encoder and decoder"),
-                ("nvenc"        , "nvenc hardware encoder"),
-                ("nvfbc"        , "nfbc screen capture"),
-                ("x264"         , "libx264 encoder"),
-                ("x265"         , "libx265 encoder"),
-                ("webp"         , "libwebp encoder and decoder"),
-                ("webcam"       , "webcam access"),
-                ])),
-    ("Pointer", OrderedDict([
-                ("mouse"        , "Mouse motion"),
-                ("cursor"       , "Mouse cursor shape"),
-                ])),
-    ("Misc", OrderedDict([
+                "csc"           : "Colourspace conversion codecs",
+                "cuda"          : "CUDA device access (nvenc)",
+                "cython"        : "Cython CSC module",
+                "swscale"       : "swscale CSC module",
+                "libyuv"        : "libyuv CSC module",
+                "decoder"       : "All decoders",
+                "encoder"       : "All encoders",
+                "avcodec"       : "avcodec decoder",
+                "libav"         : "libav common code (used by swscale, avcodec and ffmpeg)",
+                "ffmpeg"        : "ffmpeg encoder",
+                "pillow"        : "Pillow encoder and decoder",
+                "jpeg"          : "JPEG codec",
+                "vpx"           : "libvpx encoder and decoder",
+                "nvenc"         : "nvenc hardware encoder",
+                "nvfbc"         : "nfbc screen capture",
+                "x264"          : "libx264 encoder",
+                "x265"          : "libx265 encoder",
+                "webp"          : "libwebp encoder and decoder",
+                "webcam"        : "webcam access",
+                },
+    "Pointer" : {
+                "mouse"         : "Mouse motion",
+                "cursor"        : "Mouse cursor shape",
+                },
+    "Misc" : {
                 #libraries
-                ("gtk"          , "All GTK code: bindings, client, etc"),
-                ("util"         , "All utility functions"),
-                ("gobject"      , "Command line clients"),
+                "gtk"           : "All GTK code: bindings, client, etc",
+                "util"          : "All utility functions",
+                "gobject"       : "Command line clients",
                 #server bits:
-                ("test"         , "Test code"),
-                ("verbose"      , "Very verbose flag"),
+                "test"          : "Test code",
+                "verbose"       : "Very verbose flag",
                 #specific applications:
-                ])),
-    ("Network", OrderedDict([
+                },
+    "Network" : {
                 #internal / network:
-                ("network"      , "All network code"),
-                ("bandwidth"    , "Bandwidth detection and management"),
-                ("ssh"          , "SSH connections"),
-                ("ssl"          , "SSL connections"),
-                ("http"         , "HTTP requests"),
-                ("rfb"          , "RFB Protocol"),
-                ("mmap"         , "mmap transfers"),
-                ("protocol"     , "Packet input and output (formatting, parsing, sending and receiving)"),
-                ("websocket"    , "WebSocket layer"),
-                ("named-pipe"   , "Named pipe"),
-                ("udp"          , "UDP"),
-                ("crypto"       , "Encryption"),
-                ("auth"         , "Authentication"),
-                ])),
-    ("Server", OrderedDict([
+                "network"       : "All network code",
+                "bandwidth"     : "Bandwidth detection and management",
+                "ssh"           : "SSH connections",
+                "ssl"           : "SSL connections",
+                "http"          : "HTTP requests",
+                "rfb"           : "RFB Protocol",
+                "mmap"          : "mmap transfers",
+                "protocol"      : "Packet input and output (formatting, parsing, sending and receiving)",
+                "websocket"     : "WebSocket layer",
+                "named-pipe"    : "Named pipe",
+                "udp"           : "UDP",
+                "crypto"        : "Encryption",
+                "auth"          : "Authentication",
+                },
+    "Server" : {
                 #Server:
-                ("server"       , "All server code"),
-                ("proxy"        , "Proxy server"),
-                ("shadow"       , "Shadow server"),
-                ("command"      , "Server control channel"),
-                ("timeout"      , "Server timeouts"),
-                ("exec"         , "Executing commands"),
+                "server"        : "All server code",
+                "proxy"         : "Proxy server",
+                "shadow"        : "Shadow server",
+                "command"       : "Server control channel",
+                "timeout"       : "Server timeouts",
+                "exec"          : "Executing commands",
                 #server features:
-                ("mdns"         , "mDNS session publishing"),
+                "mdns"          : "mDNS session publishing",
                 #server internals:
-                ("stats"        , "Server statistics"),
-                ("xshm"         , "XShm pixel capture"),
-                ])),
-    ("Sound", OrderedDict([
-                ("sound"        , "All sound"),
-                ("gstreamer"    , "GStreamer internal messages"),
-                ("av-sync"      , "Audio-video sync"),
-                ])),
-    ("X11", OrderedDict([
-                ("x11"          , "All X11 code"),
-                ("xinput"       , "XInput bindings"),
-                ("bindings"     , "X11 Cython bindings"),
-                ("core"         , "X11 core bindings"),
-                ("randr"        , "X11 RandR bindings"),
-                ("ximage"       , "X11 XImage bindings"),
-                ("error"        , "X11 errors"),
-                ])),
-    ("Platform", OrderedDict([
-                ("platform"     , "All platform support code"),
-                ("import"       , "Platform support import code"),
-                ("osx"          , "Mac OS X platform support code"),
-                ("win32"        , "Microsoft Windows platform support code"),
-                ("posix"        , "Posix platform code"),
-                ])),
-    ])
+                "stats"         : "Server statistics",
+                "xshm"          : "XShm pixel capture",
+                },
+    "Sound" : {
+                "sound"         : "All sound",
+                "gstreamer"     : "GStreamer internal messages",
+                "av-sync"       : "Audio-video sync",
+                },
+    "X11" : {
+                "x11"           : "All X11 code",
+                "xinput"        : "XInput bindings",
+                "bindings"      : "X11 Cython bindings",
+                "core"          : "X11 core bindings",
+                "randr"         : "X11 RandR bindings",
+                "ximage"        : "X11 XImage bindings",
+                "error"         : "X11 errors",
+                },
+    "Platform" : {
+                "platform"      : "All platform support code",
+                "import"        : "Platform support import code",
+                "osx"           : "Mac OS X platform support code",
+                "win32"         : "Microsoft Windows platform support code",
+                "posix"         : "Posix platform code",
+                },
+    }
 
 #flatten it:
-KNOWN_FILTERS = OrderedDict()
+KNOWN_FILTERS = {}
 for d in STRUCT_KNOWN_FILTERS.values():
     for k,v in d.items():
         KNOWN_FILTERS[k] = v
 
 
-def isenvdebug(category):
+def isenvdebug(category : str) -> bool:
     return os.environ.get("XPRA_%s_DEBUG" % category.upper().replace("-", "_"), "0")=="1"
 
 # A wrapper around 'logging' with some convenience stuff.  In particular:
@@ -338,7 +340,7 @@ def isenvdebug(category):
 #    -- we bypass the logging system unless debugging is enabled for the logger,
 #       which is much faster than relying on the python logging code
 
-class Logger(object):
+class Logger:
     def __init__(self, *categories):
         global default_level, debug_disabled_categories, KNOWN_FILTERS
         self.categories = list(categories)
@@ -352,11 +354,14 @@ class Logger(object):
         self.logger.setLevel(default_level)
         disabled = False
         enabled = False
-        for cat in self.categories:
-            if cat in debug_disabled_categories:
-                disabled = True
-            if is_debug_enabled(cat):
-                enabled = True
+        if caller in DEBUG_MODULES:
+            enabled = True
+        else:
+            for cat in self.categories:
+                if cat in debug_disabled_categories:
+                    disabled = True
+                if is_debug_enabled(cat):
+                    enabled = True
         self.debug_enabled = enabled and not disabled
         #ready, keep track of it:
         add_logger(self.categories, self)
@@ -364,7 +369,7 @@ class Logger(object):
             if x not in KNOWN_FILTERS:
                 self.warn("unknown logging category: %s", x)
 
-    def get_info(self):
+    def get_info(self) -> dict:
         return {
             "categories"    : self.categories,
             "debug"         : self.debug_enabled,
@@ -374,7 +379,7 @@ class Logger(object):
     def __repr__(self):
         return "Logger(%s)" % ", ".join(self.categories)
 
-    def is_debug_enabled(self):
+    def is_debug_enabled(self) -> bool:
         return self.debug_enabled
 
     def enable_debug(self):
@@ -384,7 +389,7 @@ class Logger(object):
         self.debug_enabled = False
 
 
-    def log(self, level, msg, *args, **kwargs):
+    def log(self, level, msg : str, *args, **kwargs):
         if kwargs.get("exc_info") is True:
             ei = sys.exc_info()
             if ei!=(None, None, None):
@@ -394,24 +399,24 @@ class Logger(object):
             msg = LOG_PREFIX+msg
         global_logging_handler(self.logger.log, level, msg, *args, **kwargs)
 
-    def __call__(self, msg, *args, **kwargs):
+    def __call__(self, msg : str, *args, **kwargs):
         if self.debug_enabled:
             self.log(logging.DEBUG, msg, *args, **kwargs)
-    def debug(self, msg, *args, **kwargs):
+    def debug(self, msg : str, *args, **kwargs):
         if self.debug_enabled:
             self.log(logging.DEBUG, msg, *args, **kwargs)
-    def info(self, msg, *args, **kwargs):
+    def info(self, msg : str, *args, **kwargs):
         self.log(logging.INFO, msg, *args, **kwargs)
-    def warn(self, msg, *args, **kwargs):
+    def warn(self, msg : str, *args, **kwargs):
         self.log(logging.WARN, msg, *args, **kwargs)
-    def error(self, msg, *args, **kwargs):
+    def error(self, msg : str, *args, **kwargs):
         self.log(logging.ERROR, msg, *args, **kwargs)
 
 
 class CaptureHandler(logging.Handler):
 
     def __init__(self):
-        logging.Handler.__init__(self, logging.DEBUG)
+        super().__init__(logging.DEBUG)
         self.records = []
 
     def handle(self, record):
@@ -422,3 +427,24 @@ class CaptureHandler(logging.Handler):
 
     def createLock(self):
         self.lock = None
+
+class SIGPIPEStreamHandler(logging.StreamHandler):
+    def flush(self):
+        try:
+            super().flush()
+        except BrokenPipeError:
+            pass
+
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            stream = self.stream
+            # issue 35046: merged two stream.writes into one.
+            stream.write(msg + self.terminator)
+            self.flush()
+        except RecursionError:  # See issue 36272
+            raise
+        except BrokenPipeError:
+            pass
+        except Exception:
+            self.handleError(record)

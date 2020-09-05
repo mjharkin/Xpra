@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
 # Copyright (C) 2011 Serviware (Arthur Huillet, <ahuillet@serviware.com>)
-# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -11,9 +11,8 @@ import sys
 import errno
 import socket
 import signal
+import platform
 import threading
-import traceback
-from collections import OrderedDict
 from weakref import WeakKeyDictionary
 from time import sleep, time
 
@@ -23,7 +22,12 @@ from xpra.version_util import (
     )
 from xpra.scripts.server import deadly_signal
 from xpra.server.server_util import write_pidfile, rm_pidfile
-from xpra.scripts.config import InitException, parse_bool, python_platform, parse_with_unit, FALSE_OPTIONS, TRUE_OPTIONS
+from xpra.scripts.config import InitException, parse_bool, parse_with_unit, FALSE_OPTIONS, TRUE_OPTIONS
+from xpra.net.common import may_log_packet, SOCKET_TYPES
+from xpra.net.socket_util import (
+    hosts, mdns_publish, peek_connection, guess_header_protocol,
+    add_listen_socket, accept_connection,
+    )
 from xpra.net.bytestreams import (
     SocketConnection, SSLSocketConnection,
     log_new_connection, pretty_socket, SOCKET_TIMEOUT,
@@ -34,16 +38,19 @@ from xpra.net.digest import get_salt, gendigest, choose_digest
 from xpra.platform import set_name
 from xpra.platform.paths import get_app_dir
 from xpra.os_util import (
+    register_SIGUSR_signals,
+    get_frame_info, get_info_env, get_sysconfig_info,
     filedata_nocrlf, get_machine_id, get_user_uuid, platform_name, get_ssh_port,
     strtobytes, bytestostr, get_hex_uuid,
-    getuid, monotonic_time, get_peercred, hexstr,
-    WIN32, POSIX, PYTHON3, BITS,
+    getuid, monotonic_time, hexstr,
+    WIN32, POSIX, BITS,
     )
 from xpra.server.background_worker import stop_worker, get_worker, add_work_item
 from xpra.make_thread import start_thread
 from xpra.util import (
+    first_time,
     csv, merge_dicts, typedict, notypedict, flatten_dict, parse_simple_dict,
-    repr_ellipsized, dump_all_frames, nonl, envint, envbool, envfloat,
+    ellipsizer, dump_all_frames, nonl, envint, envbool, envfloat,
     SERVER_SHUTDOWN, SERVER_UPGRADE, LOGIN_TIMEOUT, DONE, PROTOCOL_ERROR,
     SERVER_ERROR, VERSION_ERROR, CLIENT_REQUEST, SERVER_EXIT,
     )
@@ -67,23 +74,10 @@ MAX_CONCURRENT_CONNECTIONS = envint("XPRA_MAX_CONCURRENT_CONNECTIONS", 100)
 SIMULATE_SERVER_HELLO_ERROR = envbool("XPRA_SIMULATE_SERVER_HELLO_ERROR", False)
 SERVER_SOCKET_TIMEOUT = envfloat("XPRA_SERVER_SOCKET_TIMEOUT", "0.1")
 LEGACY_SALT_DIGEST = envbool("XPRA_LEGACY_SALT_DIGEST", True)
-PEEK_TIMEOUT = envint("XPRA_PEEK_TIMEOUT", 1)
-PEEK_TIMEOUT_MS = envint("XPRA_PEEK_TIMEOUT_MS", PEEK_TIMEOUT*1000)
 CHALLENGE_TIMEOUT = envint("XPRA_CHALLENGE_TIMEOUT", 120)
+SYSCONFIG = envbool("XPRA_SYSCONFIG", True)
 
-def get_log_packets(exclude=False):
-    lp = os.environ.get("XPRA_LOG_PACKETS")
-    if not lp:
-        return None
-    pt = []
-    for x in lp.split(","):
-        if x.startswith("-")==exclude:
-            pt.append(x[int(exclude):])
-    return tuple(pt)
-
-LOG_PACKETS = get_log_packets()
-NOLOG_PACKETS = get_log_packets(True)
-
+ENCRYPTED_SOCKET_TYPES = os.environ.get("XPRA_ENCRYPTED_SOCKET_TYPES", "tcp,ws")
 
 HTTP_UNSUPORTED = b"""HTTP/1.1 400 Bad request syntax or unsupported method
 
@@ -97,19 +91,6 @@ HTTP_UNSUPORTED = b"""HTTP/1.1 400 Bad request syntax or unsupported method
 <p>Error code explanation: 400 = Bad request syntax or unsupported method.
 </body>
 """
-
-def pack_one_packet(packet):
-    try:
-        from xpra.net.packet_encoding import get_enabled_encoders, get_encoder
-        from xpra.net.header import pack_header
-        ee = get_enabled_encoders()
-        if ee:
-            e = get_encoder(ee[0])
-            data, flags = e(packet)
-            return pack_header(flags, 0, 0, len(data))+data
-    except ImportError:
-        pass
-    return None
 
 
 #class used to distinguish internal errors
@@ -128,70 +109,16 @@ def get_server_info():
     info.update(get_host_info())
     return info
 
-def get_thread_info(proto=None, protocols=()):
+def get_thread_info(proto=None):
     #threads:
     if proto:
         info_threads = proto.get_threads()
     else:
         info_threads = ()
-    info = {
-            "count"        : threading.active_count() - len(info_threads),
-            "info.count"   : len(info_threads)
-            }
-    thread_ident = {
-            threading.current_thread().ident    : "info",
-            main_thread.ident                   : "main",
-            }
-    w = get_worker(False)
-    if w:
-        thread_ident[w.ident] = "worker"
-
-    it = info.setdefault("info", {})
-    #threads used by the "info" client:
-    for i, t in enumerate(info_threads):
-        it[i] = t.getName()
-        thread_ident[t.ident] = t.getName()
-    for p in protocols:
-        try:
-            threads = p.get_threads()
-            for t in threads:
-                thread_ident[t.ident] = t.getName()
-        except:
-            pass
-    #all non-info threads:
-    anit = info.setdefault("thread", {})
-    for i, t in enumerate(x for x in threading.enumerate() if x not in info_threads):
-        anit[i] = t.getName()
-    #platform specific bits:
-    try:
-        from xpra.platform.info import get_sys_info
-        info.update(get_sys_info())
-    except:
-        log.error("error getting system info", exc_info=True)
-    #extract frame info:
-    try:
-        def nn(x):
-            if x is None:
-                return ""
-            return str(x)
-        frames = sys._current_frames()
-        fi = info.setdefault("frame", {})
-        stack = None
-        for i,frame_pair in enumerate(frames.items()):
-            stack = traceback.extract_stack(frame_pair[1])
-            #sanitize stack to prevent None values (which cause encoding errors with the bencoder)
-            sanestack = []
-            for e in stack:
-                sanestack.append(tuple([nn(x) for x in e]))
-            fi[i] = {""         : thread_ident.get(frame_pair[0], "unknown"),
-                     "stack"    : sanestack}
-        del frames, stack
-    except Exception as e:
-        log.error("failed to get frame info: %s", e)
-    return info
+    return get_frame_info(info_threads)
 
 
-class ServerCore(object):
+class ServerCore:
     """
         This is the simplest base class for servers.
         It only handles the connection layer:
@@ -211,23 +138,23 @@ class ServerCore(object):
         self._closing = False
         self._upgrading = False
         #networking bits:
-        self._socket_info = []
+        self._socket_info = {}
         self._potential_protocols = []
         self._udp_listeners = []
         self._udp_protocols = {}
         self._tcp_proxy_clients = []
         self._tcp_proxy = ""
         self._rfb_upgrade = 0
-        self._ssl_wrap_socket = None
+        self._ssl_attributes = {}
         self._accept_timeout = SOCKET_TIMEOUT + 1
         self.ssl_mode = None
         self._html = False
         self._www_dir = None
         self._http_headers_dir = None
         self._aliases = {}
-        self._reverse_aliases = {}
-        self.socket_types = {}
         self.socket_info = {}
+        self.socket_options = {}
+        self.socket_cleanup = []
         self.socket_verify_timer = WeakKeyDictionary()
         self.socket_rfb_upgrade_timer = WeakKeyDictionary()
         self._max_connections = MAX_CONCURRENT_CONNECTIONS
@@ -244,7 +171,7 @@ class ServerCore(object):
         self.pidfile = None
         self.pidinode = 0
 
-        self.session_name = u""
+        self.session_name = ""
 
         #Features:
         self.mdns = False
@@ -322,22 +249,16 @@ class ServerCore(object):
         if self.ssl_mode in TRUE_OPTIONS or opts.bind_ssl or opts.bind_wss:
             need_ssl = True
         elif opts.bind_tcp or opts.bind_ws:
-            if self.ssl_mode=="auto" and opts.ssl_cert:
+            if self.ssl_mode=="auto":
                 need_ssl = True
             elif self.ssl_mode=="tcp" and opts.bind_tcp:
                 need_ssl = True
             elif self.ssl_mode=="www":
                 need_ssl = True
-        if not need_ssl:
-            return
-        from xpra.scripts.main import ssl_wrap_socket_fn
-        try:
-            self._ssl_wrap_socket = ssl_wrap_socket_fn(opts, server_side=True)
-            log("init_ssl() wrap_socket_fn=%s", self._ssl_wrap_socket)
-        except Exception as e:
-            log("SSL error", exc_info=True)
-            cpaths = csv("'%s'" % x for x in (opts.ssl_cert, opts.ssl_key) if x)
-            raise InitException("cannot create SSL sockets, check your certificate paths (%s): %s" % (cpaths, e))
+        if need_ssl:
+            from xpra.net.socket_util import get_ssl_attributes
+            self._ssl_attributes = get_ssl_attributes(opts, True)
+        netlog("init_ssl(..) ssl attributes=%s", self._ssl_attributes)
 
     def server_ready(self):
         return True
@@ -357,8 +278,7 @@ class ServerCore(object):
     ######################################################################
     # run / stop:
     def signal_quit(self, signum, _frame=None):
-        self._closing = True
-        log.info("exiting")
+        self.closing()
         self.install_signal_handlers(deadly_signal)
         self.idle_add(self.clean_quit)
         self.idle_add(sys.exit, 128+signum)
@@ -366,45 +286,60 @@ class ServerCore(object):
     def clean_quit(self, upgrading=False):
         log("clean_quit(%s)", upgrading)
         self._upgrading = upgrading
-        self._closing = True
+        self.closing()
         self.cleanup()
-        def quit_timer():
-            w = get_worker()
-            log("quit_timer() worker=%s", w)
-            if w and w.is_alive():
-                #wait up to 1 second for the worker thread to exit
-                try:
-                    w.wait(1)
-                except:
-                    pass
-                if w.is_alive():
-                    #still alive, force stop:
-                    stop_worker(True)
-                    try:
-                        w.wait(1)
-                    except:
-                        pass
-            self.quit(upgrading)
-        stop_worker()
-        self.timeout_add(250, quit_timer)
+        w = get_worker()
+        log("clean_quit: worker=%s", w)
+        if w:
+            stop_worker()
+            try:
+                w.join(0.05)
+            except Exception:
+                pass
+            if w.is_alive():
+                def quit_timer():
+                    log("quit_timer() worker=%s", w)
+                    if w and w.is_alive():
+                        #wait up to 1 second for the worker thread to exit
+                        try:
+                            w.wait(1)
+                        except Exception:
+                            pass
+                        if w.is_alive():
+                            #still alive, force stop:
+                            stop_worker(True)
+                            try:
+                                w.wait(1)
+                            except Exception:
+                                pass
+                    self.quit(upgrading)
+                self.timeout_add(250, quit_timer)
+                log("clean_quit(..) quit timers scheduled, worker=%s", w)
+            else:
+                log("clean_quit(..) worker ended")
+                w = None
         def force_quit():
-            log.debug("force_quit()")
+            log("force_quit()")
             from xpra import os_util
             os_util.force_quit()
         self.timeout_add(5000, force_quit)
         log("clean_quit(..) quit timers scheduled")
-        dump_all_frames()
+        if not w:
+            self.quit(upgrading)
 
     def quit(self, upgrading=False):
         log("quit(%s)", upgrading)
         self._upgrading = upgrading
-        if not self._closing:
-            self._closing = True
-            log.info("xpra is terminating.")
+        self.closing()
         sys.stdout.flush()
         self.do_quit()
         log("quit(%s) do_quit done!", upgrading)
         dump_all_frames()
+
+    def closing(self):
+        if not self._closing:
+            self._closing = True
+            log.info("xpra %s server is %s", self.get_server_mode(), ["terminating", "exiting"][bool(self._upgrading)])
 
     def do_quit(self):
         raise NotImplementedError()
@@ -414,6 +349,7 @@ class ServerCore(object):
             callback(signum)
         signal.signal(signal.SIGINT, os_signal)
         signal.signal(signal.SIGTERM, os_signal)
+        register_SIGUSR_signals(self.idle_add)
 
 
     def run(self):
@@ -448,7 +384,7 @@ class ServerCore(object):
             p.quit()
         netlog("cleanup will disconnect: %s", self._potential_protocols)
         self.cancel_touch_timer()
-        if self.mdns:
+        if self.mdns_publishers:
             add_work_item(self.mdns_cleanup)
         if self._upgrading:
             reason = SERVER_UPGRADE
@@ -473,8 +409,12 @@ class ServerCore(object):
 
 
     def cleanup_sockets(self):
+        #stop listening for IO events:
+        for sc in self.socket_cleanup:
+            sc()
+        #actually close the socket:
         si = self._socket_info
-        self._socket_info = ()
+        self._socket_info = {}
         for socktype, _, info, cleanup in si:
             log("cleanup_sockets() calling %s for %s %s", cleanup, socktype, info)
             try:
@@ -597,7 +537,7 @@ class ServerCore(object):
             httplog.error(" '%s' does not exist", self._www_dir)
             self._html = False
         if self._html:
-            httplog.info("serving html content from: %s", self._www_dir)
+            httplog.info("serving html content from '%s'", self._www_dir)
         if self._html and self._tcp_proxy:
             httplog.warn("Warning: the built in html server is enabled,")
             httplog.warn(" disabling the tcp-proxy option")
@@ -607,23 +547,23 @@ class ServerCore(object):
     ######################################################################
     # authentication:
     def init_auth(self, opts):
-        auth = self.get_auth_modules("local-auth", opts.auth, opts)
+        auth = self.get_auth_modules("local-auth", opts.auth or [])
         if WIN32:
             self.auth_classes["named-pipe"] = auth
         else:
             self.auth_classes["unix-domain"] = auth
-        for x in ("tcp", "ws", "wss", "ssl", "ssh", "rfb", "vsock", "udp"):
+        for x in SOCKET_TYPES:
             opts_value = getattr(opts, "%s_auth" % x)
-            self.auth_classes[x] = self.get_auth_modules(x, opts_value, opts)
+            self.auth_classes[x] = self.get_auth_modules(x, opts_value)
         authlog("init_auth(..) auth=%s", self.auth_classes)
 
-    def get_auth_modules(self, socket_type, auth_strs, opts):
+    def get_auth_modules(self, socket_type, auth_strs):
         authlog("get_auth_modules(%s, %s, {..})", socket_type, auth_strs)
         if not auth_strs:
             return None
-        return tuple(self.get_auth_module(socket_type, auth_str, opts) for auth_str in auth_strs)
+        return tuple(self.get_auth_module(socket_type, auth_str) for auth_str in auth_strs)
 
-    def get_auth_module(self, socket_type, auth_str, opts):
+    def get_auth_module(self, socket_type, auth_str):
         authlog("get_auth_module(%s, %s, {..})", socket_type, auth_str)
         #separate options from the auth module name
         #either with ":" or "," as separator
@@ -632,8 +572,6 @@ class ServerCore(object):
         if cpos<0 or scpos<cpos:
             parts = auth_str.split(":", 1)
         else:
-            parts = auth_str.split(",", 1)
-        if len(parts)==1 and auth_str.find(",")>0:
             parts = auth_str.split(",", 1)
         auth = parts[0]
         auth_options = {}
@@ -655,16 +593,15 @@ class ServerCore(object):
             auth_module = __import__(auth_mod_name, {}, {}, ["Authenticator"])
         except ImportError as e:
             authlog("cannot load %s auth for socket %s", auth, socket_type, exc_info=True)
-            raise InitException("cannot load authentication module '%s' for %s socket: %s" % (auth, socket_type, e))
+            raise InitException("cannot load authentication module '%s' for %s socket: %s" % (auth, socket_type, e)) from None
         authlog("auth module for '%s': %s", auth, auth_module)
         try:
-            auth_module.init(opts)
             auth_class = auth_module.Authenticator
             auth_class.auth_name = auth.lower()
             return auth, auth_class, auth_options
         except Exception as e:
             authlog("cannot access authenticator class", exc_info=True)
-            raise InitException("authentication setup error in %s: %s" % (auth_module, e))
+            raise InitException("authentication setup error in %s: %s" % (auth_module, e)) from None
 
 
     ######################################################################
@@ -762,11 +699,17 @@ class ServerCore(object):
     def mdns_publish(self):
         if not self.mdns:
             return
-        from xpra.scripts.server import hosts
         #find all the records we want to publish:
         mdns_recs = {}
-        for socktype, _, info, _ in self._socket_info:
+        for sock_def, options in self._socket_info.items():
+            socktype, _, info, _ = sock_def
             socktypes = self.get_mdns_socktypes(socktype)
+            mdns_option = options.get("mdns")
+            if mdns_option:
+                v = parse_bool("mdns", mdns_option, False)
+                if not v:
+                    mdnslog("mdns_publish() mdns(%s)=%s, skipped", info, mdns_option)
+                    continue
             mdnslog("mdns_publish() info=%s, socktypes(%s)=%s", info, socktype, socktypes)
             for st in socktypes:
                 recs = mdns_recs.setdefault(st, [])
@@ -783,11 +726,10 @@ class ServerCore(object):
                     if rec not in recs:
                         recs.append(rec)
                 mdnslog("mdns_publish() recs[%s]=%s", st, recs)
-        from xpra.server.socket_util import mdns_publish
         mdns_info = self.get_mdns_info()
         self.mdns_publishers = {}
         for mdns_mode, listen_on in mdns_recs.items():
-            info = OrderedDict(mdns_info)
+            info = dict(mdns_info)
             info["mode"] = mdns_mode
             aps = mdns_publish(self.display_name, listen_on, info)
             for ap in aps:
@@ -801,7 +743,7 @@ class ServerCore(object):
             #cannot be accessed remotely
             return ()
         ssh_access = get_ssh_port()>0   #and opts.ssh.lower().strip() not in FALSE_OPTIONS
-        ssl = bool(self._ssl_wrap_socket)
+        ssl = bool(self._ssl_attributes)
         #only available with the RFBServer
         rfb_upgrades = getattr(self, "_rfb_upgrade", False)
         socktypes = [socktype]
@@ -824,15 +766,15 @@ class ServerCore(object):
                 socktypes = ["ssh"]
         return socktypes
 
-    def get_mdns_info(self):
+    def get_mdns_info(self) -> dict:
         from xpra.platform.info import get_username
-        mdns_info = OrderedDict({
+        mdns_info = {
             "display"  : self.display_name,
             "username" : get_username(),
             "uuid"     : self.uuid,
             "platform" : sys.platform,
             "type"     : self.session_type,
-            })
+            }
         MDNS_EXPOSE_NAME = envbool("XPRA_MDNS_EXPOSE_NAME", True)
         if MDNS_EXPOSE_NAME and self.session_name:
             mdns_info["name"] = self.session_name
@@ -851,14 +793,21 @@ class ServerCore(object):
         for mdns_publisher, mode in dict(self.mdns_publishers).items():
             info = dict(txt)
             info["mode"] = mode
-            mdns_publisher.update_txt(info)
+            try:
+                mdns_publisher.update_txt(info)
+            except Exception as e:
+                mdnslog("mdns_update: %s(%s)", mdns_publisher.update_txt, info, exc_info=True)
+                mdnslog.warn("Warning: mdns update failed")
+                mdnslog.warn(" %s", e)
 
 
     def start_listen_sockets(self):
         ### All right, we're ready to accept customers:
-        for socktype, sock, info, _ in self._socket_info:
+        for sock_def, options in self._socket_info.items():
+            socktype, sock, info, _ = sock_def
             netlog("init_sockets(%s) will add %s socket %s (%s)", self._socket_info, socktype, sock, info)
             self.socket_info[sock] = info
+            self.socket_options[sock] = options
             self.idle_add(self.add_listen_socket, socktype, sock)
             if socktype=="unix-domain" and info:
                 try:
@@ -881,6 +830,12 @@ class ServerCore(object):
     def touch_sockets(self):
         netlog("touch_sockets() unix socket paths=%s", self.unix_socket_paths)
         for sockpath in self.unix_socket_paths:
+            if not os.path.exists(sockpath):
+                if first_time("missing-socket-%s" % sockpath):
+                    log.warn("Warning: the unix domain socket cannot be found:")
+                    log.warn(" '%s'", sockpath)
+                    log.warn(" was it deleted by mistake?")
+                continue
             try:
                 os.utime(sockpath, None)
             except Exception:
@@ -905,7 +860,6 @@ class ServerCore(object):
         i = 1
         for key in packet_types:
             self._aliases[i] = key
-            self._reverse_aliases[key] = i
             i += 1
 
     def cleanup_udp_listeners(self):
@@ -931,104 +885,48 @@ class ServerCore(object):
     def add_listen_socket(self, socktype, sock):
         info = self.socket_info.get(sock)
         netlog("add_listen_socket(%s, %s) info=%s", socktype, sock, info)
-        try:
-            #ugly that we have different ways of starting sockets,
-            #TODO: abstract this into the socket class
-            self.socket_types[sock] = socktype
-            if socktype=="named-pipe":
-                #named pipe listener uses a thread:
-                sock.new_connection_cb = self._new_connection
-                sock.start()
-            elif socktype=="udp":
-                #socket_info = self.socket_info.get(sock)
-                from xpra.net.udp_protocol import UDPListener
-                udpl = UDPListener(sock, self.process_udp_packet)
-                self._udp_listeners.append(udpl)
-            else:
-                from xpra.gtk_common.gobject_compat import import_glib, is_gtk3
-                glib = import_glib()
-                sock.listen(5)
-                if is_gtk3():
-                    glib.io_add_watch(sock, glib.PRIORITY_DEFAULT, glib.IO_IN, self._new_connection, sock)
-                else:
-                    glib.io_add_watch(sock, glib.IO_IN, self._new_connection, sock, priority=glib.PRIORITY_DEFAULT)
-        except Exception as e:
-            netlog("add_listen_socket(%s, %s)", socktype, sock, exc_info=True)
-            netlog.error("Error: failed to listen on %s socket %s:", socktype, info or sock)
-            netlog.error(" %s", e)
+        cleanup = add_listen_socket(socktype, sock, info, self._new_connection, self._new_udp_connection)
+        if cleanup:
+            self.socket_cleanup.append(cleanup)
 
-    def _new_connection(self, listener, *args):
+    def _new_udp_connection(self, sock):
+        from xpra.net.udp_protocol import UDPListener
+        udpl = UDPListener(sock, self.process_udp_packet)
+        self._udp_listeners.append(udpl)
+
+    def _new_connection(self, socktype, listener, handle=0):
         """
             Accept the new connection,
             verify that there aren't too many,
             start a thread to dispatch it to the correct handler.
         """
+        log("_new_connection%s", (listener, socktype, handle))
         if self._closing:
             netlog("ignoring new connection during shutdown")
             return False
-        socktype = self.socket_types.get(listener)
         socket_info = self.socket_info.get(listener)
         assert socktype, "cannot find socket type for %s" % listener
         #TODO: just like add_listen_socket above, this needs refactoring
+        socket_options = self.socket_options.get(listener, {})
         if socktype=="named-pipe":
-            pipe_handle = args[0]
             from xpra.platform.win32.namedpipes.connection import NamedPipeConnection
-            conn = NamedPipeConnection(listener.pipe_name, pipe_handle)
+            conn = NamedPipeConnection(listener.pipe_name, handle, socket_options)
             netlog.info("New %s connection received on %s", socktype, conn.target)
-            return self.make_protocol(socktype, conn)
+            return self.make_protocol(socktype, conn, socket_options)
 
-        try:
-            sock, address = listener.accept()
-        except socket.error as e:
-            netlog("rejecting new connection on %s", listener, exc_info=True)
-            netlog.error("Error: cannot accept new connection:")
-            netlog.error(" %s", e)
+        conn = accept_connection(socktype, listener, self._socket_timeout, socket_options)
+        if conn is None:
             return True
-        netlog("peer: %s", get_peercred(sock))
-        try:
-            peername = sock.getpeername()
-        except (OSError, IOError):
-            peername = address
         #limit number of concurrent network connections:
         if socktype not in ("unix-domain", ) and len(self._potential_protocols)>=self._max_connections:
             netlog.error("Error: too many connections (%i)", len(self._potential_protocols))
-            netlog.error(" ignoring new one: %s", peername)
-            sock.close()
+            netlog.error(" ignoring new one: %s", conn.endpoint)
+            conn.close()
             return True
-        sockname = sock.getsockname()
-        sock.settimeout(self._socket_timeout)
-        netlog("new_connection(%s) sock=%s, socket_info=%s, timeout=%s, address=%s, peername=%s. timeout=%s",
-               args, sock, socket_info, self._socket_timeout, address, peername, self._socket_timeout)
-        conn = SocketConnection(sock, sockname, address, peername, socktype)
-
         #from here on, we run in a thread, so we can poll (peek does)
         start_thread(self.handle_new_connection, "new-%s-connection" % socktype, True,
-                     args=(conn, sock, address, socktype, peername, socket_info))
+                     args=(conn, socket_info, socket_options))
         return True
-
-    def peek_connection(self, conn, timeout=PEEK_TIMEOUT_MS):
-        log("peek_connection(%s, %i)", conn, timeout)
-        PEEK_SIZE = 8192
-        start = monotonic_time()
-        peek_data = b""
-        while not peek_data and int(1000*(monotonic_time()-start))<timeout:
-            try:
-                peek_data = conn.peek(PEEK_SIZE)
-            except (OSError, IOError):
-                pass
-            except ValueError:
-                log("peek_connection(%s, %i) failed", conn, timeout, exc_info=True)
-                break
-            if not peek_data:
-                sleep(timeout/4000.0)
-        line1 = b""
-        netlog("socket %s peek: got %i bytes", conn, len(peek_data))
-        if peek_data:
-            line1 = peek_data.splitlines()[0]
-            netlog("socket peek=%s", repr_ellipsized(peek_data, limit=512))
-            netlog("socket peek hex=%s", hexstr(peek_data[:128]))
-            netlog("socket peek line1=%s", repr_ellipsized(bytestostr(line1)))
-        return peek_data, line1
 
     def new_conn_err(self, conn, sock, socktype, socket_info, network_protocol,
                      msg="invalid packet format, not an xpra client?"):
@@ -1045,6 +943,7 @@ class ServerCore(object):
             packet_data = b"disconnect: connection failed, %s?\n" % strtobytes(msg)
             if network_protocol=="xpra":
                 #try xpra packet format:
+                from xpra.net.packet_encoding import pack_one_packet
                 packet_data = pack_one_packet(["disconnect", "invalid protocol for this port"]) or packet_data
             elif network_protocol=="HTTP":
                 #HTTP 400 error:
@@ -1057,35 +956,38 @@ class ServerCore(object):
     def force_close_connection(self, conn):
         try:
             conn.close()
-        except (OSError, IOError):
+        except OSError:
             log("close_connection()", exc_info=True)
 
-    def handle_new_connection(self, conn, sock, address, socktype, peername, socket_info):
+    def handle_new_connection(self, conn, socket_info, socket_options):
         """
             Use peek to decide what sort of connection this is,
             and start the appropriate handler for it.
         """
+        sock = conn._socket
+        address = conn.remote
+        socktype = conn.socktype
+        peername = conn.endpoint
+
         sockname = sock.getsockname()
         target = peername or sockname
         sock.settimeout(self._socket_timeout)
 
         netlog("handle_new_connection%s sockname=%s, target=%s",
-               (conn, sock, address, socktype, peername, socket_info), sockname, target)
+               (conn, socket_info, socket_options), sockname, target)
         #peek so we can detect invalid clients early,
         #or handle non-xpra traffic:
         peek_data, line1 = None, None
         #rfb does not send any data, waits for a server packet
         if socktype!="rfb":
-            peek_data, line1 = self.peek_connection(conn)
+            peek_data, line1 = peek_connection(conn)
 
         def ssl_wrap():
-            if not self._ssl_wrap_socket:
+            if not self._ssl_attributes:
                 raise Exception("no ssl support")
-            ssl_sock = self._ssl_wrap_socket(sock)
+            ssl_sock = self._ssl_wrap_socket(socktype, sock, socket_options)
             ssllog("ssl wrapped socket(%s)=%s", sock, ssl_sock)
             if ssl_sock is None:
-                #None means EOF! (we don't want to import ssl bits here)
-                ssllog("ignoring SSL EOF error")
                 return None
             ssl_conn = SSLSocketConnection(ssl_sock, sockname, address, target, socktype)
             ssllog("ssl_wrap()=%s", ssl_conn)
@@ -1095,7 +997,7 @@ class ServerCore(object):
             #verify that this isn't plain HTTP / xpra:
             if peek_data:
                 packet_type = None
-                if peek_data[0] in ("P", ord("P")):
+                if peek_data[0]==ord("P"):
                     packet_type = "xpra"
                 elif line1.find(b"HTTP/")>0:
                     packet_type = "HTTP"
@@ -1104,7 +1006,7 @@ class ServerCore(object):
                                       "packet looks like a plain %s packet" % packet_type)
                     return
             #always start by wrapping with SSL:
-            assert self._ssl_wrap_socket
+            assert self._ssl_attributes
             ssl_conn = ssl_wrap()
             if not ssl_conn:
                 return
@@ -1117,28 +1019,29 @@ class ServerCore(object):
                     http = True
                 else:
                     ssl_conn.enable_peek()
-                    peek_data, line1 = self.peek_connection(ssl_conn)
+                    peek_data, line1 = peek_connection(ssl_conn)
                     http = line1.find(b"HTTP/")>0
             if http and self._html:
-                self.start_http_socket(socktype, ssl_conn, True, peek_data)
+                self.start_http_socket(socktype, ssl_conn, socket_options, True, peek_data)
             else:
+                ssl_conn._socket.settimeout(self._socket_timeout)
                 log_new_connection(ssl_conn, socket_info)
-                self.make_protocol(socktype, ssl_conn)
+                self.make_protocol(socktype, ssl_conn, socket_options)
             return
 
         if socktype=="ws":
             if peek_data:
                 if (self.ssl_mode not in FALSE_OPTIONS) and peek_data[0] in ("\x16", 0x16):
-                    if not self._ssl_wrap_socket:
+                    if not self._ssl_attributes:
                         netlog.warn("Warning: cannot upgrade to SSL socket")
                         return
                     ssllog("ws socket receiving ssl, upgrading")
                     conn = ssl_wrap()
-                elif len(peek_data)>=2 and peek_data[0] in ("P", ord("P") and peek_data[1] in ("\x00", 0)):
+                elif len(peek_data)>=2 and peek_data[0]==ord("P") and peek_data[1]==0:
                     self.new_conn_err(conn, sock, socktype, socket_info, "xpra",
                                       "packet looks like a plain xpra packet")
                     return
-            self.start_http_socket(socktype, conn, False, peek_data)
+            self.start_http_socket(socktype, conn, socket_options, False, peek_data)
             return
 
         if socktype=="rfb" and not peek_data:
@@ -1146,17 +1049,17 @@ class ServerCore(object):
             return
 
         if socktype=="ssh":
-            conn = self.handle_ssh_connection(conn)
+            conn = self.handle_ssh_connection(conn, socket_options)
             if not conn:
                 return
             peek_data = None
 
-        if (socktype=="tcp" and (self._tcp_proxy or self._ssl_wrap_socket or self.ssh_upgrade)) or \
+        if (socktype=="tcp" and (self._tcp_proxy or self._ssl_attributes or self.ssh_upgrade)) or \
             (socktype in ("tcp", "unix-domain", "named-pipe") and self._html):
             #see if the packet data is actually xpra or something else
             #that we need to handle via a tcp proxy, ssl wrapper or the websocket adapter:
             try:
-                cont, conn, peek_data = self.may_wrap_socket(conn, socktype, peek_data, line1)
+                cont, conn, peek_data = self.may_wrap_socket(conn, socktype, socket_options, peek_data, line1)
                 netlog("may_wrap_socket(..)=(%s, %s, %r)", cont, conn, peek_data)
                 if not cont:
                     return
@@ -1166,20 +1069,51 @@ class ServerCore(object):
                 return
 
         if peek_data and (socktype=="rfb" or (peek_data[0] not in ("P", ord("P")))):
-            network_protocol, msg = self.guess_header_protocol(peek_data)
+            network_protocol, msg = guess_header_protocol(peek_data)
             self.new_conn_err(conn, sock, socktype, socket_info, network_protocol, "invalid packet header, %s" % msg)
             return
 
-        #not sure why python3 fails to set the timeout here:
-        if not PYTHON3 or conn.socktype!="ssl":
-            sock.settimeout(self._socket_timeout)
+        #get the new socket object as we may have wrapped it with ssl:
+        sock = getattr(conn, "_socket", sock)
+        sock.settimeout(self._socket_timeout)
         log_new_connection(conn, socket_info)
-        proto = self.make_protocol(socktype, conn)
+        proto = self.make_protocol(socktype, conn, socket_options)
         if socktype=="tcp" and not peek_data and self._rfb_upgrade>0:
             t = self.timeout_add(self._rfb_upgrade*1000, self.try_upgrade_to_rfb, proto)
             self.socket_rfb_upgrade_timer[proto] = t
 
-    def handle_ssh_connection(self, conn):
+    def _ssl_wrap_socket(self, socktype, sock, socket_options):
+        ssllog("ssl_wrap_socket(%s, %s, %s)", socktype, sock, socket_options)
+        try:
+            from xpra.net.socket_util import ssl_wrap_socket
+            kwargs = self._ssl_attributes.copy()
+            for k,v in socket_options.items():
+                #options use '-' but attributes and parameters use '_':
+                k = k.replace("-", "_")
+                if k.startswith("ssl_"):
+                    k = k[4:]
+                    kwargs[k] = v
+            ssl_sock = ssl_wrap_socket(sock, **kwargs)
+            ssllog("_ssl_wrap_socket(%s, %s)=%s", sock, kwargs, ssl_sock)
+            if ssl_sock is None:
+                #None means EOF! (we don't want to import ssl bits here)
+                ssllog("ignoring SSL EOF error")
+            return ssl_sock
+        except Exception as e:
+            ssllog("SSL error", exc_info=True)
+            ssl_paths = [socket_options.get(x, kwargs.get(x)) for x in ("ssl-cert", "ssl-key")]
+            cpaths = csv("'%s'" % x for x in ssl_paths if x)
+            log.error("Error: failed to create SSL socket")
+            log.error(" from %s socket: %s", socktype, sock)
+            if not cpaths:
+                log.error(" no certificate paths specified")
+            else:
+                log.error(" check your certificate paths: %s", cpaths)
+            log.error(" %s", e)
+            return None
+
+
+    def handle_ssh_connection(self, conn, socket_options):
         from xpra.server.ssh import make_ssh_server_connection, log as sshlog
         socktype = conn.socktype_wrapped
         none_auth = not self.auth_classes[socktype]
@@ -1216,7 +1150,7 @@ class ServerCore(object):
                     if not r:
                         return False
             return True
-        return make_ssh_server_connection(conn, none_auth=none_auth, password_auth=ssh_password_authenticate)
+        return make_ssh_server_connection(conn, socket_options, none_auth=none_auth, password_auth=ssh_password_authenticate)
 
     def try_upgrade_to_rfb(self, proto):
         self.cancel_upgrade_to_rfb_timer(proto)
@@ -1242,7 +1176,7 @@ class ServerCore(object):
                 pass
 
 
-    def make_protocol(self, socktype, conn, protocol_class=Protocol):
+    def make_protocol(self, socktype, conn, socket_options, protocol_class=Protocol):
         """ create a new xpra Protocol instance and start it """
         def xpra_protocol_class(conn):
             """ adds xpra protocol tweaks after creating the instance """
@@ -1250,11 +1184,11 @@ class ServerCore(object):
             protocol.large_packets.append(b"info-response")
             protocol.receive_aliases.update(self._aliases)
             return protocol
-        return self.do_make_protocol(socktype, conn, xpra_protocol_class)
+        return self.do_make_protocol(socktype, conn, socket_options, xpra_protocol_class)
 
-    def do_make_protocol(self, socktype, conn, protocol_class):
+    def do_make_protocol(self, socktype, conn, socket_options, protocol_class):
         """ create a new Protocol instance and start it """
-        netlog("make_protocol(%s, %s, %s)", socktype, conn, protocol_class)
+        netlog("make_protocol(%s, %s, %s, %s)", socktype, conn, socket_options, protocol_class)
         socktype = socktype.lower()
         protocol = protocol_class(conn)
         protocol.socket_type = socktype
@@ -1262,11 +1196,14 @@ class ServerCore(object):
         protocol.authenticators = ()
         protocol.encryption = None
         protocol.keyfile = None
-        if socktype=="tcp":
+        if socktype in ENCRYPTED_SOCKET_TYPES:
             #special case for legacy encryption code:
-            protocol.encryption = self.tcp_encryption
-            protocol.keyfile = self.tcp_encryption_keyfile
+            protocol.encryption = socket_options.get("encryption", self.tcp_encryption)
+            protocol.keyfile = socket_options.get("encryption-keyfile") or socket_options.get("keyfile") or self.tcp_encryption_keyfile
+            netlog("%s: encryption=%s, keyfile=%s", socktype, protocol.encryption, protocol.keyfile)
             if protocol.encryption:
+                from xpra.net.crypto import crypto_backend_init
+                crypto_backend_init()
                 from xpra.net.crypto import (
                     ENCRYPT_FIRST_PACKET,
                     DEFAULT_IV,
@@ -1280,13 +1217,15 @@ class ServerCore(object):
                     protocol.set_cipher_in(protocol.encryption,
                                            DEFAULT_IV, password,
                                            DEFAULT_SALT, DEFAULT_ITERATIONS, INITIAL_PADDING)
+        else:
+            netlog("no encryption for %s", socktype)
         protocol.invalid_header = self.invalid_header
         authlog("socktype=%s, encryption=%s, keyfile=%s", socktype, protocol.encryption, protocol.keyfile)
         protocol.start()
         self.schedule_verify_connection_accepted(protocol, self._accept_timeout)
         return protocol
 
-    def may_wrap_socket(self, conn, socktype, peek_data=b"", line1=b""):
+    def may_wrap_socket(self, conn, socktype, socket_options, peek_data=b"", line1=b""):
         """
             Returns:
             * a flag indicating if we should continue processing this connection
@@ -1297,28 +1236,26 @@ class ServerCore(object):
         if not peek_data:
             netlog("may_wrap_socket: no data, not wrapping")
             return True, conn, peek_data
-        if peek_data[0] in ("P", ord("P")) and peek_data[:5]!=b"POST ":
+        if peek_data[0]==ord("P") and peek_data[:5]!=b"POST ":
             netlog("may_wrap_socket: xpra protocol header '%s', not wrapping", peek_data[0])
             #xpra packet header, no need to wrap this connection
             return True, conn, peek_data
         frominfo = pretty_socket(conn.remote)
-        netlog("may_wrap_socket(..) peek_data=%s from %s", repr_ellipsized(bytestostr(peek_data)), frominfo)
+        netlog("may_wrap_socket(..) peek_data=%s from %s", ellipsizer(peek_data), frominfo)
         try:
             first_char = ord(peek_data[0])
         except TypeError:
             first_char = peek_data[0]
         netlog("may_wrap_socket(..) first char=%#x / %r", first_char, chr(first_char))
         netlog("may_wrap_socket(..) upgrade options: ssh=%s, ssl=%s, http/ws=%s, tcp proxy=%s",
-               self.ssh_upgrade, bool(self._ssl_wrap_socket), self._html, bool(self._tcp_proxy))
+               self.ssh_upgrade, bool(self._ssl_attributes), self._html, bool(self._tcp_proxy))
         if self.ssh_upgrade and peek_data[:4]==b"SSH-":
-            conn = self.handle_ssh_connection(conn)
+            conn = self.handle_ssh_connection(conn, socket_options)
             return conn is not None, conn, None
-        if self._ssl_wrap_socket and first_char==0x16:
+        if self._ssl_attributes and first_char==0x16:
             sock, sockname, address, endpoint = conn._socket, conn.local, conn.remote, conn.endpoint
-            sock = self._ssl_wrap_socket(sock)
+            sock = self._ssl_wrap_socket(socktype, sock, socket_options)
             if sock is None:
-                #None means EOF! (we don't want to import ssl bits here)
-                ssllog("ignoring SSL EOF error")
                 return False, None, None
             conn = SSLSocketConnection(sock, sockname, address, endpoint, "ssl")
             conn.socktype_wrapped = socktype
@@ -1336,14 +1273,14 @@ class ServerCore(object):
                     http = True
                 else:
                     conn.enable_peek()
-                    peek_data, line1 = self.peek_connection(conn)
+                    peek_data, line1 = peek_connection(conn)
                     http = line1.find(b"HTTP/")>0
             is_ssl = True
         else:
             http = line1.find(b"HTTP/")>0
             is_ssl = False
         if http and self._html:
-            self.start_http_socket(socktype, conn, is_ssl, peek_data)
+            self.start_http_socket(socktype, conn, socket_options, is_ssl, peek_data)
             return False, conn, None
         if self._tcp_proxy:
             netlog.info("New tcp proxy connection received from %s", frominfo)
@@ -1353,29 +1290,9 @@ class ServerCore(object):
         return True, conn, peek_data
 
     def invalid_header(self, proto, data, msg=""):
-        netlog("invalid_header(%s, %s bytes: '%s', %s)",
-               proto, len(data or ""), msg, repr_ellipsized(data))
-        netlog(" input_packetcount=%s, tcp_proxy=%s, html=%s, ssl=%s",
-               proto.input_packetcount, self._tcp_proxy, self._html, bool(self._ssl_wrap_socket))
-        info = self.guess_header_protocol(data)[1]
-        err = "invalid packet format, %s" % info
-        proto.gibberish(err, data)
-
-    def guess_header_protocol(self, v):
-        try:
-            c = ord(v[0])
-        except TypeError:
-            c = int(v[0])
-        s = bytestostr(v)
-        netlog("guess_header_protocol(%r) first char=%#x", repr_ellipsized(s), c)
-        if c==0x16:
-            return "ssl", "SSL packet?"
-        if s[:4]=="SSH-":
-            return "ssh", "SSH packet"
-        if len(s)>=3 and s.split(" ")[0] in ("GET", "POST"):
-            return "HTTP", "HTTP %s request" % s.split(" ")[0]
-        return None, "character %#x, not an xpra client?" % c
-
+        netlog("invalid header: input_packetcount=%s, tcp_proxy=%s, html=%s, ssl=%s",
+               proto.input_packetcount, self._tcp_proxy, self._html, bool(self._ssl_attributes))
+        proto._invalid_header(proto, data, msg)
 
     ######################################################################
     # http / websockets:
@@ -1385,14 +1302,14 @@ class ServerCore(object):
             "/Info"         : self.http_info_request,
             }
 
-    def start_http_socket(self, socktype, conn, is_ssl=False, peek_data=""):
+    def start_http_socket(self, socktype, conn, socket_options, is_ssl=False, peek_data=""):
         frominfo = pretty_socket(conn.remote)
         line1 = b""
         if peek_data:
             line1 = peek_data.splitlines()[0]
         http_proto = "http"+["","s"][int(is_ssl)]
-        netlog("start_http_socket(%s, %s, %s, ..) http proto=%s, line1=%r",
-               socktype, conn, is_ssl, http_proto, bytestostr(line1))
+        netlog("start_http_socket(%s, %s, %s, %s, ..) http proto=%s, line1=%r",
+               socktype, conn, socket_options, is_ssl, http_proto, bytestostr(line1))
         if line1.startswith(b"GET ") or line1.startswith(b"POST "):
             parts = bytestostr(line1).split(" ")
             httplog("New %s %s request received from %s for '%s'", http_proto, parts[0], frominfo, parts[1])
@@ -1405,11 +1322,11 @@ class ServerCore(object):
         #we start a new thread,
         #only so that the websocket handler thread is named correctly:
         start_thread(self.start_http, "%s-for-%s" % (tname, frominfo),
-                     daemon=True, args=(socktype, conn, is_ssl, req_info, line1, conn.remote))
+                     daemon=True, args=(socktype, conn, socket_options, is_ssl, req_info, line1, conn.remote))
 
-    def start_http(self, socktype, conn, is_ssl, req_info, line1, frominfo):
-        httplog("start_http(%s, %s, %s, %s, %s, %s) www dir=%s, headers dir=%s",
-                socktype, conn, is_ssl, req_info, line1, frominfo,
+    def start_http(self, socktype, conn, socket_options, is_ssl, req_info, line1, frominfo):
+        httplog("start_http(%s, %s, %s, %s, %s, %s, %s) www dir=%s, headers dir=%s",
+                socktype, conn, socket_options, is_ssl, req_info, line1, frominfo,
                 self._www_dir, self._http_headers_dir)
         try:
             from xpra.net.websockets.handler import WebSocketRequestHandler
@@ -1419,7 +1336,7 @@ class ServerCore(object):
                 from xpra.net.websockets.protocol import WebSocketProtocol
                 wslog("new_websocket_client(%s) socket=%s", wsh, sock)
                 newsocktype = "ws%s" % ["","s"][int(is_ssl)]
-                self.make_protocol(newsocktype, conn, WebSocketProtocol)
+                self.make_protocol(newsocktype, conn, socket_options, WebSocketProtocol)
             scripts = self.get_http_scripts()
             conn.socktype = "wss" if is_ssl else "ws"
             WebSocketRequestHandler(sock, frominfo, new_websocket_client,
@@ -1428,13 +1345,19 @@ class ServerCore(object):
         except (IOError, ValueError) as e:
             httplog("start_http%s", (socktype, conn, is_ssl, req_info, frominfo), exc_info=True)
             err = e.args[0]
-            if err==errno.EPIPE:
+            if err==1 and line1 and line1[0]==0x16:
+                l = httplog
+            elif err==errno.EPIPE:
                 l = httplog
             else:
                 l = httplog.error
-            l("Error: %s request failure", req_info)
+                l("Error: %s request failure", req_info)
+                l(" errno=%s", err)
             l(" for client %s:", pretty_socket(frominfo))
-            l(" request: '%s'", nonl(bytestostr(line1)))
+            if line1 and line1[0]>=128 or line1[0]==0x16:
+                l(" request as hex: '%s'", hexstr(line1))
+            else:
+                l(" request: '%s'", nonl(bytestostr(line1)))
             l(" %s", e)
         except Exception as e:
             wslog.error("Error: %s request failure for client %s:", req_info, pretty_socket(frominfo), exc_info=True)
@@ -1448,7 +1371,7 @@ class ServerCore(object):
         ji = json.dumps(self.get_http_info())
         return self.send_http_response(handler, ji, "application/json")
 
-    def get_http_info(self):
+    def get_http_info(self) -> dict:
         return {
             "mode"              : self.get_server_mode(),
             "type"              : "Python",
@@ -1574,9 +1497,9 @@ class ServerCore(object):
             info = conn.get_info()
             endpoint = info.get("endpoint")
             if endpoint:
-                proto_info = " %s" % (endpoint,)
+                proto_info = " %s" % pretty_socket(endpoint)
             else:
-                proto_info = " %s" % (conn.local,)
+                proto_info = " %s" % pretty_socket(conn.local)
         except (KeyError, AttributeError):
             pass
         self._log_disconnect(protocol, "Disconnecting client%s:", proto_info)
@@ -1592,7 +1515,7 @@ class ServerCore(object):
     def _process_disconnect(self, proto, packet):
         info = bytestostr(packet[1])
         if len(packet)>2:
-            info += u" (%s)" % csv(bytestostr(x) for x in packet[2:])
+            info += " (%s)" % csv(bytestostr(x) for x in packet[2:])
         #only log protocol info if there is more than one client:
         proto_info = self._disconnect_proto_info(proto)
         self._log_disconnect(proto, "client%s has requested disconnection: %s", proto_info, info)
@@ -1622,13 +1545,13 @@ class ServerCore(object):
     def _process_gibberish(self, proto, packet):
         message, data = packet[1:3]
         netlog("Received uninterpretable nonsense from %s: %s", proto, message)
-        netlog(" data: %s", repr_ellipsized(data))
+        netlog(" data: %s", ellipsizer(data))
         self.disconnect_client(proto, message)
 
     def _process_invalid(self, protocol, packet):
         message, data = packet[1:3]
         netlog("Received invalid packet: %s", message)
-        netlog(" data: %s", repr_ellipsized(data))
+        netlog(" data: %s", ellipsizer(data))
         self.disconnect_client(protocol, message)
 
 
@@ -1671,15 +1594,24 @@ class ServerCore(object):
         start_thread(self.verify_auth, "authenticate connection", daemon=True, args=(proto, packet, c))
 
     def make_authenticators(self, socktype, username, conn):
-        authlog("make_authenticators%s", (socktype, username, conn))
-        authenticators = []
-        auth_classes = self.auth_classes[socktype]
+        authlog("make_authenticators%s socket options=%s", (socktype, username, conn), conn.options)
+        sock_auth = conn.options.get("auth", "")
+        if sock_auth:
+            #per socket authentication option:
+            #ie: --bind-tcp=0.0.0.0:10000,auth=hosts,auth=file:filename=pass.txt:foo=bar
+            # -> sock_auth = ["hosts", "file:filename=pass.txt:foo=bar"]
+            if not isinstance(sock_auth, list):
+                sock_auth = sock_auth.split(",")
+            auth_classes = self.get_auth_modules(conn.socktype, sock_auth)
+        else:
+            #use authentication configuration defined for all sockets of this type:
+            auth_classes = self.auth_classes[socktype]
         i = 0
+        authenticators = []
         if auth_classes:
             authlog("creating authenticators %s for %s, with username=%s, connection=%s",
                     csv(auth_classes), socktype, username, conn)
-            for auth_class in auth_classes:
-                auth, aclass, options = auth_class
+            for auth, aclass, options in auth_classes:
                 opts = dict(options)
                 opts["connection"] = conn
                 authenticator = aclass(username, **opts)
@@ -1702,9 +1634,9 @@ class ServerCore(object):
         if not username:
             import getpass
             username = getpass.getuser()
+        conn = proto._conn
         #authenticator:
         if not proto.authenticators:
-            conn = proto._conn
             socktype = conn.socktype_wrapped
             try:
                 proto.authenticators = self.make_authenticators(socktype, username, conn)
@@ -1715,8 +1647,8 @@ class ServerCore(object):
                 auth_failed(str(e))
                 return
 
-        digest_modes = c.strlistget("digest", ("hmac", ))
-        salt_digest_modes = c.strlistget("salt-digest", ("xor",))
+        digest_modes = c.strtupleget("digest", ("hmac", ))
+        salt_digest_modes = c.strtupleget("salt-digest", ("xor",))
         #client may have requested encryption:
         cipher = c.strget("cipher")
         cipher_iv = c.strget("cipher.iv")
@@ -1726,9 +1658,11 @@ class ServerCore(object):
             from xpra.net.crypto import DEFAULT_PADDING, ALL_PADDING_OPTIONS, ENCRYPTION_CIPHERS, new_cipher_caps
             iterations = c.intget("cipher.key_stretch_iterations")
             padding = c.strget("cipher.padding", DEFAULT_PADDING)
-            padding_options = c.strlistget("cipher.padding.options", [DEFAULT_PADDING])
+            padding_options = c.strtupleget("cipher.padding.options", (DEFAULT_PADDING,))
             if cipher not in ENCRYPTION_CIPHERS:
-                authlog.warn("unsupported cipher: %s", cipher)
+                authlog.warn("Warning: unsupported cipher: %s", cipher)
+                if ENCRYPTION_CIPHERS:
+                    authlog.warn(" should be: %s", csv(ENCRYPTION_CIPHERS))
                 auth_failed("unsupported cipher")
                 return
             encryption_key = self.get_encryption_key(proto.authenticators, proto.keyfile)
@@ -1738,13 +1672,13 @@ class ServerCore(object):
             if padding not in ALL_PADDING_OPTIONS:
                 auth_failed("unsupported padding: %s" % padding)
                 return
-            authlog("set output cipher using encryption key '%s'", repr_ellipsized(encryption_key))
+            authlog("set output cipher using encryption key '%s'", ellipsizer(encryption_key))
             proto.set_cipher_out(cipher, cipher_iv, encryption_key, key_salt, iterations, padding)
             #use the same cipher as used by the client:
             auth_caps = new_cipher_caps(proto, cipher, encryption_key, padding_options)
             authlog("server cipher=%s", auth_caps)
         else:
-            if proto.encryption:
+            if proto.encryption and conn.socktype in ENCRYPTED_SOCKET_TYPES:
                 authlog("client does not provide encryption tokens")
                 auth_failed("missing encryption tokens")
                 return
@@ -1837,7 +1771,7 @@ class ServerCore(object):
     def auth_verified(self, proto, packet, auth_caps):
         capabilities = packet[1]
         c = typedict(capabilities)
-        command_req = c.strlistget("command_request")
+        command_req = c.strtupleget("command_request")
         if command_req:
             #call from UI thread:
             authlog("auth_verified(..) command request=%s", command_req)
@@ -1850,20 +1784,22 @@ class ServerCore(object):
     def get_encryption_key(self, authenticators=None, keyfile=None):
         #if we have a keyfile specified, use that:
         authlog("get_encryption_key(%s, %s)", authenticators, keyfile)
-        v = None
         if keyfile:
             authlog("loading encryption key from keyfile: %s", keyfile)
             v = filedata_nocrlf(keyfile)
-        if not v:
-            v = os.environ.get('XPRA_ENCRYPTION_KEY')
             if v:
-                authlog("using encryption key from %s environment variable", 'XPRA_ENCRYPTION_KEY')
-        if not v and authenticators:
+                return v
+        v = os.environ.get('XPRA_ENCRYPTION_KEY')
+        if v:
+            authlog("using encryption key from %s environment variable", 'XPRA_ENCRYPTION_KEY')
+            return v
+        if authenticators:
             for authenticator in authenticators:
                 v = authenticator.get_password()
                 if v:
-                    break
-        return v
+                    authlog("using password from authenticator %s", authenticator)
+                    return v
+        return None
 
     def call_hello_oked(self, proto, packet, c, auth_caps):
         try:
@@ -1871,7 +1807,7 @@ class ServerCore(object):
                 raise Exception("Simulating a server error")
             self.hello_oked(proto, packet, c, auth_caps)
         except ClientException as e:
-            log("call_hello_oked(%s, %s, %s, %s)", proto, packet, repr_ellipsized(str(c)), auth_caps, exc_info=True)
+            log("call_hello_oked(%s, %s, %s, %s)", proto, packet, ellipsizer(c), auth_caps, exc_info=True)
             log.error("Error setting up new connection for")
             log.error(" %s:", proto)
             log.error(" %s", e)
@@ -1895,8 +1831,7 @@ class ServerCore(object):
             self.send_id_info(proto)
             return True
         if is_req("info"):
-            flatten = not c.boolget("info-namespace", False)
-            self.send_hello_info(proto, flatten)
+            self.send_hello_info(proto)
             return True
         if self._closing:
             self.disconnect_client(proto, SERVER_EXIT, "server is shutting down")
@@ -1951,7 +1886,6 @@ class ServerCore(object):
                         })
         if source is None or source.wants_features:
             capabilities.update({
-                "info-request"      : True,
                 "readonly-server"   : True,
                 "readonly"          : self.readonly,
                 })
@@ -1971,33 +1905,31 @@ class ServerCore(object):
         log("id info request from %s", proto._conn)
         proto.send_now(("hello", self.get_session_id_info()))
 
-    def get_session_id_info(self):
+    def get_session_id_info(self) -> dict:
         #minimal information for identifying the session
         id_info = {
             "session-type"  : self.session_type,
             "session-name"  : self.session_name,
             "uuid"          : self.uuid,
             "platform"      : sys.platform,
+            "pid"           : os.getpid(),
+            "machine-id"    : get_machine_id(),
             }
         display = os.environ.get("DISPLAY")
         if display:
             id_info["display"] = display
         return id_info
 
-    def send_hello_info(self, proto, flatten=True):
+    def send_hello_info(self, proto):
         #Note: this can be overriden in subclasses to pass arguments to get_ui_info()
         #(ie: see server_base)
-        log.info("processing %s info request from %s", "flat" if flatten else "structured", proto._conn)
+        log.info("processing info request from %s", proto._conn)
         def cb(proto, info):
-            self.do_send_info(proto, info, flatten)
+            self.do_send_info(proto, info)
         self.get_all_info(cb, proto)
 
-    def do_send_info(self, proto, info, flatten):
-        if flatten:
-            info = flatten_dict(info)
-        else:
-            info = notypedict(info)
-        proto.send_now(("hello", info))
+    def do_send_info(self, proto, info):
+        proto.send_now(("hello", notypedict(info)))
 
     def get_all_info(self, callback, proto=None, *args):
         start = monotonic_time()
@@ -2019,28 +1951,29 @@ class ServerCore(object):
         log("get_all_info: non ui info collected in %ims", (end-start)*1000)
         callback(proto, ui_info)
 
-    def get_ui_info(self, _proto, *_args):
+    def get_ui_info(self, _proto, *_args) -> dict:
         #this function is for info which MUST be collected from the UI thread
         return {}
 
-    def get_thread_info(self, proto):
+    def get_thread_info(self, proto) -> dict:
         return get_thread_info(proto)
 
-    def get_minimal_server_info(self):
+    def get_minimal_server_info(self) -> dict:
         now = time()
         info = {
             "mode"              : self.get_server_mode(),
             "session-type"      : self.session_type,
             "type"              : "Python",
-            "python"            : {"version" : python_platform.python_version()},
+            "python"            : {"version" : platform.python_version()},
             "start_time"        : int(self.start_time),
             "current_time"      : int(now),
             "elapsed_time"      : int(now - self.start_time),
             "uuid"              : self.uuid,
+            "machine-id"        : get_machine_id(),
             }
         return info
 
-    def get_server_info(self):
+    def get_server_info(self) -> dict:
         #this function is for non UI thread info
         si = {}
         si.update(self.get_minimal_server_info())
@@ -2057,6 +1990,9 @@ class ServerCore(object):
                 "path"  : self.pidfile,
                 "inode" : self.pidinode,
                 }
+        logfile = os.environ.get("XPRA_SERVER_LOG")
+        if logfile:
+            si["log-file"] = logfile
         if POSIX:
             si["load"] = tuple(int(x*1000) for x in os.getloadavg())
         if self.original_desktop_display:
@@ -2069,13 +2005,10 @@ class ServerCore(object):
         info = {}
         def up(prefix, d):
             info[prefix] = d
-        filtered_env = os.environ.copy()
-        if filtered_env.get('XPRA_PASSWORD'):
-            filtered_env['XPRA_PASSWORD'] = "*****"
-        if filtered_env.get('XPRA_ENCRYPTION_KEY'):
-            filtered_env['XPRA_ENCRYPTION_KEY'] = "*****"
 
         si = self.get_server_info()
+        if SYSCONFIG:
+            si["sysconfig"] = get_sysconfig_info()
         up("server", si)
 
         ni = get_net_info()
@@ -2089,11 +2022,14 @@ class ServerCore(object):
                        ""                   : self._html,
                        "dir"                : self._www_dir or "",
                        "http-headers-dir"   : self._http_headers_dir or "",
-                       }
+                       },
+                   "mdns"           : self.mdns,
                    })
         up("network", ni)
         up("threads",   self.get_thread_info(proto))
-        up("env",       filtered_env)
+        from xpra.platform.info import get_sys_info
+        up("sys", get_sys_info())
+        up("env", get_info_env())
         if self.session_name:
             info["session"] = {"name" : self.session_name}
         if self.child_reaper:
@@ -2102,12 +2038,12 @@ class ServerCore(object):
         log("ServerCore.get_info took %ims", (end-start)*1000)
         return info
 
-    def get_packet_handlers_info(self):
+    def get_packet_handlers_info(self) -> dict:
         return {
             "default"   : sorted(self._default_packet_handlers.keys()),
             }
 
-    def get_socket_info(self):
+    def get_socket_info(self) -> dict:
         si = {}
         for socktype, _, info, _ in self._socket_info:
             if info:
@@ -2120,19 +2056,6 @@ class ServerCore(object):
         return si
 
 
-    def may_log_packet(self, packet_type, packet):
-        if LOG_PACKETS:
-            logit = packet_type in LOG_PACKETS
-        elif NOLOG_PACKETS:
-            logit = packet_type not in NOLOG_PACKETS
-        else:
-            logit = False
-        if logit:
-            s = str(packet)
-            if len(s)>200:
-                s = repr_ellipsized(s, 200)
-            log.info(s)
-
     ######################################################################
     # packet handling:
     def process_packet(self, proto, packet):
@@ -2140,7 +2063,7 @@ class ServerCore(object):
         handler = None
         try:
             packet_type = bytestostr(packet[0])
-            self.may_log_packet(packet_type, packet)
+            may_log_packet(False, packet_type, packet)
             handler = self._default_packet_handlers.get(packet_type)
             if handler:
                 netlog("process packet %s", packet_type)
@@ -2152,7 +2075,7 @@ class ServerCore(object):
             proto.close()
         except KeyboardInterrupt:
             raise
-        except:
+        except Exception:
             netlog.error("Unhandled error while processing a '%s' packet from peer using %s",
                          packet_type, handler, exc_info=True)
 
@@ -2182,7 +2105,7 @@ class ServerCore(object):
             sockname = sock.getsockname()
             conn = UDPSocketConnection(sock, sockname, (host, port), (host, port), socktype)
             conn.timeout = SOCKET_TIMEOUT
-            protocol = self.do_make_protocol(socktype, conn, udp_protocol_class)
+            protocol = self.do_make_protocol(socktype, conn, {}, udp_protocol_class)
             self._udp_protocols[uuid] = protocol
         else:
             #update remote address in case the client is roaming:

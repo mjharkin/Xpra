@@ -1,5 +1,5 @@
 # This file is part of Xpra.
-# Copyright (C) 2014-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2014-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -9,8 +9,8 @@ from io import BytesIO
 import PIL                      #@UnresolvedImport
 from PIL import Image           #@UnresolvedImport
 
-from xpra.codecs.pillow import PIL_VERSION
 from xpra.util import csv
+from xpra.os_util import hexstr
 from xpra.log import Logger
 
 log = Logger("encoder", "pillow")
@@ -38,6 +38,13 @@ XPM_HEADER = b"/* XPM */"
 def is_xpm(data):
     return data[:9]==XPM_HEADER
 
+def is_tiff(data):
+    if data[:2]==b"II":
+        return data[2]==42 and data[3]==0
+    if data[:2]==b"MM":
+        return data[2]==0 and data[3]==42
+    return False
+
 
 HEADERS = {
     is_png  : "png",
@@ -45,9 +52,10 @@ HEADERS = {
     is_jpeg : "jpeg",
     is_svg  : "svg",
     is_xpm  : "xpm",
+    is_tiff : "tiff",
     }
 
-def get_image_type(data):
+def get_image_type(data) -> str:
     if not data:
         return None
     if len(data)<32:
@@ -61,15 +69,16 @@ def get_image_type(data):
 def open_only(data, types=("png", "jpeg", "webp")):
     itype = get_image_type(data)
     if itype not in types:
-        raise Exception("invalid data: %s, not recognized as %s" % ((itype or "unknown"), csv(types)))
+        raise Exception("invalid data: %s, not recognized as %s, header: %s" % (
+            (itype or "unknown"), csv(types), hexstr(data[:64])))
     buf = BytesIO(data)
     return Image.open(buf)
 
 
 def get_version():
-    return PIL_VERSION
+    return PIL.__version__
 
-def get_type():
+def get_type() -> str:
     return "pillow"
 
 def do_get_encodings():
@@ -88,7 +97,7 @@ def get_encodings():
 
 ENCODINGS = do_get_encodings()
 
-def get_info():
+def get_info() -> dict:
     return  {
             "version"       : get_version(),
             "encodings"     : get_encodings(),
@@ -97,7 +106,7 @@ def get_info():
 def decompress(coding, img_data, options):
     # can be called from any thread
     actual = get_image_type(img_data)
-    if actual!=coding:
+    if not actual or not coding.startswith(actual):
         raise Exception("expected %s image data but received %s" % (coding, actual or "unknown"))
     buf = BytesIO(img_data)
     img = Image.open(buf)
@@ -128,7 +137,7 @@ def decompress(coding, img_data, options):
         else:
             img = img.convert("RGB")
 
-    width = img.size[0]
+    width, height = img.size
     if img.mode=="RGB":
         #PIL flattens the data to a continuous straightforward RGB format:
         rowstride = width*3
@@ -160,7 +169,7 @@ def decompress(coding, img_data, options):
         raise Exception("invalid image mode: %s" % img.mode)
     raw_data = img.tobytes("raw", img.mode)
     log("pillow decoded %i bytes of %s data to %i bytes of %s", len(img_data), coding, len(raw_data), rgb_format)
-    return rgb_format, raw_data, rowstride
+    return rgb_format, raw_data, width, height, rowstride
 
 
 def selftest(_full=False):
@@ -198,6 +207,7 @@ def selftest(_full=False):
             except Exception as e:
                 log("correctly raised exception for invalid input: %s", e)
         except Exception as e:
+            log("selftest:", exc_info=True)
             try:
                 #py2k:
                 datainfo = cdata.encode("string_escape")

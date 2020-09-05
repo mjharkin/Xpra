@@ -13,7 +13,7 @@ log = Logger("window")
 USE_FAKE_BACKING = envbool("XPRA_USE_FAKE_BACKING", False)
 
 
-class ClientWidgetBase(object):
+class ClientWidgetBase:
 
     def __init__(self, client, watcher_pid, wid, has_alpha):
         self._id = wid
@@ -31,6 +31,17 @@ class ClientWidgetBase(object):
         self._current_icon = None
         self._backing = None
         self.pixel_depth = 24
+
+    def get_info(self):
+        info = {
+            "has-alpha"     : self._has_alpha,
+            "window-alpha"  : self._window_alpha,
+            "pixel-depth"   : self.pixel_depth,
+            }
+        b = self._backing
+        if b:
+            info["backing"] = b.get_info()
+        return info
 
     def make_new_backing(self, backing_class, ww, wh, bw, bh):
         #size of the backing (same as server window source):
@@ -55,20 +66,27 @@ class ClientWidgetBase(object):
         backing.init(ww, wh, bw, bh)
         return backing
 
-    def workspace_changed(self):
+    def freeze(self):
         pass
 
-    def set_cursor_data(self, cursor_data):
+    def unfreeze(self):
         pass
 
-    def new_backing(self, _w, _h):
+
+    def workspace_changed(self):            # pragma: no cover
+        pass
+
+    def set_cursor_data(self, cursor_data): # pragma: no cover
+        pass
+
+    def new_backing(self, _w, _h):          # pragma: no cover
         raise NotImplementedError("override me!")
 
-    def is_OR(self):
+    def is_OR(self):                        # pragma: no cover
         return False
 
-    def is_tray(self):
+    def is_tray(self):                      # pragma: no cover
         return False
 
-    def is_GL(self):
+    def is_GL(self):                        # pragma: no cover
         return False

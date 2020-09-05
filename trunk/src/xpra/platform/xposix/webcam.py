@@ -5,7 +5,6 @@
 #pylint: disable-msg=E1101
 
 import os
-from collections import OrderedDict
 
 from xpra.util import engs, envbool
 from xpra.os_util import is_Ubuntu, is_Debian
@@ -15,7 +14,7 @@ log = Logger("webcam")
 
 #on Debian and Ubuntu, the v4l2loopback device is created with exclusive_caps=1,
 #so we cannot check the devices caps for the "VIDEO_CAPTURE" flag.
-#see http://xpra.org/trac/ticket/1596
+#see https://xpra.org/trac/ticket/1596
 CHECK_VIRTUAL_CAPTURE = envbool("XPRA_CHECK_VIRTUAL_CAPTURE", not (is_Ubuntu() or is_Debian()))
 
 
@@ -38,6 +37,7 @@ def check_virtual_dir(warn=True):
             log.warn("Warning: webcam forwarding is disabled")
             log.warn(" the virtual video directory '%s' was not found", v4l2_virtual_dir)
             log.warn(" make sure that the 'v4l2loopback' kernel module is installed and loaded")
+            log.warn(" or use the 'webcam=no' option")
         return False
     return True
 
@@ -49,12 +49,12 @@ def query_video_device(device):
         return {}
 
 
-def get_virtual_video_devices(capture_only=True):
+def get_virtual_video_devices(capture_only=True) -> dict:
     log("get_virtual_video_devices(%s) CHECK_VIRTUAL_CAPTURE=%s", capture_only, CHECK_VIRTUAL_CAPTURE)
     if not check_virtual_dir(False):
-        return []
+        return {}
     contents = os.listdir(v4l2_virtual_dir)
-    devices = OrderedDict()
+    devices = {}
     for f in sorted(contents):
         if not f.startswith("video"):
             continue
@@ -79,7 +79,7 @@ def get_virtual_video_devices(capture_only=True):
             try:
                 name = open(dev_name).read().replace("\n", "")
                 info["card"] = name
-            except (OSError, IOError):
+            except OSError:
                 pass
         devices[no] = info
     log("devices: %s", devices)

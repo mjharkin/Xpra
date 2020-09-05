@@ -1,19 +1,21 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2011-2017 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2011-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 #pylint: disable=line-too-long
 
+import os
+import sys
 import unittest
 import binascii
 
-from xpra.os_util import strtobytes, bytestostr, PYTHON2
+from xpra.os_util import strtobytes, bytestostr
 from xpra.util import repr_ellipsized
-from xpra.net.bencode.bencode import bencode, bdecode
 from xpra.net.bencode import cython_bencode   #@UnresolvedImport
+from xpra.net import bencode
 
 
 #sample data to encode:
@@ -127,9 +129,7 @@ def _cmp(o, r):
             assert rv is not None, "restored dict is missing %s: %s" % (k, r)
             _cmp(ov, rv)
         return
-    if PYTHON2 and isinstance(o, unicode) and isinstance(r, str):   #@UndefinedVariable
-        o = o.encode("utf-8")
-    elif isinstance(o, bytes) and isinstance(r, str):
+    if isinstance(o, bytes) and isinstance(r, str):
         o = o.decode("utf-8")
     elif isinstance(o, str) and isinstance(r, bytes):
         r = r.decode("utf-8")
@@ -146,7 +146,7 @@ def noop(_input):
     raise NotImplementedError()
 
 
-class TestBencoderFunctions(object):
+class TestBencoderFunctions:
 
     def setUp(self):
         self.encode = noop
@@ -227,7 +227,7 @@ class TestBencoderFunctions(object):
         self.t(v, estr)
 
     def test_unicode(self):
-        ustr = u"Schr\xc3\xb6dinger\xe2\x80\x99s_Cat".encode("utf8")
+        ustr = "Schr\xc3\xb6dinger\xe2\x80\x99s_Cat".encode("utf8")
         estr = binascii.unhexlify("6c32353a53636872c383c2b664696e676572c3a2c280c299735f436174646565")
         self.t([ustr, {}], estr)
         #from a real packet:
@@ -240,6 +240,13 @@ class TestBencoderFunctions(object):
             ]
         self.t(packet)
 
+    def test_decode_unicode(self):
+        #we never use this code,
+        #so we have to call it directly
+        be = self.decode(b"u3:abc")[0]
+        e = "abc"
+        assert be==e, "expected %s but got %s" % (e, be)
+
     def test_encoding_hello(self):
         self.t(hello)
 
@@ -249,20 +256,64 @@ class TestBencoderFunctions(object):
     def test_nested_dicts(self):
         self.t(nested_dicts, nested_dicts_output)
 
+    def test_invalid_bdecode(self):
+        def f(v):
+            try:
+                self.decode(v)
+            except ValueError:
+                pass
+            except AssertionError:
+                pass
+            else:
+                raise Exception("decode should have failed for '%s' (%s)" % (v, type(v)))
+        f(b"")
+        f(b"XX")        #invalid type code
+        f(b"i-0e")      #invalid number
+        f(b"li1ei2eXXe")#invalid element in list
+        f(b"di1eXXe")   #invalid value in dict
+        f(b"dXXi2ee")   #invalid key in dict
+        f(b"s")         #input too short
+        f(b"i1")        #no end marker
+
 
 class TestBencoder(unittest.TestCase, TestBencoderFunctions):
 
     def setUp(self):
-        self.encode = bencode
-        self.decode = bdecode
+        bencode.init()
+        self.encode = bencode.bencode
+        self.decode = bencode.bdecode
         unittest.TestCase.setUp(self)
 
 class TestCythonBencoder(unittest.TestCase, TestBencoderFunctions):
 
     def setUp(self):
+        bencode.init()
         self.encode = cython_bencode.bencode    #@UndefinedVariable
         self.decode = cython_bencode.bdecode    #@UndefinedVariable
         unittest.TestCase.setUp(self)
+
+class TestCythonEnvBencoder(unittest.TestCase, TestBencoderFunctions):
+    def setUp(self):
+        os.environ["XPRA_USE_CYTHON_BENCODE"] = "1"
+        bencode.init()
+        self.encode = bencode.bencode
+        self.decode = bencode.bdecode
+
+class TestPythonEnvBencoder(unittest.TestCase, TestBencoderFunctions):
+    def setUp(self):
+        os.environ["XPRA_USE_CYTHON_BENCODE"] = "0"
+        bencode.init()
+        self.encode = bencode.bencode
+        self.decode = bencode.bdecode
+
+class TestFailCython(unittest.TestCase):
+    def test_fail_import(self):
+        try:
+            #backup = sys.modules.copy()
+            sys.modules["xpra.net.bencode.cython_bencode"] = None
+            bencode.init()
+        finally:
+            del sys.modules["xpra.net.bencode.cython_bencode"]
 
 
 def main():

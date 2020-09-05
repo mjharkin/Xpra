@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
 # Copyright (C) 2011 Serviware (Arthur Huillet, <ahuillet@serviware.com>)
-# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -12,10 +12,10 @@ import threading
 from math import sqrt
 from collections import deque
 
-from xpra.os_util import memoryview_to_bytes, strtobytes, bytestostr, monotonic_time
+from xpra.os_util import strtobytes, bytestostr, monotonic_time
 from xpra.util import envint, envbool, csv, typedict, first_time
+from xpra.common import MAX_WINDOW_SIZE
 from xpra.server.window.windowicon_source import WindowIconSource
-from xpra.server.window.content_guesser import guess_content_type, get_content_type_properties
 from xpra.server.window.window_stats import WindowPerformanceStatistics
 from xpra.server.window.batch_config import DamageBatchConfig
 from xpra.server.window.batch_delay_calculator import calculate_batch_delay, get_target_speed, get_target_quality
@@ -23,12 +23,11 @@ from xpra.server.cystats import time_weighted_average, logp #@UnresolvedImport
 from xpra.rectangle import rectangle, add_rectangle, remove_rectangle, merge_all   #@UnresolvedImport
 from xpra.server.picture_encode import rgb_encode, webp_encode, mmap_send
 from xpra.simple_stats import get_list_stats
-from xpra.codecs.xor.cyxor import xor_str           #@UnresolvedImport
 from xpra.codecs.argb.argb import argb_swap         #@UnresolvedImport
 from xpra.codecs.rgb_transform import rgb_reformat
 from xpra.codecs.loader import get_codec
-from xpra.codecs.codec_constants import PREFERED_ENCODING_ORDER, LOSSY_PIXEL_FORMATS
-from xpra.net import compression
+from xpra.codecs.codec_constants import PREFERRED_ENCODING_ORDER, LOSSY_PIXEL_FORMATS
+from xpra.net.compression import use
 from xpra.log import Logger
 
 log = Logger("window", "encoding")
@@ -37,7 +36,6 @@ compresslog = Logger("window", "compress")
 damagelog = Logger("window", "damage")
 scalinglog = Logger("scaling")
 iconlog = Logger("icon")
-deltalog = Logger("delta")
 avsynclog = Logger("av-sync")
 statslog = Logger("stats")
 bandwidthlog = Logger("bandwidth")
@@ -55,10 +53,6 @@ LOCKED_BATCH_DELAY = envint("XPRA_LOCKED_BATCH_DELAY", 1000)
 MAX_PIXELS_PREFER_RGB = envint("XPRA_MAX_PIXELS_PREFER_RGB", 4096)
 MAX_RGB = envint("XPRA_MAX_RGB", 512*1024)
 
-DELTA = envbool("XPRA_DELTA", True)
-MIN_DELTA_SIZE = envint("XPRA_MIN_DELTA_SIZE", 1024)
-MAX_DELTA_SIZE = envint("XPRA_MAX_DELTA_SIZE", 32768)
-MAX_DELTA_HITS = envint("XPRA_MAX_DELTA_HITS", 20)
 MIN_WINDOW_REGION_SIZE = envint("XPRA_MIN_WINDOW_REGION_SIZE", 1024)
 MAX_SOFT_EXPIRED = envint("XPRA_MAX_SOFT_EXPIRED", 5)
 ACK_JITTER = envint("XPRA_ACK_JITTER", 20)
@@ -73,7 +67,6 @@ INTEGRITY_HASH = envint("XPRA_INTEGRITY_HASH", False)
 MAX_SYNC_BUFFER_SIZE = envint("XPRA_MAX_SYNC_BUFFER_SIZE", 256)*1024*1024        #256MB
 AV_SYNC_RATE_CHANGE = envint("XPRA_AV_SYNC_RATE_CHANGE", 20)
 AV_SYNC_TIME_CHANGE = envint("XPRA_AV_SYNC_TIME_CHANGE", 500)
-PAINT_FLUSH = envbool("XPRA_PAINT_FLUSH", True)
 SEND_TIMESTAMPS = envbool("XPRA_SEND_TIMESTAMPS", False)
 DAMAGE_STATISTICS = envbool("XPRA_DAMAGE_STATISTICS", False)
 
@@ -95,7 +88,7 @@ LOSSLESS_ENCODINGS = get_env_encodings("LOSSLESS", ("rgb", "png", "png/P", "png/
 REFRESH_ENCODINGS = get_env_encodings("REFRESH", ("webp", "png", "rgb24", "rgb32"))
 
 
-class DelayedRegions(object):
+class DelayedRegions:
     def __init__(self, damage_time, regions, encoding, options):
         self.expired = False
         self.damage_time = damage_time
@@ -134,7 +127,7 @@ class WindowSource(WindowIconSource):
                     rgb_formats,
                     default_encoding_options,
                     mmap, mmap_size, bandwidth_limit, jitter):
-        WindowIconSource.__init__(self, window_icon_encodings, icons_encoding_options)
+        super().__init__(window_icon_encodings, icons_encoding_options)
         self.idle_add = idle_add
         self.timeout_add = timeout_add
         self.source_remove = source_remove
@@ -156,11 +149,11 @@ class WindowSource(WindowIconSource):
         self.window = window                            #only to be used from the UI thread!
         self.global_statistics = statistics             #shared/global statistics from ClientConnection
         self.statistics = WindowPerformanceStatistics()
-        self.av_sync = av_sync
-        self.av_sync_delay = av_sync_delay
-        self.av_sync_delay_target = av_sync_delay
-        self.av_sync_delay_base = 0
-        self.av_sync_frame_delay = 0
+        self.av_sync = av_sync                          #flag: enabled or not?
+        self.av_sync_delay = av_sync_delay              #the av-sync delay we actually use
+        self.av_sync_delay_target = av_sync_delay       #the av-sync delay we want at this point in time (can vary quickly)
+        self.av_sync_delay_base = av_sync_delay         #the total av-sync delay we are trying to achieve (including video encoder delay)
+        self.av_sync_frame_delay = 0                    #how long frames spend in the video encoder
         self.av_sync_timer = None
         self.encode_queue = []
         self.encode_queue_max_size = 10
@@ -172,31 +165,23 @@ class WindowSource(WindowIconSource):
         self.core_encodings = core_encodings            #the core encodings supported by the client
         self.rgb_formats = rgb_formats                  #supported RGB formats (RGB, RGBA, ...) - used by mmap
         self.encoding_options = encoding_options        #extra options which may be specific to the encoder (ie: x264)
-        self.rgb_zlib = compression.use_zlib and encoding_options.boolget("rgb_zlib", True)     #server and client support zlib pixel compression (not to be confused with 'rgb24zlib'...)
-        self.rgb_lz4 = compression.use_lz4 and encoding_options.boolget("rgb_lz4", False)       #server and client support lz4 pixel compression
-        self.rgb_lzo = compression.use_lzo and encoding_options.boolget("rgb_lzo", False)       #server and client support lzo pixel compression
+        self.rgb_zlib = use("zlib") and encoding_options.boolget("rgb_zlib", True)     #server and client support zlib pixel compression
+        self.rgb_lz4 = use("lz4") and encoding_options.boolget("rgb_lz4", False)       #server and client support lz4 pixel compression
+        self.rgb_lzo = use("lzo") and encoding_options.boolget("rgb_lzo", False)       #server and client support lzo pixel compression
+        self.client_render_size = encoding_options.get("render-size")
         self.client_bit_depth = encoding_options.intget("bit-depth", 24)
         self.supports_transparency = HAS_ALPHA and encoding_options.boolget("transparency")
         self.full_frames_only = self.is_tray or encoding_options.boolget("full_frames_only")
-        self.supports_flush = PAINT_FLUSH and encoding_options.boolget("flush")
-        self.client_refresh_encodings = encoding_options.strlistget("auto_refresh_encodings", [])
+        self.client_refresh_encodings = encoding_options.strtupleget("auto_refresh_encodings")
         self.max_soft_expired = max(0, min(100, encoding_options.intget("max-soft-expired", MAX_SOFT_EXPIRED)))
         self.send_timetamps = encoding_options.boolget("send-timestamps", SEND_TIMESTAMPS)
         self.send_window_size = encoding_options.boolget("send-window-size", False)
-        self.supports_delta = ()
-        if not window.is_tray() and DELTA:
-            self.supports_delta = [x for x in encoding_options.strlistget("supports_delta", []) if x in ("png", "rgb24", "rgb32")]
-            if self.supports_delta:
-                self.delta_buckets = min(25, encoding_options.intget("delta_buckets", 1))
-                self.delta_pixel_data = [None for _ in range(self.delta_buckets)]
         self.batch_config = batch_config
         #auto-refresh:
         self.auto_refresh_delay = auto_refresh_delay
         self.base_auto_refresh_delay = auto_refresh_delay
         self.last_auto_refresh_message = None
         self.video_helper = video_helper
-        if window.is_shadow():
-            self.max_delta_size = -1
 
         self.is_idle = False
         self.is_OR = window.is_OR()
@@ -210,17 +195,17 @@ class WindowSource(WindowIconSource):
         if default_encoding_options.get("scaling.control") is None:
             self.scaling_control = None     #means "auto"
         else:
-            self.scaling_control = default_encoding_options.intget("scaling.control", 1)    #ClientConnection sets defaults with the client's scaling.control value
+            #ClientConnection sets defaults with the client's scaling.control value
+            self.scaling_control = default_encoding_options.intget("scaling.control", 1)
         self.scaling = None
         self.maximized = False          #set by the client!
         self.iconic = False
         self.content_type = ""
         self.window_signal_handlers = []
         #watch for changes to properties that are used to derive the content-type:
-        for x in ["content-type"] + list(get_content_type_properties()):
-            if x in window.get_dynamic_property_names():
-                sid = window.connect("notify::%s" % x, self.content_type_changed)
-                self.window_signal_handlers.append(sid)
+        if "content-type" in window.get_dynamic_property_names():
+            sid = window.connect("notify::content-type", self.content_type_changed)
+            self.window_signal_handlers.append(sid)
         self.content_type_changed(window)
         if "iconic" in window.get_dynamic_property_names():
             self.iconic = window.get_property("iconic")
@@ -308,26 +293,32 @@ class WindowSource(WindowIconSource):
         return "WindowSource(%s : %s)" % (self.wid, self.window_dimensions)
 
 
+    def add_encoder(self, encoding, encoder):
+        log("add_encoder(%s, %s)", encoding, encoder)
+        self._all_encoders.setdefault(encoding, []).insert(0, encoder)
+        self._encoders[encoding] = encoder
+
     def init_encoders(self):
-        self._encoders = {
-            "rgb24" : self.rgb_encode,
-            "rgb32" : self.rgb_encode,
-            }
+        self._all_encoders = {}
+        self._encoders = {}
+        self.add_encoder("rgb24", self.rgb_encode)
+        self.add_encoder("rgb32", self.rgb_encode)
         self.enc_pillow = get_codec("enc_pillow")
         if self.enc_pillow:
             for x in self.enc_pillow.get_encodings():
                 if x in self.server_core_encodings:
-                    self._encoders[x] = self.pillow_encode
+                    self.add_encoder(x, self.pillow_encode)
         #prefer these native encoders over the Pillow version:
         if "webp" in self.server_core_encodings:
-            self._encoders["webp"] = self.webp_encode
+            self.add_encoder("webp", self.webp_encode)
         self.enc_jpeg = get_codec("enc_jpeg")
         if "jpeg" in self.server_core_encodings and self.enc_jpeg:
-            self._encoders["jpeg"] = self.jpeg_encode
+            self.add_encoder("jpeg", self.jpeg_encode)
         if self._mmap and self._mmap_size>0:
-            self._encoders["mmap"] = self.mmap_encode
+            self.add_encoder("mmap", self.mmap_encode)
         self.full_csc_modes = typedict()
         self.parse_csc_modes(self.encoding_options.dictget("full_csc_modes", default_value=None))
+
 
     def init_vars(self):
         self.server_core_encodings = ()
@@ -346,9 +337,6 @@ class WindowSource(WindowIconSource):
         self.rgb_lzo = False
         self.supports_transparency = False
         self.full_frames_only = False
-        self.supports_delta = ()
-        self.delta_buckets = 0
-        self.delta_pixel_data = ()
         self.suspended = False
         self.strict = STRICT_MODE
         #
@@ -369,8 +357,6 @@ class WindowSource(WindowIconSource):
         self.soft_timer = None
         self.soft_expired = 0
         self.max_soft_expired = MAX_SOFT_EXPIRED
-        self.min_delta_size = MIN_DELTA_SIZE
-        self.max_delta_size = MAX_DELTA_SIZE
         self.is_OR = False
         self.is_tray = False
         self.is_shadow = False
@@ -430,7 +416,7 @@ class WindowSource(WindowIconSource):
         self.global_statistics = None
 
 
-    def get_info(self):
+    def get_info(self) -> dict:
         #should get prefixed with "client[M].window[N]." by caller
         """
             Add window specific stats
@@ -474,18 +460,11 @@ class WindowSource(WindowIconSource):
                 }
             }
 
-        now = monotonic_time()
-        buckets_info = {}
-        for i,x in enumerate(self.delta_pixel_data):
-            if x:
-                w, h, pixel_format, coding, store, buflen, _, hits, last_used = x
-                buckets_info[i] = w, h, pixel_format, coding, store, buflen, hits, int((now-last_used)*1000)
         #remove large default dict:
         info.update({
                 "idle"                  : self.is_idle,
                 "dimensions"            : self.window_dimensions,
                 "suspended"             : self.suspended or False,
-                "content"               : self.content_type,
                 "bandwidth-limit"       : self.bandwidth_limit,
                 "av-sync"               : {
                                            "enabled"    : self.av_sync,
@@ -498,11 +477,6 @@ class WindowSource(WindowIconSource):
                 "last_used"             : self.encoding_last_used or "",
                 "full-frames-only"      : self.full_frames_only,
                 "supports-transparency" : self.supports_transparency,
-                "flush"                 : self.supports_flush,
-                "delta"                 : {""               : self.supports_delta,
-                                           "buckets"        : self.delta_buckets,
-                                           "bucket"         : buckets_info,
-                                           },
                 "property"              : self.get_property_info(),
                 "content-type"          : self.content_type or "",
                 "batch"                 : self.batch_config.get_info(),
@@ -521,6 +495,9 @@ class WindowSource(WindowIconSource):
         ma = self.mapped_at
         if ma:
             info["mapped-at"] = ma
+        crs = self.client_render_size
+        if crs:
+            info["render-size"] = crs
         info["damage.fps"] = int(self.get_damage_fps())
         if self.pixel_format:
             info["pixel-format"] = self.pixel_format
@@ -537,7 +514,7 @@ class WindowSource(WindowIconSource):
                 fps = len(lde) // elapsed
         return fps
 
-    def get_quality_speed_info(self):
+    def get_quality_speed_info(self) -> dict:
         info = {}
         def add_list_info(prefix, v, vinfo):
             if not v:
@@ -553,7 +530,7 @@ class WindowSource(WindowIconSource):
         add_list_info("speed", self._encoding_speed, self._encoding_speed_info)
         return info
 
-    def get_property_info(self):
+    def get_property_info(self) -> dict:
         return {
                 "fullscreen"            : self.fullscreen or False,
                 #speed / quality properties (not necessarily the same as the video encoder settings..):
@@ -635,7 +612,7 @@ class WindowSource(WindowIconSource):
             self.no_idle()
 
     def content_type_changed(self, window, *args):
-        self.content_type = window.get("content-type") or guess_content_type(window)
+        self.content_type = window.get("content-type")
         log("content_type_changed(%s, %s) content-type=%s", window, args, self.content_type)
         return True
 
@@ -669,24 +646,42 @@ class WindowSource(WindowIconSource):
         for k in ("workspace", "screen"):
             if k in properties:
                 del properties[k]
+            elif strtobytes(k) in properties:
+                del properties[strtobytes(k)]
         if properties:
             self.do_set_client_properties(properties)
 
     def do_set_client_properties(self, properties):
         self.maximized = properties.boolget("maximized", False)
+        self.client_render_size = properties.intpair("encoding.render-size")
         self.client_bit_depth = properties.intget("bit-depth", self.client_bit_depth)
-        self.client_refresh_encodings = properties.strlistget("encoding.auto_refresh_encodings", self.client_refresh_encodings)
+        self.client_refresh_encodings = properties.strtupleget("encoding.auto_refresh_encodings", self.client_refresh_encodings)
         self.full_frames_only = self.is_tray or properties.boolget("encoding.full_frames_only", self.full_frames_only)
         self.supports_transparency = HAS_ALPHA and properties.boolget("encoding.transparency", self.supports_transparency)
-        self.encodings = properties.strlistget("encodings", self.encodings)
-        self.core_encodings = properties.strlistget("encodings.core", self.core_encodings)
-        rgb_formats = properties.strlistget("encodings.rgb_formats", self.rgb_formats)
+        self.encodings = properties.strtupleget("encodings", self.encodings)
+        self.core_encodings = properties.strtupleget("encodings.core", self.core_encodings)
+        rgb_formats = properties.strtupleget("encodings.rgb_formats", self.rgb_formats)
         if not self.supports_transparency:
             #remove rgb formats with alpha
             rgb_formats = [x for x in rgb_formats if x.find("A")<0]
         self.rgb_formats = rgb_formats
         self.send_window_size = properties.boolget("encoding.send-window-size", self.send_window_size)
         self.parse_csc_modes(properties.dictget("encoding.full_csc_modes", default_value=None))
+        #select the defaults encoders:
+        #(in case pillow was selected previously and the client side scaling changed)
+        for encoding, encoders in self._all_encoders.items():
+            self._encoders[encoding] = encoders[0]
+        #we may now want to downscale server-side,
+        #or convert to grayscale,
+        #and for that we need to use the pillow encoder:
+        grayscale = self.encoding=="grayscale"
+        if self.enc_pillow and (self.client_render_size or grayscale):
+            crsw, crsh = self.client_render_size
+            ww, wh = self.window_dimensions
+            if grayscale or (crsw<ww and crsh<wh):
+                for x in self.enc_pillow.get_encodings():
+                    if x in self.server_core_encodings:
+                        self.add_encoder(x, self.pillow_encode)
         self.update_encoding_selection(self.encoding, [])
 
 
@@ -709,6 +704,8 @@ class WindowSource(WindowIconSource):
         #set the target then schedule a timer to gradually
         #get the actual value "av_sync_delay" moved towards it
         self.av_sync_delay_target = max(0, self.av_sync_delay_base - self.av_sync_frame_delay)
+        avsynclog("may_update_av_sync_delay() target=%s from base=%s, frame-delay=%s",
+                  self.av_sync_delay_target, self.av_sync_delay_base, self.av_sync_frame_delay)
         self.schedule_av_sync_update()
 
     def schedule_av_sync_update(self, delay=0):
@@ -743,7 +740,6 @@ class WindowSource(WindowIconSource):
         if self.encoding==encoding:
             return
         self.statistics.reset()
-        self.delta_pixel_data = [None for _ in range(self.delta_buckets)]
         self.update_encoding_selection(encoding)
 
 
@@ -754,11 +750,11 @@ class WindowSource(WindowIconSource):
         #"rgb" is a pseudo encoding and needs special code:
         if "rgb24" in  common_encodings or "rgb32" in common_encodings:
             common_encodings.append("rgb")
-        self.common_encodings = [x for x in PREFERED_ENCODING_ORDER if x in common_encodings]
+        self.common_encodings = [x for x in PREFERRED_ENCODING_ORDER if x in common_encodings]
         if not self.common_encodings:
             raise Exception("no common encodings found (server: %s vs client: %s, excluding: %s)" % (csv(self._encoders.keys()), csv(self.core_encodings), csv(exclude)))
         #ensure the encoding chosen is supported by this source:
-        if (encoding in self.common_encodings or encoding=="auto") and len(self.common_encodings)>1:
+        if (encoding in self.common_encodings or encoding in ("auto", "grayscale")) and len(self.common_encodings)>1:
             self.encoding = encoding
         else:
             self.encoding = self.common_encodings[0]
@@ -779,7 +775,7 @@ class WindowSource(WindowIconSource):
             are = tuple(x for x in self.common_encodings if x in ropts and x in TRANSPARENCY_ENCODINGS)
         if not are:
             are = tuple(x for x in self.common_encodings if x in ropts) or self.common_encodings
-        self.auto_refresh_encodings = tuple(x for x in PREFERED_ENCODING_ORDER if x in are)
+        self.auto_refresh_encodings = tuple(x for x in PREFERRED_ENCODING_ORDER if x in are)
         log("update_encoding_selection: client refresh encodings=%s, auto_refresh_encodings=%s",
             self.client_refresh_encodings, self.auto_refresh_encodings)
         self.update_quality()
@@ -801,7 +797,7 @@ class WindowSource(WindowIconSource):
         #if speed is high, assume we have bandwidth to spare
         smult = max(0.25, (self._current_speed-50)/5.0)
         qmult = max(0, self._current_quality/20.0)
-        pcmult = float(min(20, 0.5+self.statistics.packet_count))/20.0
+        pcmult = min(20, 0.5+self.statistics.packet_count)/20.0
         max_rgb_threshold = 32*1024
         min_rgb_threshold = 2048
         cv = self.global_statistics.congestion_value
@@ -812,6 +808,13 @@ class WindowSource(WindowIconSource):
         if bwl:
             max_rgb_threshold = min(max_rgb_threshold, max(bwl//1000, 1024))
         v = int(MAX_PIXELS_PREFER_RGB * pcmult * smult * qmult * (1 + int(self.is_OR or self.is_tray or self.is_shadow)*2))
+        crs = self.client_render_size
+        if crs:
+            ww, wh = self.window_dimensions
+            if crs[0]<ww or crs[1]<wh:
+                #client will downscale, best to avoid sending rgb,
+                #so we can more easily downscale at this end:
+                max_rgb_threshold = 1024
         self._rgb_auto_threshold = min(max_rgb_threshold, max(min_rgb_threshold, v))
         self.assign_encoding_getter()
         log("update_encoding_options(%s) wid=%i, want_alpha=%s, speed=%i, quality=%i, bandwidth-limit=%i, lossless threshold: %s / %s, rgb auto threshold=%i (min=%i, max=%i), get_best_encoding=%s",
@@ -827,13 +830,17 @@ class WindowSource(WindowIconSource):
             return self.encoding_is_hint
         #choose which method to use for selecting an encoding
         #first the easy ones (when there is no choice):
-        if self._mmap and self._mmap_size>0:
+        if self._mmap and self._mmap_size>0 and self.encoding!="grayscale":
             return self.encoding_is_mmap
         elif self.encoding=="png/L":
             #(png/L would look awful if we mixed it with something else)
             return self.encoding_is_pngL
         elif self.image_depth==8:
-            #no other option:
+            #limited options:
+            if self.encoding=="grayscale":
+                assert "png/L" in self.common_encodings
+                return self.encoding_is_pngL
+            assert "png/P" in self.common_encodings
             return self.encoding_is_pngP
         elif self.strict and self.encoding!="auto":
             #honour strict flag
@@ -853,6 +860,8 @@ class WindowSource(WindowIconSource):
                 #(prevents alpha bleeding artifacts,
                 # as different encoders may encode alpha differently)
                 return self.get_strict_encoding
+            if self.encoding=="grayscale":
+                return self.encoding_is_grayscale
             #choose an alpha encoding and keep it?
             return self.get_transparent_encoding
         elif self.encoding=="rgb":
@@ -867,6 +876,8 @@ class WindowSource(WindowIconSource):
         #stick to what is specified or use rgb for small regions:
         if self.encoding=="auto":
             return self.get_auto_encoding
+        if self.encoding=="grayscale":
+            return self.encoding_is_grayscale
         return self.get_current_or_rgb
 
     def hardcoded_encoding(self, *_args):
@@ -893,14 +904,30 @@ class WindowSource(WindowIconSource):
     def get_strict_encoding(self, *_args):
         return self.encoding
 
+    def encoding_is_grayscale(self, *args):
+        e = self.get_auto_encoding(*args)  #pylint: disable=no-value-for-parameter
+        if e.startswith("rgb") or e.startswith("png"):
+            return "png/L"
+        return e
+
     def get_transparent_encoding(self, w, h, speed, quality, current_encoding):
         #small areas prefer rgb, also when high speed and high quality
         if current_encoding in TRANSPARENCY_ENCODINGS:
             return current_encoding
         pixel_count = w*h
-        if "rgb32" in self.common_encodings and (pixel_count<self._rgb_auto_threshold or (quality>=90 and speed>=90) or (self.image_depth>24 and self.client_bit_depth>24)):
+        depth = self.image_depth
+        co = self.common_encodings
+        def canuse(e):
+            return e in co and e in TRANSPARENCY_ENCODINGS
+        if canuse("rgb32") and (
+            pixel_count<self._rgb_auto_threshold or
+            (quality>=90 and speed>=90) or
+            (depth>24 and self.client_bit_depth>24)
+            ):
             #the only encoding that can do higher bit depth at present
             return "rgb32"
+        if canuse("webp") and depth in (24, 32) and 16383>=w>=2 and 16383>=h>=2:
+            return "webp"
         for x in TRANSPARENCY_ENCODINGS:
             if x in self.common_encodings:
                 return x
@@ -915,13 +942,13 @@ class WindowSource(WindowIconSource):
         if depth>24 and "rgb32" in co and self.client_bit_depth>24:
             #the only encoding that can do higher bit depth at present
             return "rgb32"
-        if depth in (24, 32) and "webp" in co and w>=2 and h>=2:
+        if depth in (24, 32) and "webp" in co and 16383>=w>=2 and 16383>=h>=2:
             return "webp"
         if "png" in co and ((quality>=80 and speed<80) or depth<=16):
             return "png"
         if "jpeg" in co and w>=2 and h>=2:
             return "jpeg"
-        return (x for x in co if x!="rgb").next()
+        return next(x for x in co if x!="rgb")
 
     def get_current_or_rgb(self, pixel_count, *_args):
         if pixel_count<self._rgb_auto_threshold:
@@ -959,7 +986,6 @@ class WindowSource(WindowIconSource):
         #if a region was delayed, we can just drop it now:
         self.refresh_regions = []
         self._damage_delayed = None
-        self.delta_pixel_data = [None for _ in range(self.delta_buckets)]
         #make sure we don't account for those as they will get dropped
         #(generally before encoding - only one may still get encoded):
         for sequence in tuple(self.statistics.encoding_pending.keys()):
@@ -1058,7 +1084,7 @@ class WindowSource(WindowIconSource):
                               self.global_statistics, self.statistics, self.bandwidth_limit)
         #update the normalized value:
         ww, wh = self.window_dimensions
-        self.batch_config.delay_per_megapixel = int(self.batch_config.delay*1000000//(ww*wh))
+        self.batch_config.delay_per_megapixel = int(self.batch_config.delay*1000000//max(1, (ww*wh)))
         self.statistics.last_recalculate = now
         self.update_av_sync_frame_delay()
 
@@ -1067,6 +1093,8 @@ class WindowSource(WindowIconSource):
         self.may_update_av_sync_delay()
 
     def update_speed(self):
+        if self.is_cancelled():
+            return
         statslog("update_speed() suspended=%s, mmap=%s, current=%i, hint=%i, fixed=%i, encoding=%s, sequence=%i",
                  self.suspended, bool(self._mmap),
                  self._current_speed, self._speed_hint, self._fixed_speed,
@@ -1123,8 +1151,10 @@ class WindowSource(WindowIconSource):
 
 
     def update_quality(self):
+        if self.is_cancelled():
+            return
         statslog("update_quality() suspended=%s, mmap=%s, current=%i, hint=%i, fixed=%i, encoding=%s, sequence=%i",
-                 self.suspended, bool(self._mmap),
+                 self.suspended, self._mmap,
                  self._current_quality, self._quality_hint, self._fixed_quality,
                  self.encoding, self._sequence)
         if self.suspended:
@@ -1201,13 +1231,13 @@ class WindowSource(WindowIconSource):
         # - when quality is low, we can refresh more slowly
         # - when speed is low, we can also refresh slowly
         # - delay a lot more when we have bandwidth issues
-        sizef = sqrt(float(ww*wh)/(1000*1000))      #more than 1 megapixel -> delay more
+        sizef = sqrt(ww*wh/(1000*1000))      #more than 1 megapixel -> delay more
         qf = (150-self._current_quality)/100.0
         sf = (150-self._current_speed)/100.0
         cf = (100+cv*500)/100.0    #high congestion value -> very high delay
         #bandwidth limit is used to set a minimum on the delay
         min_delay = int(max(100*cf, self.auto_refresh_delay, 50 * sizef, self.batch_config.delay*4))
-        bwl = self.bandwidth_limit
+        bwl = self.bandwidth_limit or 0
         if bwl>0:
             #1Mbps -> 1s, 10Mbps -> 0.1s
             min_delay = max(min_delay, 1000*1000*1000//bwl)
@@ -1223,7 +1253,7 @@ class WindowSource(WindowIconSource):
         self.do_set_auto_refresh_delay(min_delay, delay)
         rs = AUTO_REFRESH_SPEED
         rq = AUTO_REFRESH_QUALITY
-        bits_per_pixel = float(bwl)/(1+ww*wh)
+        bits_per_pixel = bwl/(1+ww*wh)
         if self._current_quality<70 and (cv>0.1 or (bwl>0 and bits_per_pixel<1)):
             #when bandwidth is scarce, don't use lossless refresh,
             #switch to almost-lossless:
@@ -1273,9 +1303,6 @@ class WindowSource(WindowIconSource):
             #in which case the dimensions may be zero (if so configured by the client)
             return
         ww, wh = self.window.get_dimensions()
-        if ww==0 or wh==0:
-            damagelog("damage%s window size %ix%i ignored", (x, y, w, h, options), ww, wh)
-            return
         now = monotonic_time()
         if options is None:
             options = {}
@@ -1289,6 +1316,17 @@ class WindowSource(WindowIconSource):
             self.window_dimensions = ww, wh
             log("window dimensions changed: %ix%i", ww, wh)
             self.encode_queue_max_size = max(2, min(30, MAX_SYNC_BUFFER_SIZE//(ww*wh*4)))
+        if ww==0 or wh==0:
+            damagelog("damage%s window size %ix%i ignored", (x, y, w, h, options), ww, wh)
+            return
+        if ww>MAX_WINDOW_SIZE or wh>MAX_WINDOW_SIZE:
+            if first_time("window-oversize-%i" % self.wid):
+                damagelog("")
+                damagelog.warn("Warning: invalid window dimensions %ix%i for window %i", ww, wh, self.wid)
+                damagelog.warn(" window updates will be dropped until this is corrected")
+            else:
+                damagelog("ignoring damage for window %i size %ix%i", self.wid, ww, wh)
+            return
         if self.full_frames_only:
             x, y, w, h = 0, 0, ww, wh
         self.do_damage(ww, wh, x, y, w, h, options)
@@ -1410,10 +1448,10 @@ class WindowSource(WindowIconSource):
         event_min_time = now-self.batch_config.time_unit
         all_pixels = tuple(pixels for _,event_time,pixels in self.global_statistics.damage_last_events
                            if event_time>event_min_time)
-        eratio = float(len(all_pixels)) / self.batch_config.max_events
+        eratio = len(all_pixels) / self.batch_config.max_events
         if eratio>1.0:
             return True
-        pratio = float(sum(all_pixels)) / self.batch_config.max_pixels
+        pratio = sum(all_pixels) / self.batch_config.max_pixels
         if pratio>1.0:
             return True
         try:
@@ -1763,22 +1801,24 @@ class WindowSource(WindowIconSource):
         assert self.ui_thread == threading.current_thread()
         assert coding is not None
         if w==0 or h==0:
+            log("process_damage_region: dropped, zero dimensions")
             return
         if not self.window.is_managed():
-            log("the window %s is not composited!?", self.window)
+            log("process_damage_region: the window %s is not managed", self.window)
             return
         self._sequence += 1
         sequence = self._sequence
         if self.is_cancelled(sequence):
-            log("get_window_pixmap: dropping damage request with sequence=%s", sequence)
+            log("process_damage_region: dropping damage request with sequence=%s", sequence)
             return
 
         rgb_request_time = monotonic_time()
         image = self.window.get_image(x, y, w, h)
         if image is None:
-            log("get_window_pixmap: no pixel data for window %s, wid=%s", self.window, self.wid)
+            log("process_damage_region: no pixel data for window %s, wid=%s", self.window, self.wid)
             return
         if self.is_cancelled(sequence):
+            log("process_damage_region: sequence %i is cancelled", sequence)
             image.free()
             return
         self.pixel_format = image.get_pixel_format()
@@ -1801,6 +1841,13 @@ class WindowSource(WindowIconSource):
         self.statistics.encoding_pending[sequence] = (damage_time, w, h)
         try:
             packet = self.make_data_packet(damage_time, process_damage_time, image, coding, sequence, options, flush)
+        except Exception as e:
+            log("make_data_packet%s", (damage_time, process_damage_time, image, coding, sequence, options, flush),
+                exc_info=True)
+            if not self.is_cancelled(sequence):
+                log.error("Error: failed to create data packet")
+                log.error(" %s", e)
+            packet = None
         finally:
             self.free_image_wrapper(image)
             del image
@@ -1872,6 +1919,9 @@ class WindowSource(WindowIconSource):
             # so the value may be greater than the size of the window)
             pixels = sum(rect.width*rect.height for rect in self.refresh_regions)
             ww, wh = self.window_dimensions
+            if ww<=0 or wh<=0:
+                #window cleaned up?
+                return
             pct = int(min(100, 100*pixels//(ww*wh)) * (1+self.global_statistics.congestion_value))
             if not self.refresh_timer:
                 #we must schedule a new refresh timer
@@ -2052,6 +2102,7 @@ class WindowSource(WindowIconSource):
             damage_in_latency = now-process_damage_time
             statistics.damage_in_latency.append((now, width*height, actual_batch_delay, damage_in_latency))
         #log.info("queuing %s packet with fail_cb=%s", coding, fail_cb)
+        self.statistics.last_packet_time = monotonic_time()
         self.queue_packet(packet, self.wid, width*height, start_send, damage_packet_sent,
                           self.get_fail_cb(packet), client_options.get("flush", 0))
 
@@ -2213,8 +2264,6 @@ class WindowSource(WindowIconSource):
         else:
             log.warn(" unknown cause")
         self.global_statistics.decode_errors += 1
-        #something failed client-side, so we can't rely on the delta being available
-        self.delta_pixel_data = [None for _ in range(self.delta_buckets)]
         if self.window:
             delay = min(1000, 250+self.global_statistics.decode_errors*100)
             self.decode_error_refresh_timer = self.timeout_add(delay, self.decode_error_refresh)
@@ -2262,52 +2311,9 @@ class WindowSource(WindowIconSource):
 
         #more useful is the actual number of bytes (assuming 32bpp)
         #since we generally don't send the padding with it:
-        isize = w*h
-        psize = isize*4
+        psize = w*h*4
         log("make_data_packet: image=%s, damage data: %s", image, (self.wid, x, y, w, h, coding))
         start = monotonic_time()
-        delta, store, bucket, hits = -1, -1, -1, 0
-        pixel_format = image.get_pixel_format()
-        #use delta pre-compression for this encoding if:
-        #* client must support delta (at least one bucket)
-        #* encoding must be one that supports delta (usually rgb24/rgb32 or png)
-        #* size is worth xoring (too small is pointless, too big is too expensive)
-        #* the pixel format is supported by the client
-        # (if we have to rgb_reformat the buffer, it really complicates things)
-        if self.delta_buckets>0 and (coding in self.supports_delta) and self.min_delta_size<isize<self.max_delta_size and \
-            pixel_format in self.rgb_formats:
-            #this may save space (and lower the cost of xoring):
-            image.may_restride()
-            #we need to copy the pixels because some encodings
-            #may modify the pixel array in-place!
-            dpixels = image.get_pixels()
-            assert dpixels, "failed to get pixels from %s" % image
-            dpixels = memoryview_to_bytes(dpixels)
-            dlen = len(dpixels)
-            store = sequence
-            deltalog("delta available for %s and %i %s pixels on wid=%i", coding, isize, pixel_format, self.wid)
-            for i, dr in enumerate(tuple(self.delta_pixel_data)):
-                if dr is None:
-                    continue
-                lw, lh, lpixel_format, lcoding, lsequence, buflen, ldata, hits, _ = dr
-                if lw==w and lh==h and lpixel_format==pixel_format and lcoding==coding and buflen==dlen:
-                    bucket = i
-                    if MAX_DELTA_HITS>0 and hits<MAX_DELTA_HITS:
-                        deltalog("delta: using matching bucket %s: %sx%s (%s, %i bytes, sequence=%i, hit count=%s)",
-                                 i, lw, lh, lpixel_format, dlen, lsequence, hits)
-                        #xor with this matching delta bucket:
-                        delta = lsequence
-                        xored = xor_str(dpixels, ldata)
-                        image.set_pixels(xored)
-                        dr[-1] = monotonic_time()            #update last used time
-                        hits += 1
-                        dr[-2] = hits               #update hit count
-                    else:
-                        deltalog("delta: too many hits for bucket %s: %s, clearing it", bucket, hits)
-                        hits = 0
-                        self.delta_pixel_data[i] = None
-                        delta = -1
-                    break
 
         #by default, don't set rowstride (the container format will take care of providing it):
         encoder = self._encoders.get(coding)
@@ -2328,44 +2334,7 @@ class WindowSource(WindowIconSource):
         if coding!="mmap" and (self.is_cancelled(sequence) or self.suspended):
             log("make_data_packet: dropping data packet for window %s with sequence=%s", self.wid, sequence)
             return  None
-        #tell client about delta/store for this pixmap:
-        if delta>=0:
-            client_options["delta"] = delta
-            client_options["bucket"] = bucket
         csize = len(data)
-        if store>0:
-            if delta>0 and csize>=psize*40//100:
-                #compressed size is more than 40% of the original
-                #maybe delta is not helping us, so clear it:
-                self.delta_pixel_data[bucket] = None
-                deltalog("delta: clearing bucket %i (compressed size=%s, original size=%s)", bucket, csize, psize)
-                #we could tell the clients they can clear it too - meh
-                #(add a new client capability and send it a zero store value)
-            else:
-                #find the bucket to use:
-                if bucket<0:
-                    lpd = self.delta_pixel_data
-                    try:
-                        bucket = lpd.index(None)
-                        deltalog("delta: found empty bucket %i", bucket)
-                    except ValueError:
-                        #find a bucket which has not been used recently
-                        t = 0
-                        bucket = 0
-                        for i,dr in enumerate(lpd):
-                            if dr and (t==0 or dr[-1]<t):
-                                t = dr[-1]
-                                bucket = i
-                        deltalog("delta: using oldest bucket %i", bucket)
-                self.delta_pixel_data[bucket] = [w, h, pixel_format, coding, store,
-                                                 len(dpixels), dpixels, hits, monotonic_time()]
-                client_options["store"] = store
-                client_options["bucket"] = bucket
-                #record number of frames and pixels:
-                totals = self.statistics.encoding_totals.setdefault("delta", [0, 0])
-                totals[0] = totals[0] + 1
-                totals[1] = totals[1] + w*h
-                deltalog("delta: client options=%s (for region %s)", client_options, (x, y, w, h))
         if INTEGRITY_HASH and coding!="mmap":
             #could be a compressed wrapper or just raw bytes:
             try:
@@ -2377,7 +2346,7 @@ class WindowSource(WindowIconSource):
             client_options["z.len"] = len(data)
             log("added len and hash of compressed data integrity %19s: %8i / %s", type(v), len(v), chksum)
         #actual network packet:
-        if self.supports_flush and flush not in (None, 0):
+        if flush not in (None, 0):
             client_options["flush"] = flush
         if self.send_timetamps:
             client_options["ts"] = image.get_timestamp()
@@ -2416,7 +2385,7 @@ class WindowSource(WindowIconSource):
         #the native webp encoder only takes BGRX / BGRA as input,
         #but the client may be able to swap channels,
         #so it may be able to process RGBX / RGBA:
-        client_rgb_formats = self.full_csc_modes.strlistget("webp", ("BGRA", "BGRX", ))
+        client_rgb_formats = self.full_csc_modes.strtupleget("webp", ("BGRA", "BGRX", ))
         if pixel_format not in client_rgb_formats:
             if not rgb_reformat(image, client_rgb_formats, self.supports_transparency):
                 raise Exception("cannot find compatible rgb format to use for %s! (supported: %s)" % (
@@ -2446,7 +2415,18 @@ class WindowSource(WindowIconSource):
         q = options.get("quality") or self.get_quality(coding)
         s = options.get("speed") or self.get_speed(coding)
         transparency = self.supports_transparency and options.get("transparency", True)
-        return self.enc_pillow.encode(coding, image, q, s, transparency)
+        grayscale = self.encoding=="grayscale"
+        resize = None
+        w, h = image.get_width(), image.get_height()
+        ww, wh = self.window_dimensions
+        crs = self.client_render_size
+        if crs:
+            crsw, crsh = crs
+            #resize if the render size is smaller
+            if ww>crsw and wh>crsh:
+                #keep the same proportions:
+                resize = w*crsw//ww, h*crsh//wh
+        return self.enc_pillow.encode(coding, image, q, s, transparency, grayscale, resize)
 
     def mmap_encode(self, coding, image, _options):
         assert coding=="mmap"

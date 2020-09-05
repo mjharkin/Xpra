@@ -1,0 +1,23 @@
+Index: Xpra.bundle
+===================================================================
+--- Xpra.bundle	(revision 24573)
++++ Xpra.bundle	(working copy)
+@@ -29,7 +29,7 @@
+ 	</data>
+ 
+ 	<binary>
+-		${prefix}/lib/gdk-pixbuf-2.0/${pkg:${gtk}:gtk_binary_version}/loaders/*.so
++		${prefix}/lib/gdk-pixbuf-2.0/2.10.0/loaders/*.so
+ 	</binary>
+ 	<!-- Copy in libpyglib, which will pull in other dependencies we need -->
+ 	<binary>
+@@ -127,9 +127,6 @@
+ 	</data>
+ 
+ 	<data>
+-		${prefix}/lib/pygtk/2.0/
+-	</data>
+-	<data>
+ 		${prefix}/etc/pango/
+ 	</data>
+ 	<data dest="${bundle}/Contents/Resources/share/glib-2.0/schemas">

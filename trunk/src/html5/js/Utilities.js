@@ -1,6 +1,6 @@
 /*
  * This file is part of Xpra.
- * Copyright (C) 2016-2018 Antoine Martin <antoine@xpra.org>
+ * Copyright (C) 2016-2020 Antoine Martin <antoine@xpra.org>
  * Copyright (c) 2016 Spikes, Inc.
  * Licensed under MPL 2.1, see:
  * http://www.mozilla.org/MPL/2.1/
@@ -9,8 +9,10 @@
 
 'use strict';
 
-var Utilities = {
-	VERSION	: "3.0",
+const Utilities = {
+	VERSION	: "4.1",
+	REVISION : "0",
+	LOCAL_MODIFICATIONS : "0",
 
 	exc : function() {
 		console.error.apply(console, arguments);
@@ -46,9 +48,9 @@ var Utilities = {
 	},
 
 	getHexUUID: function() {
-		var s = [];
-		var hexDigits = "0123456789abcdef";
-		for (var i = 0; i < 36; i++) {
+		const s = [];
+		const hexDigits = "0123456789abcdef";
+		for (let i = 0; i < 36; i++) {
 			if (i==8 || i==13 || i==18 || i==23) {
 				s[i] = "-";
 			}
@@ -56,15 +58,14 @@ var Utilities = {
 				s[i] = hexDigits.substr(Math.floor(Math.random() * 0x10), 1);
 			}
 		}
-		var uuid = s.join("");
-		return uuid;
+		return s.join("");
 	},
 
 	getSalt: function(l) {
 		if(l<32 || l>256) {
 			throw 'invalid salt length';
 		}
-		var s = '';
+		let s = '';
 		while (s.length<l) {
 			s += Utilities.getHexUUID();
 		}
@@ -72,21 +73,20 @@ var Utilities = {
 	},
 
 	xorString: function(str1, str2){
-		var result = '';
+		let result = '';
 		if(str1.length !== str2.length) {
 			throw 'strings must be equal length';
 		}
-		for(var i = 0; i < str1.length; i++) {
+		for(let i = 0; i < str1.length; i++) {
 			result += String.fromCharCode(str1[i].charCodeAt(0) ^ str2[i].charCodeAt(0));
 		}
 		return result;
 	},
 
 	trimString: function(str, trimLength){
-		var trimString = str.length > trimLength ?
-                    str.substring(0, trimLength - 3) + "..." :
-                    str;
-		return trimString;
+		return str.length>trimLength ?
+			str.substring(0, trimLength-3)+"..." :
+			str;
 	},
 
 	getPlatformProcessor: function() {
@@ -95,7 +95,7 @@ var Utilities = {
 			return navigator.oscpu;
 		}
 		//ie:
-		if (navigator.cpuClass) {
+		if (navigator.hasOwnProperty("cpuClass")) {
 			return navigator.cpuClass;
 		}
 		return 'unknown';
@@ -135,13 +135,12 @@ var Utilities = {
 	},
 
 	getFirstBrowserLanguage : function () {
-		var nav = window.navigator,
-			browserLanguagePropertyKeys = ['language', 'browserLanguage', 'systemLanguage', 'userLanguage'],
-			i,
-			language;
+		const nav = window.navigator,
+			browserLanguagePropertyKeys = ['language', 'browserLanguage', 'systemLanguage', 'userLanguage'];
+		let language;
 		// support for HTML 5.1 "navigator.languages"
 		if (Array.isArray(nav.languages)) {
-			for (i = 0; i < nav.languages.length; i++) {
+			for (let i = 0; i < nav.languages.length; i++) {
 				language = nav.languages[i];
 				if (language && language.length) {
 					return language;
@@ -149,8 +148,8 @@ var Utilities = {
 			}
 		}
 		// support for other well known properties in browsers
-		for (i = 0; i < browserLanguagePropertyKeys.length; i++) {
-			var prop = browserLanguagePropertyKeys[i];
+		for (let i = 0; i < browserLanguagePropertyKeys.length; i++) {
+			const prop = browserLanguagePropertyKeys[i];
 			language = nav[prop];
 			//console.debug(prop, "=", language);
 			if (language && language.length) {
@@ -161,33 +160,33 @@ var Utilities = {
 	},
 
 	getKeyboardLayout: function() {
-		var v = Utilities.getFirstBrowserLanguage();
+		let v = Utilities.getFirstBrowserLanguage();
 		console.debug("getFirstBrowserLanguage()=", v);
 		if (v==null) {
 			return "us";
 		}
-		var layout = LANGUAGE_TO_LAYOUT[v];
-		if (layout) {
-			return layout;
+		let layout = LANGUAGE_TO_LAYOUT[v];
+		if (!layout) {
+			//ie: v="en_GB";
+			v = v.split(',')[0];
+			let l = v.split('-', 2);
+			if (l.length === 1){
+				l = v.split('_', 2);
+			}
+			//ie: "en"
+			layout = l[0].toLowerCase();
+			const tmp = LANGUAGE_TO_LAYOUT[v];
+			if (tmp) {
+				layout = tmp;
+			}
 		}
-		//ie: v="en_GB";
-		v = v.split(',')[0];
-		var l = v.split('-', 2);
-		if (l.length === 1){
-			l = v.split('_', 2);
-		}
-		if (l.length === 1){
-			return '';
-		}
-		//ie: "gb"
-		layout=l[1].toLowerCase();
 		console.debug("getKeyboardLayout()=", layout);
 		return layout;
 	},
 
 	canUseWebP : function() {
-	    var elem = document.createElement('canvas');
-	    var ctx = elem.getContext('2d');
+	    const elem = document.createElement('canvas');
+	    const ctx = elem.getContext('2d');
 	    if (!ctx) {
 	    	return false;
 	    }
@@ -202,7 +201,7 @@ var Utilities = {
 		if (Utilities.audio_context) {
 			return Utilities.audio_context;
 		}
-		var acc = Utilities.getAudioContextClass();
+		const acc = Utilities.getAudioContextClass();
 		if(!acc) {
 			return null;
 		}
@@ -224,22 +223,22 @@ var Utilities = {
 
 
 	isFirefox : function() {
-		var ua = navigator.userAgent.toLowerCase();
+		const ua = navigator.userAgent.toLowerCase();
 		return ua.includes("firefox");
 	},
 	isOpera : function() {
-		var ua = navigator.userAgent.toLowerCase();
+		const ua = navigator.userAgent.toLowerCase();
 		return ua.includes("opera");
 	},
 	isSafari : function() {
-		var ua = navigator.userAgent.toLowerCase();
+		const ua = navigator.userAgent.toLowerCase();
 		return ua.includes("safari") && !ua.includes('chrome');
 	},
 	isEdge : function() {
 		return navigator.userAgent.includes("Edge");
 	},
 	isChrome : function () {
-		var isChromium = window.chrome,
+		const isChromium = window.hasOwnProperty("chrome"),
 			winNav = window.navigator,
 			vendorName = winNav.vendor,
 			isOpera = winNav.userAgent.includes("OPR"),
@@ -257,6 +256,25 @@ var Utilities = {
 	},
 	isIE : function() {
 		return navigator.userAgent.includes("MSIE") || navigator.userAgent.includes("Trident/");
+	},
+
+	is_64bit : function() {
+		let _to_check = [] ;
+		if (window.navigator.hasOwnProperty("cpuClass"))
+			_to_check.push((window.navigator.cpuClass + "").toLowerCase());
+		if (window.navigator.platform)
+			_to_check.push((window.navigator.platform + "").toLowerCase());
+		if (navigator.userAgent)
+			_to_check.push((navigator.userAgent + "").toLowerCase());
+		const _64bits_signatures = ["x86_64", "x86-64", "Win64", "x64;", "amd64", "AMD64", "WOW64", "x64_64", "ia64", "sparc64", "ppc64", "IRIX64"];
+		for (let _c=0; _c<_to_check.length; _c++) {
+			for (let _i=0 ; _i<_64bits_signatures.length; _i++) {
+				if (_to_check[_c].indexOf(_64bits_signatures[_i].toLowerCase())!=-1) {
+					return true;
+				}
+			}
+		}
+		return false;
 	},
 
 	getSimpleUserAgentString : function() {
@@ -300,8 +318,8 @@ var Utilities = {
 	},
 
 	isEventSupported : function(event) {
-		var testEl = document.createElement('div');
-		var isSupported;
+		let testEl = document.createElement('div');
+		let isSupported;
 
 		event = 'on' + event;
 		isSupported = (event in testEl);
@@ -318,12 +336,11 @@ var Utilities = {
 	//BSD license
 	normalizeWheel : function(/*object*/ event) /*object*/ {
 		// Reasonable defaults
-		var PIXEL_STEP  = 10;
-		var LINE_HEIGHT = 40;
-		var PAGE_HEIGHT = 800;
+		const PIXEL_STEP  = 10;
+		const LINE_HEIGHT = 40;
+		const PAGE_HEIGHT = 800;
 
-		var sX = 0, sY = 0,       // spinX, spinY
-			pX = 0, pY = 0;       // pixelX, pixelY
+		let sX = 0, sY = 0;       // spinX, spinY
 
 		// Legacy
 		if ('detail'      in event) { sY = event.detail; }
@@ -337,8 +354,8 @@ var Utilities = {
 			sY = 0;
 		}
 
-		pX = sX * PIXEL_STEP;
-		pY = sY * PIXEL_STEP;
+		let pX = sX * PIXEL_STEP; // pixelX
+		let pY = sY * PIXEL_STEP; // pixelY
 
 		if ('deltaY' in event) { pY = event.deltaY; }
 		if ('deltaX' in event) { pX = event.deltaX; }
@@ -367,11 +384,11 @@ var Utilities = {
 	},
 
 	saveFile : function(filename, data, mimetype) {
-	    var a = document.createElement("a");
+	    const a = document.createElement("a");
 	    a.setAttribute("style", "display: none");
 	    document.body.appendChild(a);
-	    var blob = new Blob([data], mimetype);
-	    var url = window.URL.createObjectURL(blob);
+	    const blob = new Blob([data], mimetype);
+	    const url = window.URL.createObjectURL(blob);
 	    if (navigator.msSaveOrOpenBlob) {
 	    	navigator.msSaveOrOpenBlob(blob, filename);
 	    } else {
@@ -390,17 +407,17 @@ var Utilities = {
 	},
 
 	StringToUint8 : function(str) {
-		var u8a = new Uint8Array(str.length);
-		for(var i=0,j=str.length;i<j;++i){
+		const u8a = new Uint8Array(str.length);
+		for(let i=0,j=str.length;i<j;++i){
 			u8a[i] = str.charCodeAt(i);
 		}
 		return u8a;
 	},
 
 	Uint8ToString : function(u8a){
-		var CHUNK_SZ = 0x8000;
-		var c = [];
-		for (var i=0; i < u8a.length; i+=CHUNK_SZ) {
+		const CHUNK_SZ = 0x8000;
+		const c = [];
+		for (let i=0; i < u8a.length; i+=CHUNK_SZ) {
 			c.push(String.fromCharCode.apply(null, u8a.subarray(i, i+CHUNK_SZ)));
 		}
 		return c.join("");
@@ -409,14 +426,14 @@ var Utilities = {
 	ArrayBufferToBase64 : function(uintArray) {
 		// apply in chunks of 10400 to avoid call stack overflow
 		// https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Function/apply
-		var s = "";
-		var skip = 10400;
+		let s = "";
+		const skip = 10400;
 		if (uintArray.subarray) {
-			for (var i=0, len=uintArray.length; i<len; i+=skip) {
+			for (let i=0, len=uintArray.length; i<len; i+=skip) {
 				s += String.fromCharCode.apply(null, uintArray.subarray(i, Math.min(i + skip, len)));
 			}
 		} else {
-			for (var i=0, len=uintArray.length; i<len; i+=skip) {
+			for (let i=0, len=uintArray.length; i<len; i+=skip) {
 				s += String.fromCharCode.apply(null, uintArray.slice(i, Math.min(i + skip, len)));
 			}
 		}
@@ -424,17 +441,48 @@ var Utilities = {
 	},
 
 	convertDataURIToBinary : function (dataURI) {
-		var BASE64_MARKER = ';base64,';
-		var base64Index = dataURI.indexOf(BASE64_MARKER) + BASE64_MARKER.length;
-		var base64 = dataURI.substring(base64Index);
-		var raw = window.atob(base64);
-		var rawLength = raw.length;
-		var array = new Uint8Array(new ArrayBuffer(rawLength));
+		const BASE64_MARKER = ';base64,';
+		const base64Index = dataURI.indexOf(BASE64_MARKER) + BASE64_MARKER.length;
+		const base64 = dataURI.substring(base64Index);
+		const raw = window.atob(base64);
+		const rawLength = raw.length;
+		const array = new Uint8Array(new ArrayBuffer(rawLength));
 
-		for(i = 0; i < rawLength; i++) {
+		for (let i = 0; i < rawLength; i++) {
 			array[i] = raw.charCodeAt(i);
 		}
 		return array;
+	},
+
+
+	parseINIString : function (data) {
+	    const regex = {
+	        section: /^\s*\[\s*([^\]]*)\s*\]\s*$/,
+	        param: /^\s*([^=]+?)\s*=\s*(.*?)\s*$/,
+	        comment: /^\s*;.*$/
+	    };
+	    const value = {};
+	    const lines = data.split(/[\r\n]+/);
+	    let section = null;
+	    lines.forEach(function(line){
+	        if(regex.comment.test(line)){
+	            return;
+	        }else if(regex.param.test(line)){
+	            const match = line.match(regex.param);
+	            if(section){
+	                value[section][match[1]] = match[2];
+	            }else{
+	                value[match[1]] = match[2];
+	            }
+	        }else if(regex.section.test(line)){
+	            const match = line.match(regex.section);
+	            value[match[1]] = {};
+	            section = match[1];
+	        }else if(line.length == 0 && section){
+	            section = null;
+	        }
+	    });
+	    return value;
 	},
 
 	/**
@@ -444,19 +492,19 @@ var Utilities = {
 	 * This method parses that string into a user-friendly key/value pair object.
 	 */
 	ParseResponseHeaders : function(headerStr) {
-		var headers = {};
+		const headers = {};
 		if (!headerStr) {
 			return headers;
 		}
-		var headerPairs = headerStr.split('\u000d\u000a');
-		for (var i = 0; i < headerPairs.length; i++) {
-			var headerPair = headerPairs[i];
+		const headerPairs = headerStr.split('\u000d\u000a');
+		for (let i = 0; i < headerPairs.length; i++) {
+			const headerPair = headerPairs[i];
 			// Can't use split() here because it does the wrong thing
 			// if the header value has the string ": " in it.
-			var index = headerPair.indexOf('\u003a\u0020');
+			const index = headerPair.indexOf('\u003a\u0020');
 			if (index > 0) {
-				var key = headerPair.substring(0, index);
-				var val = headerPair.substring(index + 2);
+				const key = headerPair.substring(0, index);
+				const val = headerPair.substring(index + 2);
 				headers[key] = val;
 			}
 		}
@@ -464,9 +512,9 @@ var Utilities = {
 	},
 
 	parseParams : function(q) {
-		var params = {},
-				e,
-				a = /\+/g,	// Regex for replacing addition symbol with a space
+		const params = {};
+		let e;
+		const a = /\+/g,	// Regex for replacing addition symbol with a space
 				r = /([^&=]+)=?([^&]*)/g,
 				d = function (s) { return decodeURIComponent(s.replace(a, " ")); };
 		while (e = r.exec(q))
@@ -475,7 +523,7 @@ var Utilities = {
 	},
 
 	getparam : function(prop) {
-		var getParameter = window.location.getParameter;
+		let getParameter = window.location.getParameter;
 		if (!getParameter) {
 			getParameter = function(key) {
 				if (!window.location.queryStringParams)
@@ -483,7 +531,7 @@ var Utilities = {
 				return window.location.queryStringParams[key];
 			};
 		}
-		var value = getParameter(prop);
+		let value = getParameter(prop);
 		try {
 			if (value === undefined && typeof(sessionStorage) !== undefined) {
 				value = sessionStorage.getItem(prop);
@@ -497,7 +545,7 @@ var Utilities = {
 
 
 	getboolparam : function(prop, default_value) {
-		var v = Utilities.getparam(prop);
+		const v = Utilities.getparam(prop);
 		if(v===null) {
 			return default_value;
 		}
@@ -509,7 +557,7 @@ var Utilities = {
 			return false;
 		}
 		try {
-			var key = "just for testing sessionStorage support";
+			const key = "just for testing sessionStorage support";
 		    sessionStorage.setItem(key, "store-whatever");
 		    sessionStorage.removeItem(key);
 		    return true;
@@ -521,21 +569,21 @@ var Utilities = {
 
 
 	getConnectionInfo : function() {
-		var c = navigator.connection;
-		if (!c) {
+		if (!navigator.hasOwnProperty("connection")) {
 			return {};
 		}
-		var i = {};
+		const c = navigator.connection;
+		const i = {};
 		if (c.type) {
 			i["type"] = c.type;
 		}
-		if (c.effectiveType) {
+		if (c.hasOwnProperty("effectiveType")) {
 			i["effective-type"] = c.effectiveType;
 		}
 		if (!isNaN(c.downlink) && !isNaN(c.downlink) && c.downlink>0 && isFinite(c.downlink)) {
 			i["downlink"] = Math.round(c.downlink*1000*1000);
 		}
-		if (!isNaN(c.downlinkMax) && !isNaN(c.downlinkMax) && c.downlinkMax>0 && isFinite(c.downlinkMax)) {
+		if (c.hasOwnProperty("downlinkMax") && !isNaN(c.downlinkMax) && !isNaN(c.downlinkMax) && c.downlinkMax>0 && isFinite(c.downlinkMax)) {
 			i["downlink.max"] = Math.round(c.downlinkMax*1000*1000);
 		}
 		if (!isNaN(c.rtt) && c.rtt>0) {
@@ -546,19 +594,19 @@ var Utilities = {
 };
 
 
-var MOVERESIZE_SIZE_TOPLEFT      = 0;
-var MOVERESIZE_SIZE_TOP          = 1;
-var MOVERESIZE_SIZE_TOPRIGHT     = 2;
-var MOVERESIZE_SIZE_RIGHT        = 3;
-var MOVERESIZE_SIZE_BOTTOMRIGHT  = 4;
-var MOVERESIZE_SIZE_BOTTOM       = 5;
-var MOVERESIZE_SIZE_BOTTOMLEFT   = 6;
-var MOVERESIZE_SIZE_LEFT         = 7;
-var MOVERESIZE_MOVE              = 8;
-var MOVERESIZE_SIZE_KEYBOARD     = 9;
-var MOVERESIZE_MOVE_KEYBOARD     = 10;
-var MOVERESIZE_CANCEL            = 11;
-var MOVERESIZE_DIRECTION_STRING = {
+const MOVERESIZE_SIZE_TOPLEFT      = 0;
+const MOVERESIZE_SIZE_TOP          = 1;
+const MOVERESIZE_SIZE_TOPRIGHT     = 2;
+const MOVERESIZE_SIZE_RIGHT        = 3;
+const MOVERESIZE_SIZE_BOTTOMRIGHT  = 4;
+const MOVERESIZE_SIZE_BOTTOM       = 5;
+const MOVERESIZE_SIZE_BOTTOMLEFT   = 6;
+const MOVERESIZE_SIZE_LEFT         = 7;
+const MOVERESIZE_MOVE              = 8;
+const MOVERESIZE_SIZE_KEYBOARD     = 9;
+const MOVERESIZE_MOVE_KEYBOARD     = 10;
+const MOVERESIZE_CANCEL            = 11;
+const MOVERESIZE_DIRECTION_STRING = {
                                0    : "SIZE_TOPLEFT",
                                1    : "SIZE_TOP",
                                2    : "SIZE_TOPRIGHT",
@@ -572,7 +620,7 @@ var MOVERESIZE_DIRECTION_STRING = {
                                10   : "MOVE_KEYBOARD",
                                11	: "CANCEL",
                                };
-var MOVERESIZE_DIRECTION_JS_NAME = {
+const MOVERESIZE_DIRECTION_JS_NAME = {
         0	: "nw",
         1	: "n",
         2	: "ne",
@@ -584,6 +632,96 @@ var MOVERESIZE_DIRECTION_JS_NAME = {
         };
 
 //convert a language code into an X11 keyboard layout code:
-var LANGUAGE_TO_LAYOUT = {
+const LANGUAGE_TO_LAYOUT = {
+		"en_GB"	: "gb",
+		"en"	: "us",
+		"zh"	: "cn",
+		"af"	: "za",
+		"sq"	: "al",
+		//"ar"	: "ar",
+		//"eu"	: "eu",
+		//"bg"	: "bg",
+		//"be"	: "be",
+		"ca"	: "ca",
+		"zh-TW"	: "tw",
+		"zh-CN"	: "cn",
+		//"zh-HK"	: ??
+		//"zh-SG"	: ??
+		//"hr"	: "hr",
+		"cs"	: "cz",
 		"da"	: "dk",
-}
+		//"nl"	: "nl",
+		"nl-BE"	: "be",
+		"en-US"	: "us",
+		//"en-EG"	: ??
+		"en-AU"	: "us",
+		"en-GB"	: "gb",
+		"en-CA"	: "ca",
+		"en-NZ"	: "us",
+		"en-IE"	: "ie",
+		"en-ZA" : "za",
+		"en-JM" : "us",
+		//"en-BZ"	: ??
+		"en-TT"	: "tr",
+		"et"	: "ee",
+		//"fo"	: "fo",
+		"fa"	: "ir",
+		//"fi"	: "fi",
+		//"fr"	: "fr",
+		"fr-BE"	: "be",
+		"fr-CA"	: "ca",
+		"fr-CH"	: "ch",
+		"fr-LU"	: "fr",
+		//"gd"	: ??
+		"gd-IE"	: "ie",
+		//"de"	: "de",
+		"de-CH"	: "ch",
+		"de-AT"	: "at",
+		"de-LU"	: "de",
+		"de-LI"	: "de",
+		"he"	: "il",
+		"hi"	: "in",
+		//"hu"	: "hu",
+		//"is"	: "is",
+		//"id"	: ??,
+		//"it"	: "it",
+		"it-CH"	: "ch",
+		"ja"	: "jp",
+		"ko"	: "kr",
+		//"lv"	: "lv",
+		//"lt"	: "lt",
+		//"mk"	: "mk",
+		//"mt"	: "mt",
+		//"no"	: "no",
+		//"pl"	: "pl",
+		"pt-BR"	: "br",
+		"pt"	: "pt",
+		//"rm"	: ??,
+		//"ro"	: "ro",
+		//"ro-MO"	: ??,
+		//"ru"	: "ru",
+		///"ru-MI"	: ??,
+		//"sz"	: ??,
+		"sr"	: "rs",
+		//"sk"	: "sk",
+		"sl"	: "si",
+		//"sb"	: ??,
+		"es"	: "es",
+		//"es-AR", "es-GT", "es-CR", "es-PA", "es-DO", "es-MX", "es-VE", "es-CO",
+		//"es-PE", "es-EC", "es-CL", "es-UY", "es-PY", "es-BO", "es-SV", "es-HN",
+		//"es-NI", "es-PR",
+		//"sx"	: ??,
+		"sv"	: "se",
+		"sv-FI"	: "fi",
+		//"th"	: "th",
+		//"ts"	: ??,
+		//"tn"	: ??,
+		"tr"	: "tr",
+		"uk"	: "ua",
+		"ur"	: "pk",
+		//"ve"	: ??,
+		"vi"	: "vn",
+		//"xh"	: "??",
+ 		//"ji"	: "??",
+		//"zu"	: "??",
+};

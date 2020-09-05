@@ -1,18 +1,23 @@
 # This file is part of Xpra.
 # Copyright (C) 2010 Nathaniel Smith <njs@pobox.com>
-# Copyright (C) 2011-2017 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2011-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import ctypes
 from ctypes.wintypes import HANDLE
+from ctypes import create_string_buffer
 
-from xpra.platform.win32.common import GetKeyState, GetKeyboardLayoutList, GetKeyboardLayout, GetIntSystemParametersInfo
+from xpra.platform.win32.common import (
+    GetKeyState, GetKeyboardLayoutList, GetKeyboardLayout,
+    GetIntSystemParametersInfo, GetKeyboardLayoutName,
+    )
 from xpra.platform.win32 import constants as win32con
 from xpra.platform.keyboard_base import KeyboardBase
-from xpra.keyboard.layouts import WIN32_LAYOUTS
+from xpra.keyboard.layouts import WIN32_LAYOUTS, WIN32_KEYBOARDS
 from xpra.gtk_common.keymap import KEY_TRANSLATIONS
 from xpra.util import csv, envint, envbool
+from xpra.os_util import bytestostr
 from xpra.log import Logger
 
 log = Logger("keyboard")
@@ -46,6 +51,7 @@ class Keyboard(KeyboardBase):
         self.num_lock_modifier = None
         self.altgr_modifier = None
         self.delayed_event = None
+        self.last_layout_message = None
         #workaround for "period" vs "KP_Decimal" with gtk2 (see ticket #586):
         #translate "period" with keyval=46 and keycode=110 to KP_Decimal:
         KEY_TRANSLATIONS[("period",     46,     110)]   = "KP_Decimal"
@@ -54,7 +60,7 @@ class Keyboard(KeyboardBase):
         KEY_TRANSLATIONS[("dead_grave", 65104,  55)]    = "grave"
 
     def set_modifier_mappings(self, mappings):
-        KeyboardBase.set_modifier_mappings(self, mappings)
+        super().set_modifier_mappings(mappings)
         self.num_lock_modifier = self.modifier_keys.get("Num_Lock")
         log("set_modifier_mappings found 'Num_Lock' with modifier value: %s", self.num_lock_modifier)
         for x in ("ISO_Level3_Shift", "Mode_switch"):
@@ -66,7 +72,7 @@ class Keyboard(KeyboardBase):
 
     def mask_to_names(self, mask):
         """ Patch NUMLOCK and AltGr """
-        names = KeyboardBase.mask_to_names(self, mask)
+        names = super().mask_to_names(mask)
         if EMULATE_ALTGR:
             rmenu = GetKeyState(win32con.VK_RMENU)
             #log("GetKeyState(VK_RMENU)=%s", rmenu)
@@ -80,7 +86,7 @@ class Keyboard(KeyboardBase):
                 elif not numlock and self.num_lock_modifier in names:
                     names.remove(self.num_lock_modifier)
                 log("mask_to_names(%s) GetKeyState(VK_NUMLOCK)=%s, names=%s", mask, numlock, names)
-            except:
+            except Exception:
                 pass
         else:
             log("mask_to_names(%s)=%s", mask, names)
@@ -110,7 +116,39 @@ class Keyboard(KeyboardBase):
         return  {}, [], ["lock"]
 
     def get_layout_spec(self):
+        KL_NAMELENGTH = 9
+        name_buf = create_string_buffer(KL_NAMELENGTH)
         layout = None
+        if GetKeyboardLayoutName(name_buf):
+            log("get_layout_spec() GetKeyboardLayoutName()=%s", bytestostr(name_buf.value))
+            try:
+                #win32 API returns a hex string
+                ival = int(name_buf.value, 16)
+            except ValueError:
+                log.warn("Warning: failed to parse keyboard layout code '%s'", bytestostr(name_buf.value))
+            else:
+                found = False
+                for val in (ival, ival & 0xffff):
+                    kbdef = WIN32_KEYBOARDS.get(val)
+                    log("get_layout_spec() WIN32_KEYBOARDS[%#x]=%s", val, kbdef)
+                    if kbdef:
+                        found = True
+                        layout, descr = kbdef
+                        if layout=="??":
+                            log.warn("Warning: the X11 codename for %#x is not known", val)
+                            log.warn(" only identified as '%s'", descr)
+                            log.warn(" please file a bug report")
+                            layout = None
+                            continue
+                        if self.last_layout_message!=layout:
+                            log.info("keyboard layout code %#x", ival)
+                            log.info("identified as '%s' : %s", descr, layout)
+                            self.last_layout_message = layout
+                        break
+                if not found and self.last_layout_message!=layout:
+                    log.warn("Warning: unknown keyboard layout %#x", val)
+                    log.warn(" please file a bug report")
+                    self.last_layout_message = layout
         layouts = []
         variant = None
         variants = None
@@ -122,7 +160,8 @@ class Keyboard(KeyboardBase):
                 kbid = hkl & 0xffff
                 if kbid in WIN32_LAYOUTS:
                     code, _, _, _, _layout, _variants = WIN32_LAYOUTS.get(kbid)
-                    log("found keyboard layout '%s' with variants=%s, code '%s' for kbid=%i (%#x)", _layout, _variants, code, kbid, hkl)
+                    log("found keyboard layout '%s' with variants=%s, code '%s' for kbid=%i (%#x)",
+                        _layout, _variants, code, kbid, hkl)
                     if _layout not in layouts:
                         layouts.append(_layout)
         except Exception as e:
@@ -133,12 +172,16 @@ class Keyboard(KeyboardBase):
             log("GetKeyboardLayout(0)=%#x", hkl)
             kbid = hkl & 0xffff
             if kbid in WIN32_LAYOUTS:
-                code, _, _, _, layout, variants = WIN32_LAYOUTS.get(kbid)
-                log("found keyboard layout '%s' with variants=%s, code '%s' for kbid=%i (%#x)", layout, variants, code, kbid, hkl)
-            if not layout:
+                code, _, _, _, layout0, variants = WIN32_LAYOUTS.get(kbid)
+                log("found keyboard layout '%s' with variants=%s, code '%s' for kbid=%i (%#x)",
+                    layout0, variants, code, kbid, hkl)
+            if not layout0:
                 log("unknown keyboard layout for kbid: %i (%#x)", kbid, hkl)
-            else:
-                layouts.append(layout)
+            elif layout0 not in layouts:
+                layouts.append(layout0)
+            #only override "layout" if unset:
+            if not layout and layout0:
+                layout = layout0
         except Exception as e:
             log.error("Error: failed to detect keyboard layout:")
             log.error(" %s", e)
@@ -186,9 +229,8 @@ class Keyboard(KeyboardBase):
                     if rmenu in (0, 1):
                         self.delayed_event = (send_key_action_cb, wid, key_event)
                         #needed for altgr emulation timeouts:
-                        from xpra.gtk_common.gobject_compat import import_glib
-                        glib = import_glib()
-                        glib.timeout_add(EMULATE_ALTGR_CONTROL_KEY_DELAY, self.send_delayed_key)
+                        from gi.repository import GLib
+                        GLib.timeout_add(EMULATE_ALTGR_CONTROL_KEY_DELAY, self.send_delayed_key)
                     return
                 if not key_event.pressed and rmenu not in (0, 1):
                     #unpressed: could just skip it?
@@ -208,7 +250,7 @@ class Keyboard(KeyboardBase):
                 key_event.keycode = -1
                 self.AltGr_modifiers(key_event.modifiers)
         self.send_delayed_key()
-        KeyboardBase.process_key_event(self, send_key_action_cb, wid, key_event)
+        super().process_key_event(send_key_action_cb, wid, key_event)
 
     def send_delayed_key(self):
         #timeout: this must be a real one, send it now
@@ -218,5 +260,5 @@ class Keyboard(KeyboardBase):
             self.delayed_event = None
             rmenu = GetKeyState(win32con.VK_RMENU)
             log("send_delayed_key() GetKeyState(VK_RMENU)=%s", rmenu)
-            if rmenu not in (0, 1):
-                KeyboardBase.process_key_event(self, *dk)
+            if rmenu in (0, 1):
+                super().process_key_event(*dk)

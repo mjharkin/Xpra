@@ -8,15 +8,6 @@ import os.path
 import sys
 import site
 
-from xpra.util import envbool
-
-SOUND_PYTHON3 = envbool("XPRA_SOUND_PYTHON3", False)
-
-#removed in 2.3:
-# we no longer use "~/.xpra" on posix systems to store files or sockets,
-# but we still load config files from there if present
-LEGACY_DOTXPRA = envbool("XPRA_LEGACY_DOTXPRA", False)
-
 
 def do_get_desktop_background_paths():
     return [
@@ -30,7 +21,7 @@ def do_get_desktop_background_paths():
 
 def do_get_install_prefix():
     #special case for "user" installations, ie:
-    #$HOME/.local/lib/python2.7/site-packages/xpra/platform/paths.py
+    #$HOME/.local/lib/python3.8/site-packages/xpra/platform/paths.py
     try:
         base = site.getuserbase()
     except Exception:
@@ -89,9 +80,6 @@ def do_get_script_bin_dirs():
     runtime_dir = _get_xpra_runtime_dir()
     if runtime_dir:
         script_bin_dirs.append(runtime_dir)
-    if LEGACY_DOTXPRA:
-        if os.geteuid()>0:
-            script_bin_dirs.append("~/.xpra")
     return script_bin_dirs
 
 
@@ -128,16 +116,17 @@ def get_runtime_dir():
     runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
     if runtime_dir:
         #replace uid with the string "$UID"
-        head, tail = list(os.path.split(runtime_dir))
+        head, tail = os.path.split(runtime_dir)
         try:
             assert int(tail)>=0
             runtime_dir = os.path.join(head, "$UID")
         except (ValueError, AssertionError):
             pass
-    elif os.path.exists("/run") and os.path.isdir("/run"):
-        runtime_dir = "/run/user/$UID"
-    elif os.path.exists("/var/run") and os.path.isdir("/var/run"):
-        runtime_dir = "/var/run/user/$UID"
+    else:
+        for d in ("/run/user", "/var/run/user"):
+            if os.path.exists(d) and os.path.isdir(d):
+                runtime_dir = d+"/$UID"
+                break
     return runtime_dir
 
 def _get_xpra_runtime_dir():
@@ -152,11 +141,6 @@ def do_get_socket_dirs():
     if runtime_dir:
         #private, per user: /run/user/1000/xpra
         SOCKET_DIRS.append(runtime_dir)
-    if LEGACY_DOTXPRA:
-        #Debian pretends to be root during build.. check FAKEROOTKEY
-        #to ensure we still include "~/.xpra" in the default config
-        if os.geteuid()>0 or os.environ.get("FAKEROOTKEY"):
-            SOCKET_DIRS.append("~/.xpra")   #the old default path
     #for shared sockets (the 'xpra' group should own this directory):
     if os.path.exists("/run"):
         SOCKET_DIRS.append("/run/xpra")
@@ -164,25 +148,30 @@ def do_get_socket_dirs():
         SOCKET_DIRS.append("/var/run/xpra")
     return SOCKET_DIRS
 
+
+def do_get_client_socket_dirs():
+    DIRS = []
+    runtime_dir = _get_xpra_runtime_dir()
+    if runtime_dir:
+        DIRS.append(os.path.join(runtime_dir, "clients"))
+    return DIRS
+
+
 def do_get_default_log_dirs():
     log_dirs = []
     v = _get_xpra_runtime_dir()
     if v:
         log_dirs.append(v)
-    if LEGACY_DOTXPRA and os.geteuid()>0:
-        log_dirs.append("~/.xpra")
     log_dirs.append("/tmp")
     return log_dirs
 
 def do_get_sound_command():
     from xpra.platform.paths import get_xpra_command
-    if SOUND_PYTHON3:
-        return ["python3"]+get_xpra_command()
     return get_xpra_command()
 
 def do_get_xpra_command():
     #try to use the same "xpra" executable that launched this server,
     #whilst also preserving the python interpreter version:
     if sys.argv and sys.argv[0].lower().endswith("/xpra"):
-        return ["python%i" % sys.version_info[0], sys.argv[0]]
+        return ["python%i.%i" % (sys.version_info.major, sys.version_info.minor), sys.argv[0]]
     return ["xpra"]

@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2013-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2013-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import Quartz.CoreGraphics as CG    #@UnresolvedImport
 
 from xpra.util import envbool
-from xpra.os_util import memoryview_to_bytes, _buffer
+from xpra.os_util import memoryview_to_bytes
+from xpra.scripts.config import InitExit
+from xpra.scripts.main import check_display
 from xpra.server.gtk_server_base import GTKServerBase
 from xpra.server.shadow.gtk_shadow_server_base import GTKShadowServerBase
 from xpra.platform.darwin.keyboard_config import KeyboardConfig
@@ -29,7 +31,7 @@ ALPHA = {
          CG.kCGImageAlphaNoneSkipFirst         : "SkipFirst",
    }
 
-BTYPES = tuple(x for x in (str, bytes, memoryview, _buffer, bytearray) if x is not None)
+BTYPES = tuple((str, bytes, memoryview, bytearray))
 
 #ensure that picture_encode can deal with pixels as NSCFData:
 def patch_picture_encode():
@@ -43,7 +45,7 @@ def patch_picture_encode():
     picture_encode.pixels_to_bytes = pixels_to_bytes
 
 
-class OSXRootCapture(object):
+class OSXRootCapture:
 
     def __repr__(self):
         return "OSXRootCapture"
@@ -58,7 +60,7 @@ class OSXRootCapture(object):
         rect = (x, y, width, height)
         return get_CG_imagewrapper(rect)
 
-    def get_info(self):
+    def get_info(self) -> dict:
         return {}
 
     def take_screenshot(self):
@@ -70,14 +72,14 @@ class ShadowServer(GTKShadowServerBase):
 
     def __init__(self):
         #sanity check:
+        check_display()
         image = CG.CGWindowListCreateImage(CG.CGRectInfinite,
                     CG.kCGWindowListOptionOnScreenOnly,
                     CG.kCGNullWindowID,
                     CG.kCGWindowImageDefault)
         if image is None:
-            from xpra.scripts.config import InitExit
             log("cannot grab test screenshot - maybe you need to run this command whilst logged in via the UI")
-            raise InitExit(1, "cannot grab pixels from the screen, make sure this command is launched from a GUI session")
+            raise InitExit(EXIT_FAILURE, "cannot grab pixels from the screen, make sure this command is launched from a GUI session")
         patch_picture_encode()
         self.refresh_count = 0
         self.refresh_rectangle_count = 0
@@ -85,7 +87,7 @@ class ShadowServer(GTKShadowServerBase):
         GTKShadowServerBase.__init__(self)
 
     def init(self, opts):
-        GTKShadowServerBase.init(self, opts)
+        super().init(opts)
         self.keycodes = {}
         #printing fails silently on OSX
         self.printing = False
@@ -144,12 +146,12 @@ class ShadowServer(GTKShadowServerBase):
                 return
             log.warn("Warning: CGRegisterScreenRefreshCallback failed with error %i", err)
             log.warn(" using fallback timer method")
-        GTKShadowServerBase.start_refresh(self, wid)
+        super().start_refresh(wid)
 
     def stop_refresh(self, wid):
         log("stop_refresh(%i) mapped=%s, timer=%s", wid, self.mapped, self.refresh_timer)
         #may stop the timer fallback:
-        GTKShadowServerBase.stop_refresh(self, wid)
+        super().stop_refresh(wid)
         if self.refresh_registered and not self.mapped:
             try:
                 err = CG.CGUnregisterScreenRefreshCallback(self.screen_refresh_callback, None)

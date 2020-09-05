@@ -1,11 +1,9 @@
 # This file is part of Xpra.
-# Copyright (C) 2017-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2017-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 #cython: auto_pickle=False, wraparound=False, cdivision=True, language_level=3
-
-from __future__ import absolute_import
 
 from xpra.log import Logger
 log = Logger("decoder", "jpeg")
@@ -14,13 +12,11 @@ from xpra.util import envbool, reverse_dict
 from xpra.codecs.image_wrapper import ImageWrapper
 from xpra.buffers.membuf cimport getbuf, MemBuf, object_as_buffer  #pylint: disable=syntax-error
 
-from libc.stdint cimport uint8_t, uint32_t, uintptr_t
+from libc.stdint cimport uint8_t
 from xpra.monotonic_time cimport monotonic_time
 
 LOG_PERF = envbool("XPRA_JPEG_LOG_PERF", False)
 
-ctypedef int boolean
-ctypedef unsigned int JDIMENSION
 ctypedef int TJSAMP
 ctypedef int TJPF
 ctypedef int TJCS
@@ -127,7 +123,7 @@ def get_error_str():
     cdef char *err = tjGetErrorStr()
     return str(err)
 
-def decompress_to_yuv(data, int width, int height, options={}):
+def decompress_to_yuv(data):
     cdef const uint8_t *buf
     cdef Py_ssize_t buf_len
     assert object_as_buffer(data, <const void**> &buf, &buf_len)==0, "unable to convert %s to a buffer" % type(data)
@@ -149,7 +145,6 @@ def decompress_to_yuv(data, int width, int height, options={}):
     if r:
         close()
         raise Exception("failed to decompress JPEG header: %s" % get_error_str())
-    assert w==width and h==height, "invalid picture dimensions: %ix%i, expected %ix%i" % (w, h, width, height)
     subsamp_str = "YUV%sP" % TJSAMP_STR.get(subsamp, subsamp)
     assert subsamp in (TJSAMP_444, TJSAMP_422, TJSAMP_420), "unsupported JPEG colour subsampling: %s" % subsamp_str
     log("jpeg.decompress_to_yuv size: %4ix%-4i, subsampling=%-4s, colorspace=%s",
@@ -183,7 +178,7 @@ def decompress_to_yuv(data, int width, int height, options={}):
         with nogil:
             r = tjDecompressToYUVPlanes(decompressor,
                                         buf, buf_len,
-                                        planes, width, strides, height, flags)
+                                        planes, w, strides, h, flags)
         if r:
             raise Exception("failed to decompress %s JPEG data to YUV: %s" % (subsamp_str, get_error_str()))
     finally:
@@ -191,11 +186,11 @@ def decompress_to_yuv(data, int width, int height, options={}):
     if LOG_PERF:
         elapsed = monotonic_time()-start
         log("decompress jpeg to %s: %4i MB/s (%9i bytes in %2.1fms)",
-            subsamp_str, float(total_size)/elapsed//1024//1024, total_size, 1000*elapsed)
+            subsamp_str, total_size/elapsed//1024//1024, total_size, 1000*elapsed)
     return ImageWrapper(0, 0, w, h, pyplanes, subsamp_str, 24, pystrides, ImageWrapper.PLANAR_3)
 
 
-def decompress_to_rgb(rgb_format, data, int width, int height, options={}):
+def decompress_to_rgb(rgb_format, data):
     assert rgb_format in TJPF_VAL
     cdef TJPF pixel_format = TJPF_VAL[rgb_format]
     cdef const uint8_t *buf
@@ -219,7 +214,6 @@ def decompress_to_rgb(rgb_format, data, int width, int height, options={}):
     if r:
         close()
         raise Exception("failed to decompress JPEG header: %s" % get_error_str())
-    assert w==width and h==height, "invalid picture dimensions: %ix%i, expected %ix%i" % (w, h, width, height)
     subsamp_str = TJSAMP_STR.get(subsamp, subsamp)
     log("jpeg.decompress_to_rgb: size=%4ix%-4i, subsampling=%3s, colorspace=%s",
         w, h, subsamp_str, TJCS_STR.get(cs, cs))
@@ -232,13 +226,13 @@ def decompress_to_rgb(rgb_format, data, int width, int height, options={}):
         #TODO: add padding and rounding?
         start = monotonic_time()
         stride = w*4
-        size = stride*height
+        size = stride*h
         membuf = getbuf(size)
         dst_buf = <unsigned char*> membuf.get_mem()
         with nogil:
             r = tjDecompress2(decompressor,
                               buf, buf_len, dst_buf,
-                              width, stride, height, pixel_format, flags)
+                              w, stride, h, pixel_format, flags)
         if r:
             raise Exception("failed to decompress %s JPEG data to %s: %s" % (subsamp_str, rgb_format, get_error_str()))
     finally:
@@ -246,7 +240,7 @@ def decompress_to_rgb(rgb_format, data, int width, int height, options={}):
     if LOG_PERF:
         elapsed = monotonic_time()-start
         log("decompress jpeg to %s: %4i MB/s (%9i bytes in %2.1fms)",
-            rgb_format, float(size)/elapsed//1024//1024, size, 1000*elapsed)
+            rgb_format, size/elapsed//1024//1024, size, 1000*elapsed)
     return ImageWrapper(0, 0, w, h, memoryview(membuf), rgb_format, 24, stride, ImageWrapper.PACKED)
 
 
@@ -258,11 +252,11 @@ def selftest(full=False):
         def test_rgbx(*args):
             return decompress_to_rgb("RGBX", *args)
         for fn in (decompress_to_yuv, test_rgbx):
-            img = fn(data, 16, 16)
+            img = fn(data)
             log("%s(%i bytes)=%s", fn, len(data), img)
             if full:
                 try:
-                    v = decompress_to_yuv(data[:len(data)//2], 16, 16)
+                    v = decompress_to_yuv(data[:len(data)//2])
                     assert v is not None
                 except:
                     pass

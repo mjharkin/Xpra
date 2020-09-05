@@ -9,12 +9,14 @@ import weakref
 
 #note: this is just for defining the order of encodings,
 #so we have both core encodings (rgb24/rgb32) and regular encodings (rgb) in here:
-PREFERED_ENCODING_ORDER = (
+PREFERRED_ENCODING_ORDER = (
     "h264", "vp9", "vp8", "mpeg4",
     "mpeg4+mp4", "h264+mp4", "vp8+webm", "vp9+webm",
     "png", "png/P", "png/L", "webp",
     "rgb", "rgb24", "rgb32", "jpeg",
     "h265", "mpeg1", "mpeg2",
+    "scroll",
+    "grayscale",
     )
 #encoding order for edges (usually one pixel high or wide):
 EDGE_ENCODING_ORDER = (
@@ -24,26 +26,34 @@ EDGE_ENCODING_ORDER = (
     )
 
 HELP_ORDER = (
-    "auto", "h264", "h265", "vp8", "vp9", "mpeg4",
+    "auto",
+    "grayscale",
+    "h264", "h265", "vp8", "vp9", "mpeg4",
     "png", "png/P", "png/L", "webp",
     "rgb", "jpeg",
+    "scroll",
     )
 
 #those are currently so useless that we don't want the user to select them by mistake
-PROBLEMATIC_ENCODINGS = ("h265", )
+PROBLEMATIC_ENCODINGS = ()
 
 
 #value: how much smaller the output is
 LOSSY_PIXEL_FORMATS = {
+    "NV12"    : 2,
     "YUV420P" : 2,
     "YUV422P" : 1.5,
     }
 
 PIXEL_SUBSAMPLING = {
+    "NV12"      : ((1, 1), (1, 2)),
     "YUV420P"   : ((1, 1), (2, 2), (2, 2)),
     "YUV422P"   : ((1, 1), (2, 1), (2, 1)),
     "YUV444P"   : ((1, 1), (1, 1), (1, 1)),
     "GBRP"      : ((1, 1), (1, 1), (1, 1)),
+    "GBRP10"    : ((1, 1), (1, 1), (1, 1)),
+    "YUV444P10" : ((1, 1), (1, 1), (1, 1)),
+    "YUV444P16" : ((1, 1), (1, 1), (1, 1)),
 }
 def get_subsampling_divs(pixel_format):
     # Return size dividers for the given pixel format
@@ -71,7 +81,7 @@ class CodecStateException(Exception):
     pass
 
 
-class _codec_spec(object):
+class _codec_spec:
 
     #I can't imagine why someone would have more than this many
     #encoders or csc modules active at the same time!
@@ -122,8 +132,6 @@ class _codec_spec(object):
             instances = tuple(self.instances.keys())
             log.warn("Warning: already %s active instances of %s: %s",
                      cur, self.codec_class, instances)
-            from xpra.util import dump_references
-            dump_references(log, instances)
         else:
             log("make_instance() %s - instance count=%s", self.codec_type, cur)
         v = self.codec_class()
@@ -131,16 +139,16 @@ class _codec_spec(object):
         return v
 
 
-    def get_instance_count(self):
+    def get_instance_count(self) -> int:
         return len(self.instances)
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         d = {}
         for k in self._exported_fields:
             d[k] = getattr(self, k)
         return d
 
-    def get_runtime_factor(self):
+    def get_runtime_factor(self) -> float:
         #a cost multiplier that some encoder may want to override
         #1.0 means no change:
         mi = self.max_instances
@@ -163,7 +171,7 @@ class video_spec(_codec_spec):
         self.input_colorspace = input_colorspace
         self.output_colorspaces = output_colorspaces    #ie: ["YUV420P" : "YUV420P", ...]
         self.has_lossless_mode = has_lossless_mode
-        _codec_spec.__init__(self, codec_class, codec_type, **kwargs)
+        super().__init__(codec_class, codec_type, **kwargs)
         self._exported_fields += ["encoding", "input_colorspace", "output_colorspaces", "has_lossless_mode"]
 
     def __repr__(self):
@@ -175,7 +183,7 @@ class csc_spec(_codec_spec):
     def __init__(self, input_colorspace, output_colorspace, codec_class, codec_type, **kwargs):
         self.input_colorspace = input_colorspace
         self.output_colorspace = output_colorspace
-        _codec_spec.__init__(self, codec_class, codec_type, **kwargs)
+        super().__init__(codec_class, codec_type, **kwargs)
         self._exported_fields += ["input_colorspace", "output_colorspace"]
 
     def __repr__(self):

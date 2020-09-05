@@ -27,12 +27,11 @@
 # super-fast connections to the X server, everything running on fast
 # computers... does being this careful to avoid sync's actually matter?)
 
-import threading
 import traceback
+from gi.repository import Gdk
 
 from xpra.util import envbool
-from xpra.os_util import bytestostr
-from xpra.gtk_common.gobject_compat import import_gdk
+from xpra.os_util import bytestostr, is_main_thread
 from xpra.log import Logger
 
 __all__ = ["XError", "trap", "xsync", "xswallow"]
@@ -41,22 +40,20 @@ __all__ = ["XError", "trap", "xsync", "xswallow"]
 XPRA_SYNCHRONIZE = envbool("XPRA_SYNCHRONIZE", False)
 XPRA_LOG_SYNC = envbool("XPRA_LOG_SYNC", False)
 VERIFY_MAIN_THREAD = envbool("XPRA_VERIFY_MAIN_THREAD", True)
+LOG_NESTED_XTRAP = envbool("XPRA_LOG_NESTED_XTRAP", False)
 
 log = Logger("x11", "util")
 elog = Logger("x11", "util", "error")
-
-gdk = import_gdk()
 
 
 if not VERIFY_MAIN_THREAD:
     def verify_main_thread():
         return
 else:
-    main_thread = threading.current_thread()
     def verify_main_thread():
-        ct = threading.current_thread()
-        if main_thread != ct:
-            log.error("Error: invalid access from thread %s", ct)
+        if not is_main_thread():
+            import threading
+            log.error("Error: invalid access from thread %s", threading.current_thread())
             traceback.print_stack()
     verify_main_thread()
 
@@ -79,7 +76,7 @@ def get_X_error(xerror):
         from xpra.x11.bindings.window_bindings import constants     #@UnresolvedImport
         if xerror_to_name is None:
             xerror_to_name = {}
-            for name,code in constants.items():
+            for name,code in constants.items():  # @UndefinedVariable
                 if name=="Success" or name.startswith("Bad"):
                     xerror_to_name[code] = name
             log("get_X_error(..) initialized error names: %s", xerror_to_name)
@@ -91,7 +88,7 @@ def get_X_error(xerror):
         log.error("get_X_error(%s) %s", xerror, e, exc_info=True)
     return xerror
 
-class XErrorInfo(object):
+class XErrorInfo:
     def __init__(self, xerror):
         self.xerror = xerror
     def __repr__(self):
@@ -100,16 +97,19 @@ class XErrorInfo(object):
 
 # gdk has its own depth tracking stuff, but we have to duplicate it here to
 # minimize calls to XSync.
-class _ErrorManager(object):
+class _ErrorManager:
     def __init__(self):
         self.depth = 0
 
     def Xenter(self):
         assert self.depth >= 0
         verify_main_thread()
-        gdk.error_trap_push()
+        Gdk.error_trap_push()
         if XPRA_LOG_SYNC:
             log("X11trap.enter at level %i", self.depth)
+        if LOG_NESTED_XTRAP and self.depth>0:
+            for x in traceback.extract_stack():
+                log("%s", x)
         self.depth += 1
 
     def Xexit(self, need_sync=True):
@@ -118,9 +118,9 @@ class _ErrorManager(object):
         if XPRA_LOG_SYNC:
             log("X11trap.exit at level %i, need_sync=%s", self.depth, need_sync)
         if self.depth == 0 and need_sync:
-            gdk.flush()
+            Gdk.flush()
         # This is a Xlib error constant (Success == 0)
-        error = gdk.error_trap_pop()
+        error = Gdk.error_trap_pop()
         if error:
             raise XError(get_X_error(error))
 
@@ -182,7 +182,7 @@ class _ErrorManager(object):
 trap = _ErrorManager()
 
 
-class XSyncContext(object):
+class XSyncContext:
 
     def __enter__(self):
         trap.Xenter()
@@ -202,7 +202,7 @@ class XSyncContext(object):
 xsync = XSyncContext()
 
 
-class XSwallowContext(object):
+class XSwallowContext:
 
     def __enter__(self):
         trap.Xenter()
@@ -220,7 +220,7 @@ class XSwallowContext(object):
 xswallow = XSwallowContext()
 
 
-class XLogContext(object):
+class XLogContext:
 
     def __enter__(self):
         trap.Xenter()

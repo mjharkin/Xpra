@@ -1,20 +1,23 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2012-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2012-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import socket
 
 from xpra.util import prettify_plug_name
-from xpra.os_util import get_generic_os_name, load_binary_file
+from xpra.os_util import (
+    get_generic_os_name, do_get_generic_os_name,
+    load_binary_file, get_linux_distribution,
+    )
 from xpra.platform.paths import get_icon_filename
 from xpra.log import Logger
 
 log = Logger("shadow")
 
 
-class RootWindowModel(object):
+class RootWindowModel:
 
     def __init__(self, root_window, capture=None):
         self.window = root_window
@@ -32,7 +35,7 @@ class RootWindowModel(object):
     def __repr__(self):
         return "RootWindowModel(%s : %24s)" % (self.capture, self.geometry)
 
-    def get_info(self):
+    def get_info(self) -> dict:
         info = {}
         c = self.capture
         if c:
@@ -129,8 +132,13 @@ class RootWindowModel(object):
                 "base-size" : size,
                 }
         if prop=="class-instance":
-            osn = get_generic_os_name()
-            return ("xpra-%s" % osn, "Xpra-%s" % osn.upper())
+            osn = do_get_generic_os_name()
+            if osn=="Linux":
+                try:
+                    osn += "-"+get_linux_distribution()[0].replace(" ", "-")
+                except Exception:   # pragma: no cover
+                    pass
+            return ("xpra-%s" % osn.lower(), "Xpra %s" % osn.replace("-", " "))
         if prop=="icons":
             try:
                 icon_name = get_icon_filename((get_generic_os_name() or "").lower()+".png")
@@ -144,9 +152,9 @@ class RootWindowModel(object):
                     icon = (w, h, "png", icon_data)
                     icons = (icon,)
                     return icons
-            except Exception:
+            except Exception:   # pragma: no cover
                 log("failed to return window icon")
-            return ()
+                return ()
         if prop=="content-type":
             return "desktop"
         raise ValueError("invalid property: %s" % prop)
@@ -159,11 +167,11 @@ class RootWindowModel(object):
             return default_value
 
 
-    def managed_connect(self, *args):
+    def managed_connect(self, *args):   # pragma: no cover
         log.warn("ignoring managed signal connect request: %s", args)
 
-    def connect(self, *args):
+    def connect(self, *args):           # pragma: no cover
         log.warn("ignoring signal connect request: %s", args)
 
-    def disconnect(self, *args):
+    def disconnect(self, *args):        # pragma: no cover
         log.warn("ignoring signal disconnect request: %s", args)

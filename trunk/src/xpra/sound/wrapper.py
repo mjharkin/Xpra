@@ -1,5 +1,5 @@
 # This file is part of Xpra.
-# Copyright (C) 2015-2017 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2015-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -8,7 +8,7 @@ import sys
 
 from collections import namedtuple
 from xpra.sound.gstreamer_util import (
-    parse_sound_source, get_source_plugins, get_sink_plugins, get_default_sink, get_default_source,
+    parse_sound_source, get_source_plugins, get_sink_plugins, get_default_sink_plugin, get_default_source,
     import_gst, format_element_options,
     can_decode, can_encode, get_muxers, get_demuxers, get_all_plugin_names,
     )
@@ -41,13 +41,12 @@ def get_full_sound_command():
 
 
 def get_sound_wrapper_env():
-    env = {
-        #no need to add our ssl hooks for the sound subprocess:
-        "XPRA_SSL_PEEK" : "0"
-        }
+    env = {}
     if WIN32:
         #disable bencoder to skip warnings with the py3k Sound subapp
         env["XPRA_USE_BENCODER"] = "0"
+        #we don't want the output to go to a log file
+        env["XPRA_REDIRECT_OUTPUT"] = "0"
     elif POSIX and not OSX:
         try:
             from xpra.sound.pulseaudio.pulseaudio_util import add_audio_tagging_env
@@ -87,7 +86,7 @@ class sound_subprocess(subprocess_callee):
         #add bits common to both record and play:
         methods = method_whitelist+["set_volume", "cleanup"]
         exports = ["state-changed", "info", "error"] + exports_list
-        subprocess_callee.__init__(self, wrapped_object=wrapped_object, method_whitelist=methods)
+        super().__init__(wrapped_object=wrapped_object, method_whitelist=methods)
         for x in exports:
             self.connect_export(x)
 
@@ -103,7 +102,7 @@ class sound_subprocess(subprocess_callee):
             def force_exit():
                 sys.exit(1)
             self.timeout_add(FAKE_CRASH*1000, force_exit)
-        subprocess_callee.start(self)
+        super().start()
 
     def cleanup(self):
         wo = self.wrapped_object
@@ -126,7 +125,7 @@ class sound_record(sound_subprocess):
     def __init__(self, *pipeline_args):
         from xpra.sound.src import SoundSource
         sound_pipeline = SoundSource(*pipeline_args)
-        sound_subprocess.__init__(self, sound_pipeline, [], ["new-stream", "new-buffer"])
+        super().__init__(sound_pipeline, [], ["new-stream", "new-buffer"])
         self.large_packets = [b"new-buffer"]
 
 class sound_play(sound_subprocess):
@@ -134,15 +133,13 @@ class sound_play(sound_subprocess):
     def __init__(self, *pipeline_args):
         from xpra.sound.sink import SoundSink
         sound_pipeline = SoundSink(*pipeline_args)
-        sound_subprocess.__init__(self, sound_pipeline, ["add_data"], [])
+        super().__init__(sound_pipeline, ["add_data"], [])
 
 
 def run_sound(mode, error_cb, options, args):
     """ this function just parses command line arguments to feed into the sound subprocess class,
         which in turn just feeds them into the sound pipeline class (sink.py or src.py)
     """
-    from xpra.gtk_common.gobject_compat import want_gtk3
-    want_gtk3(True)
     gst = import_gst()
     if not gst:
         return 1
@@ -165,7 +162,7 @@ def run_sound(mode, error_cb, options, args):
                  "sources"          : sources,
                  "source.default"   : get_default_source() or "",
                  "sinks"            : sinks,
-                 "sink.default"     : get_default_sink() or "",
+                 "sink.default"     : get_default_sink_plugin() or "",
                  "muxers"           : get_muxers(),
                  "demuxers"         : get_demuxers(),
                  "gst.version"      : [int(x) for x in get_gst_version()],
@@ -238,7 +235,7 @@ class sound_subprocess_wrapper(subprocess_caller):
         * forward get/set volume calls (get_volume uses the value found in "info")
     """
     def __init__(self, description):
-        subprocess_caller.__init__(self, description)
+        super().__init__(description)
         self.state = "stopped"
         self.codec = "unknown"
         self.codec_description = ""
@@ -294,7 +291,7 @@ class sound_subprocess_wrapper(subprocess_caller):
         return self.state
 
 
-    def get_info(self):
+    def get_info(self) -> dict:
         return self.info
 
     def info_update(self, _wrapper, info):
@@ -317,7 +314,7 @@ class sound_subprocess_wrapper(subprocess_caller):
 class source_subprocess_wrapper(sound_subprocess_wrapper):
 
     def __init__(self, plugin, options, codecs, volume, element_options):
-        sound_subprocess_wrapper.__init__(self, "sound source")
+        super().__init__("sound source")
         self.large_packets = [b"new-buffer"]
         self.command = get_full_sound_command()+[
             "_sound_record", "-", "-",
@@ -340,7 +337,7 @@ class source_subprocess_wrapper(sound_subprocess_wrapper):
 class sink_subprocess_wrapper(sound_subprocess_wrapper):
 
     def __init__(self, plugin, codec, volume, element_options):
-        sound_subprocess_wrapper.__init__(self, "sound output")
+        super().__init__("sound output")
         self.large_packets = [b"add_data"]
         self.codec = codec
         self.command = get_full_sound_command()+[

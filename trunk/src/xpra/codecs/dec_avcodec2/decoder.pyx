@@ -1,10 +1,9 @@
 # This file is part of Xpra.
-# Copyright (C) 2012-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2012-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 #cython: auto_pickle=False, wraparound=False, cdivision=True, language_level=3
-from __future__ import absolute_import
 
 import errno
 import weakref
@@ -40,16 +39,211 @@ ctypedef unsigned int AVCodecID
 ctypedef long AVPixelFormat
 
 cdef extern from "libavutil/pixfmt.h":
+    #grep AV_PIX_FMT_ /usr/include/xpra/libavutil/pixfmt.h | grep -e "^\s*AV_PIX_FMT"  | sed 's+,+ +g' | awk '{print "    AVPixelFormat "$1}'
     AVPixelFormat AV_PIX_FMT_NONE
     AVPixelFormat AV_PIX_FMT_YUV420P
+    AVPixelFormat AV_PIX_FMT_YUYV422
+    AVPixelFormat AV_PIX_FMT_RGB24
+    AVPixelFormat AV_PIX_FMT_BGR24
     AVPixelFormat AV_PIX_FMT_YUV422P
     AVPixelFormat AV_PIX_FMT_YUV444P
-    AVPixelFormat AV_PIX_FMT_RGB24
-    AVPixelFormat AV_PIX_FMT_0RGB
-    AVPixelFormat AV_PIX_FMT_BGR0
+    AVPixelFormat AV_PIX_FMT_YUV410P
+    AVPixelFormat AV_PIX_FMT_YUV411P
+    AVPixelFormat AV_PIX_FMT_GRAY8
+    AVPixelFormat AV_PIX_FMT_MONOWHITE
+    AVPixelFormat AV_PIX_FMT_MONOBLACK
+    AVPixelFormat AV_PIX_FMT_PAL8
+    AVPixelFormat AV_PIX_FMT_YUVJ420P
+    AVPixelFormat AV_PIX_FMT_YUVJ422P
+    AVPixelFormat AV_PIX_FMT_YUVJ444P
+    AVPixelFormat AV_PIX_FMT_UYVY422
+    AVPixelFormat AV_PIX_FMT_UYYVYY411
+    AVPixelFormat AV_PIX_FMT_BGR8
+    AVPixelFormat AV_PIX_FMT_BGR4
+    AVPixelFormat AV_PIX_FMT_BGR4_BYTE
+    AVPixelFormat AV_PIX_FMT_RGB8
+    AVPixelFormat AV_PIX_FMT_RGB4
+    AVPixelFormat AV_PIX_FMT_RGB4_BYTE
+    AVPixelFormat AV_PIX_FMT_NV12
+    AVPixelFormat AV_PIX_FMT_NV21
     AVPixelFormat AV_PIX_FMT_ARGB
+    AVPixelFormat AV_PIX_FMT_RGBA
+    AVPixelFormat AV_PIX_FMT_ABGR
     AVPixelFormat AV_PIX_FMT_BGRA
+    AVPixelFormat AV_PIX_FMT_GRAY16BE
+    AVPixelFormat AV_PIX_FMT_GRAY16LE
+    AVPixelFormat AV_PIX_FMT_YUV440P
+    AVPixelFormat AV_PIX_FMT_YUVJ440P
+    AVPixelFormat AV_PIX_FMT_YUVA420P
+    AVPixelFormat AV_PIX_FMT_RGB48BE
+    AVPixelFormat AV_PIX_FMT_RGB48LE
+    AVPixelFormat AV_PIX_FMT_RGB565BE
+    AVPixelFormat AV_PIX_FMT_RGB565LE
+    AVPixelFormat AV_PIX_FMT_RGB555BE
+    AVPixelFormat AV_PIX_FMT_RGB555LE
+    AVPixelFormat AV_PIX_FMT_BGR565BE
+    AVPixelFormat AV_PIX_FMT_BGR565LE
+    AVPixelFormat AV_PIX_FMT_BGR555BE
+    AVPixelFormat AV_PIX_FMT_BGR555LE
+    AVPixelFormat AV_PIX_FMT_VAAPI_MOCO
+    AVPixelFormat AV_PIX_FMT_VAAPI_IDCT
+    AVPixelFormat AV_PIX_FMT_VAAPI_VLD
+    AVPixelFormat AV_PIX_FMT_VAAPI
+    AVPixelFormat AV_PIX_FMT_YUV420P16LE
+    AVPixelFormat AV_PIX_FMT_YUV420P16BE
+    AVPixelFormat AV_PIX_FMT_YUV422P16LE
+    AVPixelFormat AV_PIX_FMT_YUV422P16BE
+    AVPixelFormat AV_PIX_FMT_YUV444P16LE
+    AVPixelFormat AV_PIX_FMT_YUV444P16BE
+    AVPixelFormat AV_PIX_FMT_DXVA2_VLD
+    AVPixelFormat AV_PIX_FMT_RGB444LE
+    AVPixelFormat AV_PIX_FMT_RGB444BE
+    AVPixelFormat AV_PIX_FMT_BGR444LE
+    AVPixelFormat AV_PIX_FMT_BGR444BE
+    AVPixelFormat AV_PIX_FMT_YA8
+    AVPixelFormat AV_PIX_FMT_Y400A
+    AVPixelFormat AV_PIX_FMT_BGR48BE
+    AVPixelFormat AV_PIX_FMT_BGR48LE
+    AVPixelFormat AV_PIX_FMT_YUV420P9BE
+    AVPixelFormat AV_PIX_FMT_YUV420P9LE
+    AVPixelFormat AV_PIX_FMT_YUV420P10BE
+    AVPixelFormat AV_PIX_FMT_YUV420P10LE
+    AVPixelFormat AV_PIX_FMT_YUV422P10BE
+    AVPixelFormat AV_PIX_FMT_YUV422P10LE
+    AVPixelFormat AV_PIX_FMT_YUV444P9BE
+    AVPixelFormat AV_PIX_FMT_YUV444P9LE
+    AVPixelFormat AV_PIX_FMT_YUV444P10BE
+    AVPixelFormat AV_PIX_FMT_YUV444P10LE
+    AVPixelFormat AV_PIX_FMT_YUV422P9BE
+    AVPixelFormat AV_PIX_FMT_YUV422P9LE
     AVPixelFormat AV_PIX_FMT_GBRP
+    AVPixelFormat AV_PIX_FMT_GBR24P
+    AVPixelFormat AV_PIX_FMT_GBRP9BE
+    AVPixelFormat AV_PIX_FMT_GBRP9LE
+    AVPixelFormat AV_PIX_FMT_GBRP10BE
+    AVPixelFormat AV_PIX_FMT_GBRP10LE
+    AVPixelFormat AV_PIX_FMT_GBRP16BE
+    AVPixelFormat AV_PIX_FMT_GBRP16LE
+    AVPixelFormat AV_PIX_FMT_YUVA422P
+    AVPixelFormat AV_PIX_FMT_YUVA444P
+    AVPixelFormat AV_PIX_FMT_YUVA420P9BE
+    AVPixelFormat AV_PIX_FMT_YUVA420P9LE
+    AVPixelFormat AV_PIX_FMT_YUVA422P9BE
+    AVPixelFormat AV_PIX_FMT_YUVA422P9LE
+    AVPixelFormat AV_PIX_FMT_YUVA444P9BE
+    AVPixelFormat AV_PIX_FMT_YUVA444P9LE
+    AVPixelFormat AV_PIX_FMT_YUVA420P10BE
+    AVPixelFormat AV_PIX_FMT_YUVA420P10LE
+    AVPixelFormat AV_PIX_FMT_YUVA422P10BE
+    AVPixelFormat AV_PIX_FMT_YUVA422P10LE
+    AVPixelFormat AV_PIX_FMT_YUVA444P10BE
+    AVPixelFormat AV_PIX_FMT_YUVA444P10LE
+    AVPixelFormat AV_PIX_FMT_YUVA420P16BE
+    AVPixelFormat AV_PIX_FMT_YUVA420P16LE
+    AVPixelFormat AV_PIX_FMT_YUVA422P16BE
+    AVPixelFormat AV_PIX_FMT_YUVA422P16LE
+    AVPixelFormat AV_PIX_FMT_YUVA444P16BE
+    AVPixelFormat AV_PIX_FMT_YUVA444P16LE
+    AVPixelFormat AV_PIX_FMT_VDPAU
+    AVPixelFormat AV_PIX_FMT_XYZ12LE
+    AVPixelFormat AV_PIX_FMT_XYZ12BE
+    AVPixelFormat AV_PIX_FMT_NV16
+    AVPixelFormat AV_PIX_FMT_NV20LE
+    AVPixelFormat AV_PIX_FMT_NV20BE
+    AVPixelFormat AV_PIX_FMT_RGBA64BE
+    AVPixelFormat AV_PIX_FMT_RGBA64LE
+    AVPixelFormat AV_PIX_FMT_BGRA64BE
+    AVPixelFormat AV_PIX_FMT_BGRA64LE
+    AVPixelFormat AV_PIX_FMT_YVYU422
+    AVPixelFormat AV_PIX_FMT_YA16BE
+    AVPixelFormat AV_PIX_FMT_YA16LE
+    AVPixelFormat AV_PIX_FMT_GBRAP
+    AVPixelFormat AV_PIX_FMT_GBRAP16BE
+    AVPixelFormat AV_PIX_FMT_GBRAP16LE
+    AVPixelFormat AV_PIX_FMT_QSV
+    AVPixelFormat AV_PIX_FMT_MMAL
+    AVPixelFormat AV_PIX_FMT_D3D11VA_VLD
+    AVPixelFormat AV_PIX_FMT_CUDA
+    AVPixelFormat AV_PIX_FMT_0RGB
+    AVPixelFormat AV_PIX_FMT_RGB0
+    AVPixelFormat AV_PIX_FMT_0BGR
+    AVPixelFormat AV_PIX_FMT_BGR0
+    AVPixelFormat AV_PIX_FMT_YUV420P12BE
+    AVPixelFormat AV_PIX_FMT_YUV420P12LE
+    AVPixelFormat AV_PIX_FMT_YUV420P14BE
+    AVPixelFormat AV_PIX_FMT_YUV420P14LE
+    AVPixelFormat AV_PIX_FMT_YUV422P12BE
+    AVPixelFormat AV_PIX_FMT_YUV422P12LE
+    AVPixelFormat AV_PIX_FMT_YUV422P14BE
+    AVPixelFormat AV_PIX_FMT_YUV422P14LE
+    AVPixelFormat AV_PIX_FMT_YUV444P12BE
+    AVPixelFormat AV_PIX_FMT_YUV444P12LE
+    AVPixelFormat AV_PIX_FMT_YUV444P14BE
+    AVPixelFormat AV_PIX_FMT_YUV444P14LE
+    AVPixelFormat AV_PIX_FMT_GBRP12BE
+    AVPixelFormat AV_PIX_FMT_GBRP12LE
+    AVPixelFormat AV_PIX_FMT_GBRP14BE
+    AVPixelFormat AV_PIX_FMT_GBRP14LE
+    AVPixelFormat AV_PIX_FMT_YUVJ411P
+    AVPixelFormat AV_PIX_FMT_BAYER_BGGR8
+    AVPixelFormat AV_PIX_FMT_BAYER_RGGB8
+    AVPixelFormat AV_PIX_FMT_BAYER_GBRG8
+    AVPixelFormat AV_PIX_FMT_BAYER_GRBG8
+    AVPixelFormat AV_PIX_FMT_BAYER_BGGR16LE
+    AVPixelFormat AV_PIX_FMT_BAYER_BGGR16BE
+    AVPixelFormat AV_PIX_FMT_BAYER_RGGB16LE
+    AVPixelFormat AV_PIX_FMT_BAYER_RGGB16BE
+    AVPixelFormat AV_PIX_FMT_BAYER_GBRG16LE
+    AVPixelFormat AV_PIX_FMT_BAYER_GBRG16BE
+    AVPixelFormat AV_PIX_FMT_BAYER_GRBG16LE
+    AVPixelFormat AV_PIX_FMT_BAYER_GRBG16BE
+    AVPixelFormat AV_PIX_FMT_XVMC
+    AVPixelFormat AV_PIX_FMT_YUV440P10LE
+    AVPixelFormat AV_PIX_FMT_YUV440P10BE
+    AVPixelFormat AV_PIX_FMT_YUV440P12LE
+    AVPixelFormat AV_PIX_FMT_YUV440P12BE
+    AVPixelFormat AV_PIX_FMT_AYUV64LE
+    AVPixelFormat AV_PIX_FMT_AYUV64BE
+    AVPixelFormat AV_PIX_FMT_VIDEOTOOLBOX
+    AVPixelFormat AV_PIX_FMT_P010LE
+    AVPixelFormat AV_PIX_FMT_P010BE
+    AVPixelFormat AV_PIX_FMT_GBRAP12BE
+    AVPixelFormat AV_PIX_FMT_GBRAP12LE
+    AVPixelFormat AV_PIX_FMT_GBRAP10BE
+    AVPixelFormat AV_PIX_FMT_GBRAP10LE
+    AVPixelFormat AV_PIX_FMT_MEDIACODEC
+    AVPixelFormat AV_PIX_FMT_GRAY12BE
+    AVPixelFormat AV_PIX_FMT_GRAY12LE
+    AVPixelFormat AV_PIX_FMT_GRAY10BE
+    AVPixelFormat AV_PIX_FMT_GRAY10LE
+    AVPixelFormat AV_PIX_FMT_P016LE
+    AVPixelFormat AV_PIX_FMT_P016BE
+    AVPixelFormat AV_PIX_FMT_D3D11
+    AVPixelFormat AV_PIX_FMT_GRAY9BE
+    AVPixelFormat AV_PIX_FMT_GRAY9LE
+    AVPixelFormat AV_PIX_FMT_GBRPF32BE
+    AVPixelFormat AV_PIX_FMT_GBRPF32LE
+    AVPixelFormat AV_PIX_FMT_GBRAPF32BE
+    AVPixelFormat AV_PIX_FMT_GBRAPF32LE
+    AVPixelFormat AV_PIX_FMT_DRM_PRIME
+    #The following enums are not available in Ubuntu 18.04:
+    #AVPixelFormat AV_PIX_FMT_OPENCL
+    #AVPixelFormat AV_PIX_FMT_GRAY14BE
+    #AVPixelFormat AV_PIX_FMT_GRAY14LE
+    #AVPixelFormat AV_PIX_FMT_GRAYF32BE
+    #AVPixelFormat AV_PIX_FMT_GRAYF32LE
+    #The following enums are not available in Debian Buster:
+    #AVPixelFormat AV_PIX_FMT_YUVA422P12BE
+    #AVPixelFormat AV_PIX_FMT_YUVA422P12LE
+    #AVPixelFormat AV_PIX_FMT_YUVA444P12BE
+    #AVPixelFormat AV_PIX_FMT_YUVA444P12LE
+    #AVPixelFormat AV_PIX_FMT_NV24
+    #AVPixelFormat AV_PIX_FMT_NV42
+    #AVPixelFormat AV_PIX_FMT_VULKAN
+    #AVPixelFormat AV_PIX_FMT_Y210BE
+    #AVPixelFormat AV_PIX_FMT_Y210LE
+    #AVPixelFormat AV_PIX_FMT_NB
+
 
 cdef extern from "libavcodec/avcodec.h":
     int AV_CODEC_FLAG2_FAST
@@ -59,6 +253,8 @@ cdef extern from "libavcodec/avcodec.h":
         int *linesize
         int format
         void *opaque
+        int width
+        int height
     ctypedef struct AVCodec:
         pass
     ctypedef struct AVDictionary:
@@ -103,6 +299,215 @@ cdef extern from "libavcodec/avcodec.h":
     void av_frame_unref(AVFrame *frame) nogil
 
 
+#grep AV_PIX_FMT_ /usr/include/xpra/libavutil/pixfmt.h | grep -e "^\s*AV_PIX_FMT"  | sed 's+,+ +g' | sed 's+AV_PIX_FMT_++g' | awk '{print "    AV_PIX_FMT_"$1" : \""$1"\","}'^C
+FORMAT_TO_STR = {
+    AV_PIX_FMT_NONE : "NONE",
+    AV_PIX_FMT_YUV420P : "YUV420P",
+    AV_PIX_FMT_YUYV422 : "YUYV422",
+    AV_PIX_FMT_RGB24 : "RGB24",
+    AV_PIX_FMT_BGR24 : "BGR24",
+    AV_PIX_FMT_YUV422P : "YUV422P",
+    AV_PIX_FMT_YUV444P : "YUV444P",
+    AV_PIX_FMT_YUV410P : "YUV410P",
+    AV_PIX_FMT_YUV411P : "YUV411P",
+    AV_PIX_FMT_GRAY8 : "GRAY8",
+    AV_PIX_FMT_MONOWHITE : "MONOWHITE",
+    AV_PIX_FMT_MONOBLACK : "MONOBLACK",
+    AV_PIX_FMT_PAL8 : "PAL8",
+    AV_PIX_FMT_YUVJ420P : "YUVJ420P",
+    AV_PIX_FMT_YUVJ422P : "YUVJ422P",
+    AV_PIX_FMT_YUVJ444P : "YUVJ444P",
+    AV_PIX_FMT_UYVY422 : "UYVY422",
+    AV_PIX_FMT_UYYVYY411 : "UYYVYY411",
+    AV_PIX_FMT_BGR8 : "BGR8",
+    AV_PIX_FMT_BGR4 : "BGR4",
+    AV_PIX_FMT_BGR4_BYTE : "BGR4_BYTE",
+    AV_PIX_FMT_RGB8 : "RGB8",
+    AV_PIX_FMT_RGB4 : "RGB4",
+    AV_PIX_FMT_RGB4_BYTE : "RGB4_BYTE",
+    AV_PIX_FMT_NV12 : "NV12",
+    AV_PIX_FMT_NV21 : "NV21",
+    AV_PIX_FMT_ARGB : "ARGB",
+    AV_PIX_FMT_RGBA : "RGBA",
+    AV_PIX_FMT_ABGR : "ABGR",
+    AV_PIX_FMT_BGRA : "BGRA",
+    AV_PIX_FMT_GRAY16BE : "GRAY16BE",
+    AV_PIX_FMT_GRAY16LE : "GRAY16LE",
+    AV_PIX_FMT_YUV440P : "YUV440P",
+    AV_PIX_FMT_YUVJ440P : "YUVJ440P",
+    AV_PIX_FMT_YUVA420P : "YUVA420P",
+    AV_PIX_FMT_RGB48BE : "RGB48BE",
+    AV_PIX_FMT_RGB48LE : "RGB48LE",
+    AV_PIX_FMT_RGB565BE : "RGB565BE",
+    AV_PIX_FMT_RGB565LE : "RGB565LE",
+    AV_PIX_FMT_RGB555BE : "RGB555BE",
+    AV_PIX_FMT_RGB555LE : "RGB555LE",
+    AV_PIX_FMT_BGR565BE : "BGR565BE",
+    AV_PIX_FMT_BGR565LE : "BGR565LE",
+    AV_PIX_FMT_BGR555BE : "BGR555BE",
+    AV_PIX_FMT_BGR555LE : "BGR555LE",
+    AV_PIX_FMT_VAAPI_MOCO : "VAAPI_MOCO",
+    AV_PIX_FMT_VAAPI_IDCT : "VAAPI_IDCT",
+    AV_PIX_FMT_VAAPI_VLD : "VAAPI_VLD",
+    AV_PIX_FMT_VAAPI : "VAAPI",
+    AV_PIX_FMT_VAAPI : "VAAPI",
+    AV_PIX_FMT_YUV420P16LE : "YUV420P16LE",
+    AV_PIX_FMT_YUV420P16BE : "YUV420P16BE",
+    AV_PIX_FMT_YUV422P16LE : "YUV422P16LE",
+    AV_PIX_FMT_YUV422P16BE : "YUV422P16BE",
+    AV_PIX_FMT_YUV444P16LE : "YUV444P16LE",
+    AV_PIX_FMT_YUV444P16BE : "YUV444P16BE",
+    AV_PIX_FMT_DXVA2_VLD : "DXVA2_VLD",
+    AV_PIX_FMT_RGB444LE : "RGB444LE",
+    AV_PIX_FMT_RGB444BE : "RGB444BE",
+    AV_PIX_FMT_BGR444LE : "BGR444LE",
+    AV_PIX_FMT_BGR444BE : "BGR444BE",
+    AV_PIX_FMT_YA8 : "YA8",
+    AV_PIX_FMT_Y400A : "Y400A",
+    AV_PIX_FMT_BGR48BE : "BGR48BE",
+    AV_PIX_FMT_BGR48LE : "BGR48LE",
+    AV_PIX_FMT_YUV420P9BE : "YUV420P9BE",
+    AV_PIX_FMT_YUV420P9LE : "YUV420P9LE",
+    AV_PIX_FMT_YUV420P10BE : "YUV420P10BE",
+    AV_PIX_FMT_YUV420P10LE : "YUV420P10LE",
+    AV_PIX_FMT_YUV422P10BE : "YUV422P10BE",
+    AV_PIX_FMT_YUV422P10LE : "YUV422P10LE",
+    AV_PIX_FMT_YUV444P9BE : "YUV444P9BE",
+    AV_PIX_FMT_YUV444P9LE : "YUV444P9LE",
+    AV_PIX_FMT_YUV444P10BE : "YUV444P10BE",
+    AV_PIX_FMT_YUV444P10LE : "YUV444P10LE",
+    AV_PIX_FMT_YUV422P9BE : "YUV422P9BE",
+    AV_PIX_FMT_YUV422P9LE : "YUV422P9LE",
+    AV_PIX_FMT_GBRP : "GBRP",
+    AV_PIX_FMT_GBR24P : "GBR24P",
+    AV_PIX_FMT_GBRP9BE : "GBRP9BE",
+    AV_PIX_FMT_GBRP9LE : "GBRP9LE",
+    AV_PIX_FMT_GBRP10BE : "GBRP10BE",
+    AV_PIX_FMT_GBRP10LE : "GBRP10LE",
+    AV_PIX_FMT_GBRP16BE : "GBRP16BE",
+    AV_PIX_FMT_GBRP16LE : "GBRP16LE",
+    AV_PIX_FMT_YUVA422P : "YUVA422P",
+    AV_PIX_FMT_YUVA444P : "YUVA444P",
+    AV_PIX_FMT_YUVA420P9BE : "YUVA420P9BE",
+    AV_PIX_FMT_YUVA420P9LE : "YUVA420P9LE",
+    AV_PIX_FMT_YUVA422P9BE : "YUVA422P9BE",
+    AV_PIX_FMT_YUVA422P9LE : "YUVA422P9LE",
+    AV_PIX_FMT_YUVA444P9BE : "YUVA444P9BE",
+    AV_PIX_FMT_YUVA444P9LE : "YUVA444P9LE",
+    AV_PIX_FMT_YUVA420P10BE : "YUVA420P10BE",
+    AV_PIX_FMT_YUVA420P10LE : "YUVA420P10LE",
+    AV_PIX_FMT_YUVA422P10BE : "YUVA422P10BE",
+    AV_PIX_FMT_YUVA422P10LE : "YUVA422P10LE",
+    AV_PIX_FMT_YUVA444P10BE : "YUVA444P10BE",
+    AV_PIX_FMT_YUVA444P10LE : "YUVA444P10LE",
+    AV_PIX_FMT_YUVA420P16BE : "YUVA420P16BE",
+    AV_PIX_FMT_YUVA420P16LE : "YUVA420P16LE",
+    AV_PIX_FMT_YUVA422P16BE : "YUVA422P16BE",
+    AV_PIX_FMT_YUVA422P16LE : "YUVA422P16LE",
+    AV_PIX_FMT_YUVA444P16BE : "YUVA444P16BE",
+    AV_PIX_FMT_YUVA444P16LE : "YUVA444P16LE",
+    AV_PIX_FMT_VDPAU : "VDPAU",
+    AV_PIX_FMT_XYZ12LE : "XYZ12LE",
+    AV_PIX_FMT_XYZ12BE : "XYZ12BE",
+    AV_PIX_FMT_NV16 : "NV16",
+    AV_PIX_FMT_NV20LE : "NV20LE",
+    AV_PIX_FMT_NV20BE : "NV20BE",
+    AV_PIX_FMT_RGBA64BE : "RGBA64BE",
+    AV_PIX_FMT_RGBA64LE : "RGBA64LE",
+    AV_PIX_FMT_BGRA64BE : "BGRA64BE",
+    AV_PIX_FMT_BGRA64LE : "BGRA64LE",
+    AV_PIX_FMT_YVYU422 : "YVYU422",
+    AV_PIX_FMT_YA16BE : "YA16BE",
+    AV_PIX_FMT_YA16LE : "YA16LE",
+    AV_PIX_FMT_GBRAP : "GBRAP",
+    AV_PIX_FMT_GBRAP16BE : "GBRAP16BE",
+    AV_PIX_FMT_GBRAP16LE : "GBRAP16LE",
+    AV_PIX_FMT_QSV : "QSV",
+    AV_PIX_FMT_MMAL : "MMAL",
+    AV_PIX_FMT_D3D11VA_VLD : "D3D11VA_VLD",
+    AV_PIX_FMT_CUDA : "CUDA",
+    AV_PIX_FMT_0RGB : "0RGB",
+    AV_PIX_FMT_RGB0 : "RGB0",
+    AV_PIX_FMT_0BGR : "0BGR",
+    AV_PIX_FMT_BGR0 : "BGR0",
+    AV_PIX_FMT_YUV420P12BE : "YUV420P12BE",
+    AV_PIX_FMT_YUV420P12LE : "YUV420P12LE",
+    AV_PIX_FMT_YUV420P14BE : "YUV420P14BE",
+    AV_PIX_FMT_YUV420P14LE : "YUV420P14LE",
+    AV_PIX_FMT_YUV422P12BE : "YUV422P12BE",
+    AV_PIX_FMT_YUV422P12LE : "YUV422P12LE",
+    AV_PIX_FMT_YUV422P14BE : "YUV422P14BE",
+    AV_PIX_FMT_YUV422P14LE : "YUV422P14LE",
+    AV_PIX_FMT_YUV444P12BE : "YUV444P12BE",
+    AV_PIX_FMT_YUV444P12LE : "YUV444P12LE",
+    AV_PIX_FMT_YUV444P14BE : "YUV444P14BE",
+    AV_PIX_FMT_YUV444P14LE : "YUV444P14LE",
+    AV_PIX_FMT_GBRP12BE : "GBRP12BE",
+    AV_PIX_FMT_GBRP12LE : "GBRP12LE",
+    AV_PIX_FMT_GBRP14BE : "GBRP14BE",
+    AV_PIX_FMT_GBRP14LE : "GBRP14LE",
+    AV_PIX_FMT_YUVJ411P : "YUVJ411P",
+    AV_PIX_FMT_BAYER_BGGR8 : "BAYER_BGGR8",
+    AV_PIX_FMT_BAYER_RGGB8 : "BAYER_RGGB8",
+    AV_PIX_FMT_BAYER_GBRG8 : "BAYER_GBRG8",
+    AV_PIX_FMT_BAYER_GRBG8 : "BAYER_GRBG8",
+    AV_PIX_FMT_BAYER_BGGR16LE : "BAYER_BGGR16LE",
+    AV_PIX_FMT_BAYER_BGGR16BE : "BAYER_BGGR16BE",
+    AV_PIX_FMT_BAYER_RGGB16LE : "BAYER_RGGB16LE",
+    AV_PIX_FMT_BAYER_RGGB16BE : "BAYER_RGGB16BE",
+    AV_PIX_FMT_BAYER_GBRG16LE : "BAYER_GBRG16LE",
+    AV_PIX_FMT_BAYER_GBRG16BE : "BAYER_GBRG16BE",
+    AV_PIX_FMT_BAYER_GRBG16LE : "BAYER_GRBG16LE",
+    AV_PIX_FMT_BAYER_GRBG16BE : "BAYER_GRBG16BE",
+    AV_PIX_FMT_XVMC : "XVMC",
+    AV_PIX_FMT_YUV440P10LE : "YUV440P10LE",
+    AV_PIX_FMT_YUV440P10BE : "YUV440P10BE",
+    AV_PIX_FMT_YUV440P12LE : "YUV440P12LE",
+    AV_PIX_FMT_YUV440P12BE : "YUV440P12BE",
+    AV_PIX_FMT_AYUV64LE : "AYUV64LE",
+    AV_PIX_FMT_AYUV64BE : "AYUV64BE",
+    AV_PIX_FMT_VIDEOTOOLBOX : "VIDEOTOOLBOX",
+    AV_PIX_FMT_P010LE : "P010LE",
+    AV_PIX_FMT_P010BE : "P010BE",
+    AV_PIX_FMT_GBRAP12BE : "GBRAP12BE",
+    AV_PIX_FMT_GBRAP12LE : "GBRAP12LE",
+    AV_PIX_FMT_GBRAP10BE : "GBRAP10BE",
+    AV_PIX_FMT_GBRAP10LE : "GBRAP10LE",
+    AV_PIX_FMT_MEDIACODEC : "MEDIACODEC",
+    AV_PIX_FMT_GRAY12BE : "GRAY12BE",
+    AV_PIX_FMT_GRAY12LE : "GRAY12LE",
+    AV_PIX_FMT_GRAY10BE : "GRAY10BE",
+    AV_PIX_FMT_GRAY10LE : "GRAY10LE",
+    AV_PIX_FMT_P016LE : "P016LE",
+    AV_PIX_FMT_P016BE : "P016BE",
+    AV_PIX_FMT_D3D11 : "D3D11",
+    AV_PIX_FMT_GRAY9BE : "GRAY9BE",
+    AV_PIX_FMT_GRAY9LE : "GRAY9LE",
+    AV_PIX_FMT_GBRPF32BE : "GBRPF32BE",
+    AV_PIX_FMT_GBRPF32LE : "GBRPF32LE",
+    AV_PIX_FMT_GBRAPF32BE : "GBRAPF32BE",
+    AV_PIX_FMT_GBRAPF32LE : "GBRAPF32LE",
+    AV_PIX_FMT_DRM_PRIME : "DRM_PRIME",
+    #AV_PIX_FMT_OPENCL : "OPENCL",
+    #AV_PIX_FMT_GRAY14BE : "GRAY14BE",
+    #AV_PIX_FMT_GRAY14LE : "GRAY14LE",
+    #AV_PIX_FMT_GRAYF32BE : "GRAYF32BE",
+    #AV_PIX_FMT_GRAYF32LE : "GRAYF32LE",
+    #AV_PIX_FMT_YUVA422P12BE : "YUVA422P12BE",
+    #AV_PIX_FMT_YUVA422P12LE : "YUVA422P12LE",
+    #AV_PIX_FMT_YUVA444P12BE : "YUVA444P12BE",
+    #AV_PIX_FMT_YUVA444P12LE : "YUVA444P12LE",
+    #AV_PIX_FMT_NV24 : "NV24",
+    #AV_PIX_FMT_NV42 : "NV42",
+    #AV_PIX_FMT_VULKAN : "VULKAN",
+    #AV_PIX_FMT_Y210BE : "Y210BE",
+    #AV_PIX_FMT_Y210LE : "Y210LE",
+    #AV_PIX_FMT_NB : "NB",
+    }
+
+#given one of our format names,
+#describing the pixel data fed to the encoder,
+#what ffmpeg AV_PIX_FMT we expect to find in the output:
 FORMAT_TO_ENUM = {
             "YUV420P"   : AV_PIX_FMT_YUV420P,
             "YUV422P"   : AV_PIX_FMT_YUV422P,
@@ -113,6 +518,8 @@ FORMAT_TO_ENUM = {
             "ARGB"      : AV_PIX_FMT_ARGB,
             "BGRA"      : AV_PIX_FMT_BGRA,
             "GBRP"      : AV_PIX_FMT_GBRP,
+            "GBRP10"    : AV_PIX_FMT_GBRP10LE,
+            "YUV444P10" : AV_PIX_FMT_YUV444P10LE,
             }
 #for planar formats, this is the number of bytes per channel
 BYTES_PER_PIXEL = {
@@ -125,15 +532,25 @@ BYTES_PER_PIXEL = {
     AV_PIX_FMT_ARGB     : 4,
     AV_PIX_FMT_BGRA     : 4,
     AV_PIX_FMT_GBRP     : 1,
+    AV_PIX_FMT_GBRP10LE : 6,
+    AV_PIX_FMT_YUV444P10LE  : 2,
     }
 
-COLORSPACES = tuple(FORMAT_TO_ENUM.keys())
+#given an ffmpeg pixel format,
+#what is our format name for it:
+COLORSPACES = list(FORMAT_TO_ENUM.keys())+["r210", "YUV444P10"]
 ENUM_TO_FORMAT = {}
 for pix_fmt, av_enum in FORMAT_TO_ENUM.items():
     ENUM_TO_FORMAT[av_enum] = pix_fmt
+FORMAT_TO_ENUM["r210"] = AV_PIX_FMT_GBRP10LE
+
 
 def get_version():
     return (LIBAVCODEC_VERSION_MAJOR, LIBAVCODEC_VERSION_MINOR, LIBAVCODEC_VERSION_MICRO)
+
+v = get_version()
+if v<(3,):
+    raise ImportError("ffmpeg version %s is too old" % v)
 
 register_all()
 CODECS = []
@@ -149,23 +566,7 @@ if avcodec_find_decoder(AV_CODEC_ID_MPEG1VIDEO)!=NULL:
     CODECS.append("mpeg1")
 if avcodec_find_decoder(AV_CODEC_ID_MPEG2VIDEO)!=NULL:
     CODECS.append("mpeg2")
-#crashes with ffmpeg 3.4.2 on win32, not sure when this started
-if avcodec_find_decoder(AV_CODEC_ID_VP9)!=NULL and not WIN32:
-    VP9_CS = []
-    #there used to be problems with YUV444P with older versions of ffmpeg:
-    # "[vp9 @ ...] Invalid compressed header size"
-    #this version definitely works (older versions may work too - untested):
-    v = get_version()
-    if v<(56, 26, 100):         #2.6.3
-        log.warn("Warning: libavcodec version %s is too old:", ".".join((str(x) for x in v)))
-        log.warn(" disabling VP9")
-    else:
-        VP9_CS = ["YUV420P"]
-        if v<(56, 41, 100):     #2.7.1
-            log.warn("Warning: libavcodec version %s is too old:", ".".join((str(x) for x in v)))
-            log.warn(" disabling YUV444P support with VP9")
-        else:
-            VP9_CS.append("YUV444P")
+if avcodec_find_decoder(AV_CODEC_ID_VP9)!=NULL:
     CODECS.append("vp9")
 log("avcodec2.init_module: CODECS=%s", CODECS)
 
@@ -201,16 +602,21 @@ def get_input_colorspaces(encoding):
     if encoding in ("h264", "h265"):
         return COLORSPACES
     elif encoding in ("vp8", "mpeg4", "mpeg1", "mpeg2"):
-        return ["YUV420P"]
+        return ("YUV420P",)
     assert encoding=="vp9"
-    return VP9_CS
+    return ("YUV420P", "YUV444P", "YUV444P10")
 
 def get_output_colorspace(encoding, csc):
     if encoding not in CODECS:
         return ""
-    if encoding=="h264" and csc in ("RGB", "XRGB", "BGRX", "ARGB", "BGRA"):
-        #h264 from plain RGB data is returned as "GBRP"!
-        return "GBRP"
+    if encoding=="h264":
+        if csc in ("RGB", "XRGB", "BGRX", "ARGB", "BGRA"):
+            #h264 from plain RGB data is returned as "GBRP"!
+            return "GBRP"
+        if csc=="GBRP10":
+            return "GBRP10"
+        if csc=="YUV444P10":
+            return "YUV444P10"
     elif encoding in ("vp8", "mpeg4", "mpeg1", "mpeg2"):
         return "YUV420P"
     #everything else as normal:
@@ -254,7 +660,8 @@ cdef class AVFrameWrapper:
         log("%s.free() context=%#x, frame=%#x", self, <uintptr_t> self.avctx, <uintptr_t> self.frame)
         if self.avctx!=NULL and self.frame!=NULL:
             av_frame_unref(self.frame)
-            self.frame = NULL
+            av_frame_free(&self.frame)
+            self.frame = NULL   #should be redundant
             self.avctx = NULL
 
 
@@ -315,14 +722,7 @@ cdef class Decoder:
         self.width = width
         self.height = height
         assert colorspace in COLORSPACES, "invalid colorspace: %s" % colorspace
-        self.colorspace = ""
-        for x in COLORSPACES:
-            if x==colorspace:
-                self.colorspace = x
-                break
-        if not self.colorspace:
-            log.error("invalid pixel format: %s", colorspace)
-            return  False
+        self.colorspace = str(colorspace)
         self.pix_fmt = FORMAT_TO_ENUM.get(colorspace, AV_PIX_FMT_NONE)
         if self.pix_fmt==AV_PIX_FMT_NONE:
             log.error("invalid pixel format: %s", colorspace)
@@ -375,17 +775,9 @@ cdef class Decoder:
             log.error("could not open codec: %s", av_error_str(r))
             self.clean_decoder()
             return  False
-        #up to 3 AVFrame objects used:
-        self.av_frame = av_frame_alloc()
-        log("av_frame_alloc()=%#x", <uintptr_t> self.av_frame)
-        if self.av_frame==NULL:
-            log.error("could not allocate an AVFrame for decoding")
-            self.clean_decoder()
-            return  False
         self.frames = 0
         #to keep track of images not freed yet:
-        #(we want a weakref.WeakSet() but this is python2.7+ only..)
-        self.weakref_images = []
+        self.weakref_images = weakref.WeakSet()
         #register this decoder in the global dictionary:
         log("dec_avcodec.Decoder.init_context(%s, %s, %s) self=%s", width, height, colorspace, self.get_info())
         return True
@@ -396,8 +788,7 @@ cdef class Decoder:
         self.pix_fmt = 0
         self.actual_pix_fmt = 0
         self.colorspace = ""
-        self.weakref_images = []
-        self.av_frame = NULL                        #should be redundant
+        self.weakref_images = weakref.WeakSet()
         self.frames = 0
         self.width = 0
         self.height = 0
@@ -412,18 +803,12 @@ cdef class Decoder:
         #as this requires the context to still be valid!
         #copying the pixels should ensure we free the AVFrameWrapper associated with it:
         if self.weakref_images:
-            images = tuple(y for y in [x() for x in self.weakref_images] if y is not None)
-            self.weakref_images = []
+            images = tuple(self.weakref_images)
+            self.weakref_images = weakref.WeakSet()
             log("clean_decoder() cloning pixels for images still in use: %s", images)
             for img in images:
                 if not img.freed:
                     img.clone_pixel_data()
-
-        if self.av_frame!=NULL:
-            log("clean_decoder() freeing AVFrame: %#x", <uintptr_t> self.av_frame)
-            av_frame_free(&self.av_frame)
-            #redundant: self.frame = NULL
-
         log("clean_decoder() freeing AVCodecContext: %#x", <uintptr_t> self.codec_ctx)
         if self.codec_ctx!=NULL:
             r = avcodec_close(self.codec_ctx)
@@ -439,7 +824,7 @@ cdef class Decoder:
             return "dec_avcodec.Decoder(*closed*)"
         return "dec_avcodec.Decoder(%s)" % self.get_info()
 
-    def get_info(self):                      #@DuplicatedSignature
+    def get_info(self) -> dict:                      #@DuplicatedSignature
         info = {
             "version"   : get_version(),
             "encoding"  : self.encoding,
@@ -511,6 +896,13 @@ cdef class Decoder:
         assert self.codec_ctx!=NULL, "no codec context! (not initialized or already closed)"
         assert self.codec!=NULL
 
+        av_frame = av_frame_alloc()
+        log("av_frame_alloc()=%#x", <uintptr_t> av_frame)
+        if av_frame==NULL:
+            log.error("could not allocate an AVFrame for decoding")
+            self.clean_decoder()
+            return None
+
         #copy the whole input buffer into a padded C buffer:
         assert object_as_buffer(input, <const void**> &buf, &buf_len)==0
         padded_buf = <unsigned char *> memalign(buf_len+128)
@@ -524,7 +916,7 @@ cdef class Decoder:
         outsize = 0
 
         #ensure we can detect if the frame buffer got allocated:
-        clear_frame(self.av_frame)
+        clear_frame(av_frame)
         #now safe to run without gil:
         with nogil:
             av_init_packet(&avpkt)
@@ -537,7 +929,7 @@ cdef class Decoder:
             self.log_av_error(buf_len, ret, options)
             return None
         with nogil:
-            ret = avcodec_receive_frame(self.codec_ctx, self.av_frame)
+            ret = avcodec_receive_frame(self.codec_ctx, av_frame)
         free(padded_buf)
         if ret==-errno.EAGAIN:
             d = options.intget("delayed", 0)
@@ -547,25 +939,32 @@ cdef class Decoder:
             self.log_error(buf_len, "no picture", options)
             return None
         if ret!=0:
-            av_frame_unref(self.av_frame)
+            av_frame_unref(av_frame)
+            av_frame_free(&av_frame)
             log("%s.decompress_image(%s:%s, %s) avcodec_decode_video2 failure: %s", self, type(input), buf_len, options, av_error_str(ret))
             self.log_av_error(buf_len, ret, options)
             return None
 
         log("avcodec_decode_video2 returned %i", ret)
-        if self.actual_pix_fmt!=self.av_frame.format:
-            if self.av_frame.format==-1:
+        if self.actual_pix_fmt!=av_frame.format:
+            if av_frame.format==-1:
                 self.log_error(buf_len, "unknown format returned")
                 return None
-            self.actual_pix_fmt = self.av_frame.format
+            self.actual_pix_fmt = av_frame.format
             if self.actual_pix_fmt not in ENUM_TO_FORMAT:
-                av_frame_unref(self.av_frame)
-                log.error("unknown output pixel format: %s, expected %s (%s)", self.actual_pix_fmt, self.pix_fmt, self.colorspace)
+                av_frame_unref(av_frame)
+                av_frame_free(&av_frame)
+                log.error("unknown output pixel format: %s, expected %s for '%s'",
+                          FORMAT_TO_STR.get(self.actual_pix_fmt, self.actual_pix_fmt),
+                          FORMAT_TO_STR.get(self.pix_fmt, self.pix_fmt),
+                          self.colorspace)
                 return None
             log("avcodec actual output pixel format is %s (%s), expected %s (%s)", self.actual_pix_fmt, self.get_actual_colorspace(), self.pix_fmt, self.colorspace)
 
         cs = self.get_actual_colorspace()
-        if cs.endswith("P"):
+        log("actual_colorspace(%s)=%s, frame size: %4ix%-4i",
+                 self.actual_pix_fmt, cs, av_frame.width, av_frame.height)
+        if cs.find("P")>0:  #ie: GBRP, YUV420P, GBRP10 etc
             divs = get_subsampling_divs(cs)
             nplanes = 3
             for i in range(3):
@@ -575,38 +974,38 @@ cdef class Decoder:
                 elif dy==2:
                     height = (self.codec_ctx.height+1)>>1
                 else:
-                    av_frame_unref(self.av_frame)
+                    av_frame_unref(av_frame)
+                    av_frame_free(&av_frame)
                     raise Exception("invalid height divisor %s" % dy)
-                stride = self.av_frame.linesize[i]
+                stride = av_frame.linesize[i]
                 size = height * stride
                 outsize += size
 
-                out.append(memory_as_pybuffer(<void *>self.av_frame.data[i], size, True))
+                out.append(memory_as_pybuffer(<void *>av_frame.data[i], size, True))
                 strides.append(stride)
-                log("decompress_image() read back yuv plane %s: %s bytes", i, size)
+                log("decompress_image() read back '%s' plane: %s bytes", cs[i:i+1], size)
         else:
             #RGB mode: "out" is a single buffer
-            strides = self.av_frame.linesize[0]+self.av_frame.linesize[1]+self.av_frame.linesize[2]
+            strides = av_frame.linesize[0]+av_frame.linesize[1]+av_frame.linesize[2]
             outsize = self.codec_ctx.height * strides
-            out = memory_as_pybuffer(<void *>self.av_frame.data[0], outsize, True)
+            out = memory_as_pybuffer(<void *>av_frame.data[0], outsize, True)
             nplanes = 0
-            log("decompress_image() read back rgb buffer: %s bytes", outsize)
+            log("decompress_image() read back '%s' buffer: %s bytes", cs, outsize)
 
         if outsize==0:
-            av_frame_unref(self.av_frame)
+            av_frame_unref(av_frame)
+            av_frame_free(&av_frame)
             raise Exception("output size is zero!")
         if self.codec_ctx.width<self.width or self.codec_ctx.height<self.height:
             raise Exception("%s context dimension %ix%i is smaller than the codec's expected size of %ix%i for frame %i" % (self.encoding, self.codec_ctx.width, self.codec_ctx.height, self.width, self.height, self.frames+1))
 
         bpp = BYTES_PER_PIXEL.get(self.actual_pix_fmt, 0)
         framewrapper = AVFrameWrapper()
-        framewrapper.set_context(self.codec_ctx, self.av_frame)
+        framewrapper.set_context(self.codec_ctx, av_frame)
         img = AVImageWrapper(0, 0, self.width, self.height, out, cs, 24, strides, bpp, nplanes, thread_safe=False)
         img.av_frame = framewrapper
         self.frames += 1
-        #add to weakref list after cleaning it up:
-        self.weakref_images = [x for x in self.weakref_images if x() is not None]
-        self.weakref_images.append(weakref.ref(img))
+        self.weakref_images.add(img)
         log("%s:", self)
         log("decompress_image(%s:%s, %s)=%s", type(input), buf_len, options, img)
         return img

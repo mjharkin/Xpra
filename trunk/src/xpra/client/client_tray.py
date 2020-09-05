@@ -4,17 +4,15 @@
 # later version. See the file COPYING for details.
 
 from time import time
+from gi.repository import GLib
 
 from xpra.client.client_widget_base import ClientWidgetBase
 from xpra.client.window_backing_base import WindowBackingBase
-from xpra.gtk_common.gobject_compat import import_glib
-from xpra.os_util import memoryview_to_bytes, _buffer
+from xpra.os_util import memoryview_to_bytes
 from xpra.util import envbool
 from xpra.log import Logger
 
 log = Logger("tray")
-
-glib = import_glib()
 
 SAVE = envbool("XPRA_SAVE_SYSTRAY", False)
 
@@ -31,7 +29,7 @@ class ClientTray(ClientWidgetBase):
 
     def __init__(self, client, wid, w, h, metadata, tray_widget, mmap_enabled, mmap_area):
         log("ClientTray%s", (client, wid, w, h, tray_widget, mmap_enabled, mmap_area))
-        ClientWidgetBase.__init__(self, client, 0, wid, True)
+        super().__init__(client, 0, wid, True)
         self._metadata = metadata
         self.title = metadata.strget("title", "")
         self.tray_widget = tray_widget
@@ -95,7 +93,7 @@ class ClientTray(ClientWidgetBase):
         log("%s.reconfigure(%s) geometry=%s", self, force_send_configure, geometry)
         if geometry is None:
             if self._geometry or not tw:
-                geometry = self._geometry
+                geometry = self.get_geometry()
             else:
                 #make one up as best we can - maybe we have the size at least?
                 size = tw.get_size()
@@ -115,9 +113,6 @@ class ClientTray(ClientWidgetBase):
                 orientation = tw.get_orientation()
                 if orientation:
                     client_properties["orientation"] = orientation
-                screen = tw.get_screen()
-                if screen>=0:
-                    client_properties["screen"] = screen
             #scale to server coordinates
             sx, sy, sw, sh = self._client.crect(x, y, w, h)
             log("%s.reconfigure(%s) sending configure for geometry=%s : %s",
@@ -179,7 +174,7 @@ class ClientTray(ClientWidgetBase):
         tw = self.tray_widget
         if tw:
             #some tray implementations can't deal with memoryviews..
-            if isinstance(pixels, (memoryview, _buffer or bytearray, bytearray)):
+            if isinstance(pixels, (memoryview, bytearray)):
                 pixels = memoryview_to_bytes(pixels)
             tw.set_icon_from_data(pixels, has_alpha, w, h, rowstride, options)
 
@@ -207,7 +202,7 @@ class TrayBacking(WindowBackingBase):
 
     def __init__(self, wid, _w, _h, _has_alpha, data=None):
         self.data = data
-        WindowBackingBase.__init__(self, wid, True)
+        super().__init__(wid, True)
         self._backing = object()    #pretend we have a backing structure
 
     def get_encoding_properties(self):
@@ -218,15 +213,15 @@ class TrayBacking(WindowBackingBase):
             }
 
     def idle_add(self, *args, **kwargs):
-        return glib.idle_add(*args, **kwargs)
+        return GLib.idle_add(*args, **kwargs)
 
     def paint_scroll(self, _img_data, _options, callbacks):
         raise Exception("scroll should not be used with tray icons")
 
-
-    def _do_paint_rgb24(self, img_data, x, y, width, height, rowstride, options):
+    def _do_paint_rgb24(self, img_data, x, y, width, height, render_width, render_height, rowstride, options):
         log("TrayBacking(%i)._do_paint_rgb24%s",
-            self.wid, ("%s bytes" % len(img_data), x, y, width, height, rowstride, options))
+            self.wid, ("%s bytes" % len(img_data), x, y, width, height, render_width, render_height, rowstride, options))
+        assert width==render_width and height==render_height, "tray rgb must not use scaling"
         self.data = ("rgb24", width, height, rowstride, img_data[:], options)
         if SAVE:
             from PIL import Image
@@ -236,9 +231,10 @@ class TrayBacking(WindowBackingBase):
             log.info("tray rgb24 update saved to %s", filename)
         return True
 
-    def _do_paint_rgb32(self, img_data, x, y, width, height, rowstride, options):
+    def _do_paint_rgb32(self, img_data, x, y, width, height, render_width, render_height, rowstride, options):
         log("TrayBacking(%i)._do_paint_rgb32%s",
-            self.wid, ("%s bytes" % len(img_data), x, y, width, height, rowstride, options))
+            self.wid, ("%s bytes" % len(img_data), x, y, width, height, render_width, render_height, rowstride, options))
+        assert width==render_width and height==render_height, "tray rgb must not use scaling"
         self.data = ("rgb32", width, height, rowstride, img_data[:], options)
         if SAVE:
             from PIL import Image

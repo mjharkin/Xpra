@@ -1,25 +1,26 @@
 #!/usr/bin/env python
-# Copyright (C) 2017 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2017-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-import pango            #@UnresolvedImport
-import pygtk            #@UnresolvedImport
-pygtk.require('2.0')
-import gtk              #@UnresolvedImport
-from gtk import gtkgl   #@UnresolvedImport
-from gtk import gdkgl   #@UnresolvedImport
+from xpra.platform import program_context
+from xpra.gtk_common.gtk_util import add_close_accel, get_icon_pixbuf
 
-from xpra.gtk_common.gtk_util import add_close_accel
 from OpenGL.GL import (
     glClear, glClearColor, glViewport,
     glColor3f, glFlush, glRectf, GL_COLOR_BUFFER_BIT,
     )
 
+import gi
+gi.require_version("Gtk", "3.0")
+gi.require_version("Pango", "1.0")
+from gi.repository import Gtk, Pango
+
+
 
 SIZE = 1600, 1200
 
-class GLContext(object):
+class GLContext:
     def __init__(self, widget):
         self.widget = widget
     def __enter__(self):
@@ -31,9 +32,10 @@ class GLContext(object):
         self.gldrawable.gl_end()
 
 
-class ColorTest(object):
+class ColorTest:
 
     def __init__(self):
+        #FIXME: needs porting to GTK3:
         display_mode = gdkgl.MODE_RGB | gdkgl.MODE_DOUBLE
         try:
             self.glconfig = gdkgl.Config(mode=display_mode)
@@ -41,17 +43,20 @@ class ColorTest(object):
             display_mode &= ~gdkgl.MODE_DOUBLE
             self.glconfig = gdkgl.Config(mode=display_mode)
 
-        win = gtk.Window()
+        win = Gtk.Window()
         win.set_title('OpenGL Color Gradient')
-        win.connect('destroy', gtk.main_quit)
+        win.connect('destroy', Gtk.main_quit)
+        icon = get_icon_pixbuf("encoding.png")
+        if icon:
+            win.set_icon(icon)
         self.win = win
 
-        vbox = gtk.VBox()
+        vbox = Gtk.VBox()
         self.win.add(vbox)
 
         self.bpc = 16
-        self.label = gtk.Label(" ")
-        self.label.modify_font(pango.FontDescription("sans 24"))
+        self.label = Gtk.Label(" ")
+        self.label.modify_font(Pango.FontDescription("sans 24"))
         self.populate_label()
         vbox.add(self.label)
 
@@ -64,7 +69,7 @@ class ColorTest(object):
         self.glarea = glarea
         vbox.add(glarea)
         win.show_all()
-        add_close_accel(win, gtk.main_quit)
+        add_close_accel(win, Gtk.main_quit)
 
     def on_realize(self, widget):
         with GLContext(widget):
@@ -111,14 +116,14 @@ class ColorTest(object):
         def normv(v):
             assert 0<=v<=M
             iv = int(v) & mask
-            return max(0, float(iv)/M)
+            return max(0, iv/M)
         def paint_block(R=M, G=M, B=M):
-            y = 1.0-float(self.index)/(blocks/2.0)
+            y = 1.0-self.index/(blocks/2.0)
             bw = 2.0/w
             bh = 2.0/blocks
             self.index += 1
             for i in range(w):
-                v = float(i)/float(w)
+                v = i/w
                 r = normv(R*v)
                 g = normv(G*v)
                 b = normv(B*v)
@@ -140,11 +145,15 @@ class ColorTest(object):
         paint_block(M//8, M//8, M//8)
         paint_block(M//16, M//16, M//16)
 
+def main():
+    with program_context("gl-colors-gradient", "OpenGL Colors Gradient"):
+        import signal
+        def signal_handler(*_args):
+            Gtk.main_quit()
+        signal.signal(signal.SIGINT, signal_handler)
+        ColorTest()
+        Gtk.main()
+
 
 if __name__ == '__main__':
-    import signal
-    def signal_handler(*_args):
-        gtk.main_quit()
-    signal.signal(signal.SIGINT, signal_handler)
-    ColorTest()
-    gtk.main()
+    main()

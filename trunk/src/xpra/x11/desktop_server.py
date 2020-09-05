@@ -6,21 +6,16 @@
 
 import os
 import socket
+from gi.repository import GObject, Gdk, Gio
 
-from xpra.os_util import get_generic_os_name, load_binary_file, PYTHON3
-from xpra.util import updict, log_screen_sizes
+from xpra.os_util import get_generic_os_name, load_binary_file
+from xpra.util import updict, log_screen_sizes, envbool, csv
 from xpra.platform.paths import get_icon, get_icon_filename
 from xpra.platform.gui import get_wm_name
 from xpra.server import server_features
 from xpra.gtk_common.gobject_util import one_arg_signal, no_arg_signal
-from xpra.gtk_common.gobject_compat import import_glib
 from xpra.gtk_common.error import XError
-from xpra.gtk_common.gtk_util import (
-    get_screen_sizes, get_root_size,
-    get_xwindow,
-    display_get_default,
-    PARAM_READABLE, PARAM_READWRITE,
-    )
+from xpra.gtk_common.gtk_util import get_screen_sizes, get_root_size
 from xpra.x11.models.model_stub import WindowModelStub
 from xpra.x11.gtk_x11.gdk_bindings import (
     add_catchall_receiver, remove_catchall_receiver,
@@ -33,13 +28,9 @@ from xpra.x11.bindings.keyboard_bindings import X11KeyboardBindings #@Unresolved
 from xpra.x11.bindings.randr_bindings import RandRBindings #@UnresolvedImport
 from xpra.x11.x11_server_base import X11ServerBase, mouselog
 from xpra.gtk_common.error import xsync, xlog
-from xpra.gtk_common.gobject_compat import import_gobject
 from xpra.log import Logger
 
 log = Logger("server")
-
-gobject = import_gobject()
-glib = import_glib()
 
 X11Window = X11WindowBindings()
 X11Keyboard = X11KeyboardBindings()
@@ -52,6 +43,8 @@ metadatalog = Logger("x11", "metadata")
 screenlog = Logger("screen")
 iconlog = Logger("icon")
 
+MODIFY_GSETTINGS = envbool("XPRA_MODIFY_GSETTINGS", True)
+
 
 class DesktopModel(WindowModelStub, WindowDamageHandler):
     __gsignals__ = {}
@@ -62,23 +55,23 @@ class DesktopModel(WindowModelStub, WindowDamageHandler):
                          })
 
     __gproperties__ = {
-        "iconic": (gobject.TYPE_BOOLEAN,
+        "iconic": (GObject.TYPE_BOOLEAN,
                    "ICCCM 'iconic' state -- any sort of 'not on desktop'.", "",
                    False,
-                   PARAM_READWRITE),
-        "focused": (gobject.TYPE_BOOLEAN,
+                   GObject.ParamFlags.READWRITE),
+        "focused": (GObject.TYPE_BOOLEAN,
                        "Is the window focused", "",
                        False,
-                       PARAM_READWRITE),
-        "size-hints": (gobject.TYPE_PYOBJECT,
+                       GObject.ParamFlags.READWRITE),
+        "size-hints": (GObject.TYPE_PYOBJECT,
                        "Client hints on constraining its size", "",
-                       PARAM_READABLE),
-        "wm-name": (gobject.TYPE_PYOBJECT,
+                       GObject.ParamFlags.READABLE),
+        "wm-name": (GObject.TYPE_PYOBJECT,
                        "The name of the window manager or session manager", "",
-                       PARAM_READABLE),
-        "icons": (gobject.TYPE_PYOBJECT,
+                       GObject.ParamFlags.READABLE),
+        "icons": (GObject.TYPE_PYOBJECT,
                        "The icon of the window manager or session manager", "",
-                       PARAM_READABLE),
+                       GObject.ParamFlags.READABLE),
         }
 
 
@@ -86,6 +79,7 @@ class DesktopModel(WindowModelStub, WindowDamageHandler):
         "xid", "client-machine", "window-type",
         "shadow", "size-hints", "class-instance",
         "focused", "title", "depth", "icons",
+        "content-type",
         ]
     _dynamic_property_names = ["size-hints", "title", "icons"]
 
@@ -98,7 +92,7 @@ class DesktopModel(WindowModelStub, WindowDamageHandler):
         self.resize_exact = resize_exact
 
     def __repr__(self):
-        return "DesktopModel(%#x)" % get_xwindow(self.client_window)
+        return "DesktopModel(%#x)" % self.client_window.get_xid()
 
 
     def setup(self):
@@ -106,7 +100,7 @@ class DesktopModel(WindowModelStub, WindowDamageHandler):
         screen = self.client_window.get_screen()
         screen.connect("size-changed", self._screen_size_changed)
         self.update_size_hints(screen)
-        self._depth = X11Window.get_depth(get_xwindow(self.client_window))
+        self._depth = X11Window.get_depth(self.client_window.get_xid())
         self._managed = True
         self._setup_done = True
 
@@ -173,7 +167,7 @@ class DesktopModel(WindowModelStub, WindowDamageHandler):
 
     def get_property(self, prop):
         if prop=="xid":
-            return int(get_xwindow(self.client_window))
+            return int(self.client_window.get_xid())
         if prop=="depth":
             return self._depth
         if prop=="title":
@@ -186,7 +180,9 @@ class DesktopModel(WindowModelStub, WindowDamageHandler):
             return True
         if prop=="class-instance":
             return ("xpra-desktop", "Xpra-Desktop")
-        return gobject.GObject.get_property(self, prop)
+        if prop=="content-type":
+            return "desktop"
+        return GObject.GObject.get_property(self, prop)
 
     def _screen_size_changed(self, screen):
         w, h = screen.get_width(), screen.get_height()
@@ -264,11 +260,11 @@ class DesktopModel(WindowModelStub, WindowDamageHandler):
     def do_xpra_damage_event(self, event):
         self.emit("client-contents-changed", event)
 
-gobject.type_register(DesktopModel)
+GObject.type_register(DesktopModel)
 
 
 
-DESKTOPSERVER_BASES = [gobject.GObject]
+DESKTOPSERVER_BASES = [GObject.GObject]
 if server_features.rfb:
     from xpra.server.rfb.rfb_server import RFBServer
     DESKTOPSERVER_BASES.append(RFBServer)
@@ -297,22 +293,24 @@ class XpraDesktopServer(DesktopServerBaseClass):
         self.session_type = "desktop"
         self.resize_timer = None
         self.resize_value = None
+        self.gsettings_modified = {}
 
     def init(self, opts):
         for c in DESKTOPSERVER_BASES:
-            if c!=gobject.GObject:
+            if c!=GObject.GObject:
                 c.init(self, opts)
 
     def server_init(self):
         X11ServerBase.server_init(self)
+        screenlog("server_init() randr=%s", self.randr)
         if self.randr:
             from xpra.x11.vfb_util import set_initial_resolution, DEFAULT_DESKTOP_VFB_RESOLUTION
             with xlog:
-                set_initial_resolution(DEFAULT_DESKTOP_VFB_RESOLUTION)
+                set_initial_resolution(self.initial_resolution or DEFAULT_DESKTOP_VFB_RESOLUTION)
 
     def x11_init(self):
         X11ServerBase.x11_init(self)
-        display = display_get_default()
+        display = Gdk.Display.get_default()
         screens = display.get_n_screens()
         for n in range(screens):
             screen = display.get_screen(n)
@@ -320,20 +318,58 @@ class XpraDesktopServer(DesktopServerBaseClass):
             add_event_receiver(root, self)
         add_catchall_receiver("xpra-motion-event", self)
         add_catchall_receiver("xpra-xkb-event", self)
-        X11Keyboard.selectBellNotification(True)
+        with xlog:
+            X11Keyboard.selectBellNotification(True)
+        if MODIFY_GSETTINGS:
+            self.modify_gsettings()
+
+    def modify_gsettings(self):
+        #try to suspend animations:
+        self.gsettings_modified = self.do_modify_gsettings({
+            "org.mate.interface" : ("gtk-enable-animations", "enable-animations"),
+            "org.gnome.desktop.interface" : ("enable-animations",),
+            "com.deepin.wrap.gnome.desktop.interface" : ("enable-animations",),
+            })
+
+    def do_modify_gsettings(self, defs, value=False):
+        modified = {}
+        schemas = Gio.Settings.list_schemas()
+        for schema, attributes in defs.items():
+            if schema not in schemas:
+                continue
+            try:
+                s = Gio.Settings.new(schema)
+                restore = []
+                for attribute in attributes:
+                    v = s.get_boolean(attribute)
+                    if v:
+                        s.set_boolean(attribute, value)
+                        restore.append(attribute)
+                if restore:
+                    modified[schema] = restore
+            except Exception as e:
+                log("error accessing schema '%s' and attributes %s", schema, attributes, exc_info=True)
+                log.error("Error accessing schema '%s' and attributes %s:", schema, csv(attributes))
+                log.error(" %s", e)
+        return modified
 
     def do_cleanup(self):
         self.cancel_resize_timer()
         remove_catchall_receiver("xpra-motion-event", self)
         X11ServerBase.do_cleanup(self)
+        if MODIFY_GSETTINGS:
+            self.restore_gsettings()
 
+    def restore_gsettings(self):
+        self.do_modify_gsettings(self.gsettings_modified, True)
 
     def notify_dpi_warning(self, body):
         pass
 
     def print_screen_info(self):
-        super(XpraDesktopServer, self).print_screen_info()
+        super().print_screen_info()
         root_w, root_h = get_root_size()
+        log.info(" initial resolution: %ix%i", root_w, root_h)
         sss = get_screen_sizes()
         log_screen_sizes(root_w, root_h, sss)
 
@@ -374,7 +410,7 @@ class XpraDesktopServer(DesktopServerBaseClass):
         rt = self.resize_timer
         if rt:
             self.resize_timer = None
-            glib.source_remove(rt)
+            self.source_remove(rt)
 
     def resize(self, w, h):
         geomlog("resize(%i, %i)", w, h)
@@ -386,7 +422,7 @@ class XpraDesktopServer(DesktopServerBaseClass):
         #at the same time as he resizes the window..
         self.resize_value = (w, h)
         if not self.resize_timer:
-            self.resize_timer = glib.timeout_add(250, self.do_resize)
+            self.resize_timer = self.timeout_add(250, self.do_resize)
 
     def do_resize(self):
         self.resize_timer = None
@@ -413,12 +449,10 @@ class XpraDesktopServer(DesktopServerBaseClass):
 
 
     def get_server_mode(self):
-        if PYTHON3:
-            return "GTK3 X11 desktop"
-        return "GTK2 X11 desktop"
+        return "GTK3 X11 desktop"
 
     def make_hello(self, source):
-        capabilities = X11ServerBase.make_hello(self, source)
+        capabilities = super().make_hello(source)
         if source.wants_features:
             capabilities.update({
                                  "pointer.grabs"    : True,
@@ -426,18 +460,16 @@ class XpraDesktopServer(DesktopServerBaseClass):
                                  })
             updict(capabilities, "window", {
                 "decorations"            : True,
-                "resize-counter"         : True,
-                "configure.skip-geometry": True,
-                "configure.pointer"      : True,
                 "states"                 : ["iconified", "focused"],
                 })
+            capabilities["screen_sizes"] = get_screen_sizes()
         return capabilities
 
 
     def load_existing_windows(self):
         #at present, just one  window is forwarded:
         #the root window covering the whole display
-        display = display_get_default()
+        display = Gdk.Display.get_default()
         screens = display.get_n_screens()
         with xsync:
             for n in range(screens):
@@ -446,7 +478,7 @@ class XpraDesktopServer(DesktopServerBaseClass):
                 model = DesktopModel(root, self.randr_exact_size)
                 model.setup()
                 windowlog("adding root window model %s", model)
-                super(XpraDesktopServer, self)._add_new_window_common(model)
+                super()._add_new_window_common(model)
                 model.managed_connect("client-contents-changed", self._contents_changed)
                 model.managed_connect("resized", self._window_resized_signaled)
 
@@ -577,7 +609,7 @@ class XpraDesktopServer(DesktopServerBaseClass):
         if not window:
             self.suspend_cursor(proto)
             return None
-        pointer = super(XpraDesktopServer, self)._adjust_pointer(proto, wid, pointer)
+        pointer = super()._adjust_pointer(proto, wid, pointer)
         #maybe the pointer is off-screen:
         ww, wh = window.get_dimensions()
         x, y = pointer[:2]
@@ -654,4 +686,4 @@ class XpraDesktopServer(DesktopServerBaseClass):
             offset_y += 0
         return self.make_screenshot_packet_from_regions(regions)
 
-gobject.type_register(XpraDesktopServer)
+GObject.type_register(XpraDesktopServer)

@@ -13,27 +13,7 @@ import uuid
 import time
 import struct
 import binascii
-
-#hide some ugly python3 compat:
-try:
-    import _thread as thread            #@UnresolvedImport @UnusedImport (python3)
-except ImportError:
-    import thread                       #@Reimport @UnusedImport
-assert thread
-
-try:
-    from queue import Queue             #@UnresolvedImport @UnusedImport (python3)
-except ImportError:
-    from Queue import Queue             #@Reimport @UnusedImport
-assert Queue
-
-try:
-    import builtins                     #@UnresolvedImport @UnusedImport (python3)
-except ImportError:
-    import __builtin__ as builtins      #@Reimport @UnusedImport
-assert builtins
-_buffer = builtins.__dict__.get("buffer")
-
+import threading
 
 SIGNAMES = {}
 for signame in (sig for sig in dir(signal) if sig.startswith("SIG") and not sig.startswith("SIG_")):
@@ -48,30 +28,97 @@ OPENBSD = sys.platform.startswith("openbsd")
 FREEBSD  = sys.platform.startswith("freebsd")
 
 POSIX = os.name=="posix"
-PYTHON2 = sys.version_info[0]==2
-PYTHON3 = sys.version_info[0]==3
 
 BITS = struct.calcsize(b"P")*8
 
 
-if PYTHON2:
-    def strtobytes(x):
-        return str(x)
-    def bytestostr(x):
-        return str(x)
-    def hexstr(v):
-        return binascii.hexlify(str(v))
-else:
-    def strtobytes(x):
-        if isinstance(x, bytes):
-            return x
-        return str(x).encode("latin1")
-    def bytestostr(x):
-        if isinstance(x, bytes):
-            return x.decode("latin1")
-        return str(x)
-    def hexstr(v):
-        return bytestostr(binascii.hexlify(strtobytes(v)))
+main_thread = threading.current_thread()
+def is_main_thread():
+    return threading.current_thread()==main_thread
+
+
+def get_frame_info(ignore_threads=()):
+    info = {
+        "count"        : threading.active_count() - len(ignore_threads),
+        }
+    try:
+        import traceback
+        def nn(x):
+            if x is None:
+                return ""
+            return str(x)
+        thread_ident = {}
+        for t in threading.enumerate():
+            if t not in ignore_threads:
+                thread_ident[t.ident] = t.getName()
+            else:
+                thread_ident[t.ident] = None
+        thread_ident.update({
+                threading.current_thread().ident    : "info",
+                main_thread.ident                   : "main",
+                })
+        frames = sys._current_frames()  #pylint: disable=protected-access
+        stack = None
+        for i,frame_pair in enumerate(frames.items()):
+            stack = traceback.extract_stack(frame_pair[1])
+            tident = thread_ident.get(frame_pair[0], "unknown")
+            if tident is None:
+                continue
+            #sanitize stack to prevent None values (which cause encoding errors with the bencoder)
+            sanestack = []
+            for e in stack:
+                sanestack.append(tuple([nn(x) for x in e]))
+            info[i] = {
+                ""          : tident,
+                "stack"     : sanestack,
+                }
+        del frames, stack
+    except Exception as e:
+        get_util_logger().error("failed to get frame info: %s", e)
+    return info
+
+def get_info_env():
+    filtered_env = os.environ.copy()
+    if filtered_env.get('XPRA_PASSWORD'):
+        filtered_env['XPRA_PASSWORD'] = "*****"
+    if filtered_env.get('XPRA_ENCRYPTION_KEY'):
+        filtered_env['XPRA_ENCRYPTION_KEY'] = "*****"
+    return filtered_env
+
+def get_sysconfig_info():
+    import sysconfig
+    sysinfo = {}
+    log = get_util_logger()
+    for attr in (
+        "platform",
+        "python-version",
+        "config-vars",
+        "paths",
+        ):
+        fn = "get_%s" % attr.replace("-", "_")
+        getter = getattr(sysconfig, fn, None)
+        if getter:
+            try:
+                sysinfo[attr] = getter()  #pylint: disable=not-callable
+            except ModuleNotFoundError:
+                log("sysconfig.%s", fn, exc_info=True)
+                if attr=="config-vars" and WIN32:
+                    continue
+                log.warn("Warning: failed to collect %s sysconfig information", attr)
+            except Exception:
+                log.error("Error calling sysconfig.%s", fn, exc_info=True)
+    return sysinfo
+
+def strtobytes(x) -> bytes:
+    if isinstance(x, bytes):
+        return x
+    return str(x).encode("latin1")
+def bytestostr(x) -> str:
+    if isinstance(x, (bytes, bytearray)):
+        return x.decode("latin1")
+    return str(x)
+def hexstr(v) -> str:
+    return bytestostr(binascii.hexlify(strtobytes(v)))
 
 
 util_logger = None
@@ -82,35 +129,27 @@ def get_util_logger():
         util_logger = Logger("util")
     return util_logger
 
-def memoryview_to_bytes(v):
+def memoryview_to_bytes(v) -> bytes:
     if isinstance(v, bytes):
         return v
     if isinstance(v, memoryview):
         return v.tobytes()
-    if _buffer and isinstance(v, _buffer):
-        return bytes(v)
     if isinstance(v, bytearray):
         return bytes(v)
     return strtobytes(v)
 
 
-def setsid():
-    #run in a new session
-    if POSIX:
-        os.setsid()
-
-
-def getuid():
+def getuid() -> int:
     if POSIX:
         return os.getuid()
     return 0
 
-def getgid():
+def getgid() -> int:
     if POSIX:
         return os.getgid()
     return 0
 
-def get_shell_for_uid(uid):
+def get_shell_for_uid(uid) -> str:
     if POSIX:
         from pwd import getpwuid
         try:
@@ -119,7 +158,7 @@ def get_shell_for_uid(uid):
             pass
     return ""
 
-def get_username_for_uid(uid):
+def get_username_for_uid(uid) -> str:
     if POSIX:
         from pwd import getpwuid
         try:
@@ -128,7 +167,7 @@ def get_username_for_uid(uid):
             pass
     return ""
 
-def get_home_for_uid(uid):
+def get_home_for_uid(uid) -> str:
     if POSIX:
         from pwd import getpwuid
         try:
@@ -143,7 +182,7 @@ def get_groups(username):
         return [gr.gr_name for gr in grp.getgrall() if username in gr.gr_mem]
     return []
 
-def get_group_id(group):
+def get_group_id(group) -> int:
     try:
         import grp      #@UnresolvedImport
         gr = grp.getgrnam(group)
@@ -157,11 +196,8 @@ def platform_release(release):
         SYSTEMVERSION_PLIST = "/System/Library/CoreServices/SystemVersion.plist"
         try:
             import plistlib
-            if PYTHON2:
-                pl = plistlib.readPlist('/System/Library/CoreServices/SystemVersion.plist')
-            else:
-                with open(SYSTEMVERSION_PLIST, "rb") as f:
-                    pl = plistlib.load(f)           #@UndefinedVariable
+            with open(SYSTEMVERSION_PLIST, "rb") as f:
+                pl = plistlib.load(f)           #@UndefinedVariable
             return pl['ProductUserVisibleVersion']
         except Exception as e:
             get_util_logger().debug("platform_release(%s)", release, exc_info=True)
@@ -171,7 +207,7 @@ def platform_release(release):
     return release
 
 
-def platform_name(sys_platform, release=None):
+def platform_name(sys_platform, release=None) -> str:
     if not sys_platform:
         return "unknown"
     PLATFORMS = {"win32"    : "Microsoft Windows",
@@ -195,23 +231,23 @@ def platform_name(sys_platform, release=None):
     return rel(sys_platform)
 
 
-def get_rand_chars(l=16, chars=b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"):
+def get_rand_chars(l=16, chars=b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") -> bytes:
     import random
     return b"".join(chars[random.randint(0, len(chars)-1):][:1] for _ in range(l))
 
-def get_hex_uuid():
+def get_hex_uuid() -> str:
     return uuid.uuid4().hex
 
-def get_int_uuid():
+def get_int_uuid() -> int:
     return uuid.uuid4().int
 
-def get_machine_id():
+def get_machine_id() -> str:
     """
         Try to get uuid string which uniquely identifies this machine.
         Warning: only works on posix!
         (which is ok since we only used it on posix at present)
     """
-    v = u""
+    v = ""
     if POSIX:
         for filename in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
             v = load_binary_file(filename)
@@ -221,7 +257,7 @@ def get_machine_id():
         v = uuid.getnode()
     return bytestostr(v).strip("\n\r")
 
-def get_user_uuid():
+def get_user_uuid() -> str:
     """
         Try to generate a uuid string which is unique to this user.
         (relies on get_machine_id to uniquely identify a machine)
@@ -251,21 +287,29 @@ except (ImportError, AssertionError):
     monotonic_time = time.time
 
 
-def is_X11():
+def is_X11() -> bool:
     if OSX or WIN32:
         return False
-    if PYTHON2:
+    try:
+        from xpra.x11.gtk3.gdk_bindings import is_X11_Display   #@UnresolvedImport
+        return is_X11_Display()
+    except ImportError:
+        get_util_logger().debug("failed to load x11 bindings", exc_info=True)
         return True
-    from xpra.x11.gtk3.gdk_bindings import is_X11_Display   #@UnresolvedImport
-    return is_X11_Display()
 
-def is_Wayland():
-    return os.environ.get("GDK_BACKEND", "")!="x11" and (
-        os.environ.get("WAYLAND_DISPLAY") or os.environ.get("XDG_SESSION_TYPE")=="wayland"
+def is_Wayland() -> bool:
+    return _is_Wayland(os.environ)
+
+def _is_Wayland(env : dict) -> bool:
+    backend = env.get("GDK_BACKEND", "")
+    if backend=="wayland":
+        return True
+    return backend!="x11" and (
+        bool(env.get("WAYLAND_DISPLAY")) or env.get("XDG_SESSION_TYPE")=="wayland"
         )
 
 
-def is_distribution_variant(variant=b"Debian"):
+def is_distribution_variant(variant=b"Debian") -> bool:
     if not POSIX:
         return False
     try:
@@ -274,7 +318,7 @@ def is_distribution_variant(variant=b"Debian"):
     except Exception:
         pass
     try:
-        if b"RedHat"==variant and get_linux_distribution()[0].startswith(variant):
+        if variant==b"RedHat" and get_linux_distribution()[0].startswith(variant):
             return True
         if get_linux_distribution()[0]==variant:
             return True
@@ -282,36 +326,53 @@ def is_distribution_variant(variant=b"Debian"):
         pass
     return False
 
+def get_distribution_version_id() -> bool:
+    if not POSIX:
+        return ""
+    try:
+        v = load_os_release_file()
+        for l in v.splitlines():
+            if l.startswith(b"VERSION_ID="):
+                return l.split(b"=", 1)[1]
+    except Exception:
+        pass
+    return ""
+
 os_release_file_data = False
-def load_os_release_file():
+def load_os_release_file() -> bytes:
     global os_release_file_data
     if os_release_file_data is False:
         try:
             os_release_file_data = load_binary_file("/etc/os-release")
-        except:
+        except OSError: # pragma: no cover
             os_release_file_data = None
     return os_release_file_data
 
-def is_Ubuntu():
+def is_Ubuntu() -> bool:
     return is_distribution_variant(b"Ubuntu")
 
-def is_Debian():
+def is_Debian() -> bool:
     return is_distribution_variant(b"Debian")
 
-def is_Raspbian():
+def is_Raspbian() -> bool:
     return is_distribution_variant(b"Raspbian")
 
-def is_Fedora():
+def is_Fedora() -> bool:
     return is_distribution_variant(b"Fedora")
 
-def is_Arch():
+def is_Arch() -> bool:
     return is_distribution_variant(b"Arch")
 
-def is_CentOS():
+def is_CentOS() -> bool:
     return is_distribution_variant(b"CentOS")
 
-def is_RedHat():
+def is_RedHat() -> bool:
     return is_distribution_variant(b"RedHat")
+
+
+def is_arm() -> bool:
+    import platform
+    return platform.uname()[4].startswith("arm")
 
 
 _linux_distribution = None
@@ -323,13 +384,13 @@ def get_linux_distribution():
         import subprocess
         cmd = ["lsb_release", "-a"]
         try:
-            p = subprocess.Popen(cmd, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             out = p.communicate()[0]
             assert p.returncode==0 and out
         except Exception:
             try:
-                from xpra.scripts.config import python_platform
-                _linux_distribution = python_platform.linux_distribution()
+                import platform
+                _linux_distribution = platform.linux_distribution()  #pylint: disable=deprecated-method
             except Exception:
                 _linux_distribution = ("unknown", "unknown", "unknown")
         else:
@@ -344,27 +405,30 @@ def get_linux_distribution():
                 return tuple([bytestostr(x) for x in v])
     return _linux_distribution
 
-def getUbuntuVersion():
-    distro = get_linux_distribution()
-    if distro and len(distro)==3 and distro[0]=="Ubuntu":
-        ur = distro[1]  #ie: "12.04"
-        try:
-            return tuple(int(x) for x in ur.split("."))  #ie: (12, 4)
-        except ValueError:
-            pass
-    return ()
+def is_unity() -> bool:
+    d = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+    return d.find("unity")>=0 or d.find("ubuntu")>=0
 
-def is_unity():
-    return os.environ.get("XDG_CURRENT_DESKTOP", "").lower().find("unity")>=0
-
-def is_gnome():
+def is_gnome() -> bool:
+    if os.environ.get("XDG_SESSION_DESKTOP", "").split("-", 1)[0] in ("i3", "ubuntu", ):
+        #"i3-gnome" is not really gnome... ie: the systray does work!
+        return False
     return os.environ.get("XDG_CURRENT_DESKTOP", "").lower().find("gnome")>=0
 
-def is_kde():
+def is_kde() -> bool:
     return os.environ.get("XDG_CURRENT_DESKTOP", "").lower().find("kde")>=0
 
 
-def is_WSL():
+def get_loaded_kernel_modules(*modlist):
+    loaded = []
+    if LINUX and os.path.exists("/sys/module"):
+        for mod in modlist:
+            if os.path.exists("/sys/module/%s" % mod):  # pragma: no cover
+                loaded.append(mod)
+    return loaded
+
+
+def is_WSL() -> bool:
     if not POSIX:
         return False
     r = None
@@ -375,47 +439,35 @@ def is_WSL():
     return r is not None and r.find(b"Microsoft")>=0
 
 
-def get_generic_os_name():
+def get_generic_os_name() -> str:
+    return do_get_generic_os_name().lower()
+
+def do_get_generic_os_name() -> str:
     for k,v in {
-            "linux"     : "linux",
-            "darwin"    : "osx",
-            "win"       : "win32",
-            "freebsd"   : "freebsd",
+            "linux"     : "Linux",
+            "darwin"    : "MacOS",
+            "win"       : "Win32",
+            "freebsd"   : "FreeBSD",
             }.items():
         if sys.platform.startswith(k):
             return v
-    return sys.platform
-
-def get_cpu_count():
-    #sensible default:
-    cpus = 2
-    try:
-        try:
-            #python3:
-            cpus = os.cpu_count()
-        except AttributeError:
-            #python2:
-            import multiprocessing
-            cpus = multiprocessing.cpu_count()
-    except Exception:
-        pass
-    return cpus
+    return sys.platform     # pragma: no cover
 
 
-def filedata_nocrlf(filename):
+def filedata_nocrlf(filename) -> str:
     v = load_binary_file(filename)
     if v is None:
         get_util_logger().error("failed to load '%s'", filename)
         return None
-    return v.strip("\n\r")
+    return v.strip(b"\n\r")
 
-def load_binary_file(filename):
+def load_binary_file(filename) -> bytes:
     if not os.path.exists(filename):
         return None
     try:
         with open(filename, "rb") as f:
             return f.read()
-    except Exception as e:
+    except Exception as e:  # pragma: no cover
         get_util_logger().warn("Warning: failed to load '%s':", filename)
         get_util_logger().warn(" %s", e)
         return None
@@ -425,11 +477,29 @@ def force_quit(status=1):
     os._exit(status)  #pylint: disable=protected-access
 
 
+def no_idle(fn, *args, **kwargs):
+    fn(*args, **kwargs)
+def register_SIGUSR_signals(idle_add=no_idle):
+    if not os.name=="posix":
+        return
+    from xpra.util import dump_all_frames, dump_gc_frames
+    def sigusr1(*_args):
+        log = get_util_logger().info
+        log("SIGUSR1")
+        idle_add(dump_all_frames, log)
+    def sigusr2(*_args):
+        log = get_util_logger().info
+        log("SIGUSR2")
+        idle_add(dump_gc_frames, log)
+    signal.signal(signal.SIGUSR1, sigusr1)
+    signal.signal(signal.SIGUSR2, sigusr2)
+
+
 def livefds():
     live = set()
     try:
         MAXFD = os.sysconf("SC_OPEN_MAX")
-    except ValueError:
+    except (ValueError, AttributeError):
         MAXFD = 256
     for fd in range(0, MAXFD):
         try:
@@ -440,18 +510,6 @@ def livefds():
             if s:
                 live.add(fd)
     return live
-
-def close_fds(excluding=(0, 1, 2)):
-    try:
-        MAXFD = os.sysconf("SC_OPEN_MAX")
-    except ValueError:
-        MAXFD = 256
-    for i in range(0, MAXFD):
-        if i not in excluding:
-            try:
-                os.close(i)
-            except (IOError, OSError):
-                pass
 
 def get_all_fds():
     fd_dirs = ["/dev/fd", "/proc/self/fd"]
@@ -492,19 +550,28 @@ def shellsub(s, subs=None):
     """ shell style string substitution using the dictionary given """
     if subs:
         for var,value in subs.items():
-            s = s.replace("$%s" % var, str(value))
-            s = s.replace("${%s}" % var, str(value))
+            try:
+                if isinstance(s, bytes):
+                    s = s.replace(("$%s" % var).encode(), str(value).encode())
+                    s = s.replace(("${%s}" % var).encode(), str(value).encode())
+                else:
+                    s = s.replace("$%s" % var, str(value))
+                    s = s.replace("${%s}" % var, str(value))
+            except (TypeError, ValueError):
+                raise Exception("failed to substitute '%s' with value '%s' (%s) in '%s'" % (
+                    var, value, type(value), s))
     return s
 
 
 def osexpand(s, actual_username="", uid=0, gid=0, subs=None):
+    if not s:
+        return s
     def expanduser(s):
         if actual_username and s.startswith("~/"):
             #replace "~/" with "~$actual_username/"
             return os.path.expanduser("~%s/%s" % (actual_username, s[2:]))
         return os.path.expanduser(s)
-    from collections import OrderedDict
-    d = OrderedDict(subs or {})
+    d = dict(subs or {})
     d.update({
         "PID"   : os.getpid(),
         "HOME"  : expanduser("~/"),
@@ -516,13 +583,15 @@ def osexpand(s, actual_username="", uid=0, gid=0, subs=None):
             })
         if not OSX:
             from xpra.platform.xposix.paths import get_runtime_dir
-            d["XDG_RUNTIME_DIR"] = os.environ.get("XDG_RUNTIME_DIR", get_runtime_dir())
+            rd = get_runtime_dir()
+            if rd and "XDG_RUNTIME_DIR" not in os.environ:
+                d["XDG_RUNTIME_DIR"] = rd
     if actual_username:
         d["USERNAME"] = actual_username
         d["USER"] = actual_username
     #first, expand the substitutions themselves,
     #as they may contain references to other variables:
-    ssub = OrderedDict()
+    ssub = {}
     for k,v in d.items():
         ssub[k] = expanduser(shellsub(str(v), d))
     return os.path.expandvars(expanduser(shellsub(expanduser(s), ssub)))
@@ -555,7 +624,7 @@ def path_permission_info(filename, ftype=None):
 #used by the sound code to get rid of the stupid gst warning below:
 #"** Message: pygobject_register_sinkfunc is deprecated (GstObject)"
 #ideally we would redirect to a buffer so we could still capture and show these messages in debug out
-class HideStdErr(object):
+class HideStdErr:
 
     def __init__(self, *_args):
         self.savedstderr = None
@@ -575,7 +644,7 @@ class HideStdErr(object):
         if self.savedstderr is not None:
             os.dup2(self.savedstderr, 2)
 
-class HideSysArgv(object):
+class HideSysArgv:
 
     def __init__(self, *_args):
         self.savedsysargv = None
@@ -589,7 +658,7 @@ class HideSysArgv(object):
             sys.argv = self.savedsysargv
 
 
-class OSEnvContext(object):
+class OSEnvContext:
 
     def __init__(self):
         self.env = os.environ.copy()
@@ -602,7 +671,7 @@ class OSEnvContext(object):
         return "OSEnvContext"
 
 
-class FDChangeCaptureContext(object):
+class FDChangeCaptureContext:
 
     def __init__(self):
         self.enter_fds = []
@@ -618,7 +687,7 @@ class FDChangeCaptureContext(object):
     def get_lost_fds(self):
         return sorted(tuple(set(self.enter_fds)-set(self.exit_fds)))
 
-class DummyContextManager(object):
+class DummyContextManager:
 
     def __enter__(self):
         pass
@@ -629,7 +698,7 @@ class DummyContextManager(object):
 
 
 #workaround incompatibility between paramiko and gssapi:
-class nomodule_context(object):
+class nomodule_context:
 
     def __init__(self, module_name):
         self.module_name = module_name
@@ -648,7 +717,7 @@ class nomodule_context(object):
     def __repr__(self):
         return "nomodule_context(%s)" % self.module_name
 
-class umask_context(object):
+class umask_context:
 
     def __init__(self, umask):
         self.umask = umask
@@ -674,7 +743,7 @@ def setbinarymode(fd):
         try:
             import msvcrt
             msvcrt.setmode(fd, os.O_BINARY)         #@UndefinedVariable pylint: disable=no-member
-        except (OSError, IOError):
+        except OSError:
             get_util_logger().error("setting stdin to binary mode failed", exc_info=True)
 
 def find_lib_ldconfig(libname):
@@ -721,12 +790,13 @@ def find_lib(libname):
 
 def pollwait(process, timeout=5):
     start = monotonic_time()
+    v = None
     while monotonic_time()-start<timeout:
         v = process.poll()
         if v is not None:
-            return v
+            break
         time.sleep(0.1)
-    return None
+    return v
 
 def which(command):
     from distutils.spawn import find_executable
@@ -749,15 +819,16 @@ def get_status_output(*args, **kwargs):
     return p.returncode, stdout.decode("utf-8"), stderr.decode("utf-8")
 
 
-def is_systemd_pid1():
+def is_systemd_pid1() -> bool:
     if not POSIX:
         return False
     d = load_binary_file("/proc/1/cmdline")
     return d and d.find(b"/systemd")>=0
 
 
-def get_ssh_port():
-    #FIXME: how do we find out which port ssh is on?
+def get_ssh_port() -> int:
+    #on Linux we can run "ssh -T | grep port"
+    #but this usually requires root permissions to access /etc/ssh/sshd_config
     if WIN32:
         return 0
     return 22
@@ -773,7 +844,7 @@ def setuidgid(uid, gid):
         try:
             username = getpwuid(uid).pw_name
         except KeyError:
-            raise Exception("uid %i not found" % uid)
+            raise Exception("uid %i not found" % uid) from None
         #set the groups:
         if hasattr(os, "initgroups"):   # python >= 2.7
             os.initgroups(username, gid)
@@ -819,29 +890,7 @@ def get_peercred(sock):
             log.error("Error getting peer credentials: %s", e)
             return None
     elif FREEBSD:
-        #TODO: use getpeereid
+        log.warn("Warning: peercred is not yet implemented for FreeBSD")
+        #use getpeereid
         #then pwd to get the gid?
-        pass
     return None
-
-
-def main():
-    sp = sys.platform
-    log = get_util_logger()
-    log.info("platform_name(%s)=%s", sp, platform_name(sp, ""))
-    if LINUX:
-        log.info("linux_distribution=%s", get_linux_distribution())
-        log.info("Ubuntu=%s", is_Ubuntu())
-        if is_Ubuntu():
-            log.info("Ubuntu version=%s", getUbuntuVersion())
-        log.info("Unity=%s", is_unity())
-        log.info("Fedora=%s", is_Fedora())
-        log.info("systemd=%s", is_systemd_pid1())
-    log.info("get_machine_id()=%s", get_machine_id())
-    log.info("get_user_uuid()=%s", get_user_uuid())
-    log.info("get_hex_uuid()=%s", get_hex_uuid())
-    log.info("get_int_uuid()=%s", get_int_uuid())
-
-
-if __name__ == "__main__":
-    main()

@@ -7,16 +7,14 @@
 import os
 import time
 import unittest
+from gi.repository import GLib
 
 from xpra.util import csv, envint, envbool
 from xpra.os_util import monotonic_time
-from xpra.net.protocol import Protocol
+from xpra.net.protocol import Protocol, verify_packet
 from xpra.net.bytestreams import Connection
 from xpra.net.compression import Compressed
-from xpra.gtk_common.gobject_compat import import_glib
 from xpra.log import Logger
-
-glib = import_glib()
 
 log = Logger("network")
 
@@ -70,9 +68,9 @@ def make_profiling_protocol_class(protocol_class):
             graphviz = GraphvizOutput(output_file='%s-%i.png' % (basename, monotonic_time()))
             return PyCallGraph(output=graphviz, config=config)
 
-        def _write_format_thread_loop(self):
+        def write_format_thread_loop(self):
             with self.profiling_context("%s-format-thread" % protocol_class.TYPE):
-                Protocol._write_format_thread_loop(self)
+                Protocol.write_format_thread_loop(self)
 
         def do_read_parse_thread_loop(self):
             with self.profiling_context("%s-read-parse-thread" % protocol_class.TYPE):
@@ -84,17 +82,31 @@ def make_profiling_protocol_class(protocol_class):
 class ProtocolTest(unittest.TestCase):
     protocol_class = Protocol
 
-    def make_memory_protocol(self, data=[b""], read_buffer_size=1, hangup_delay=0, process_packet_cb=noop, get_packet_cb=nodata):
+    def make_memory_protocol(self, data=(b""), read_buffer_size=1, hangup_delay=0, process_packet_cb=noop, get_packet_cb=nodata):
         conn = FastMemoryConnection(data)
         if PROFILING:
             pc = make_profiling_protocol_class(self.protocol_class)
         else:
             pc = self.protocol_class
-        p = pc(glib, conn, process_packet_cb, get_packet_cb=get_packet_cb)
+        p = pc(GLib, conn, process_packet_cb, get_packet_cb=get_packet_cb)
         #p = Protocol(glib, conn, process_packet_cb, get_packet_cb=get_packet_cb)
         p.read_buffer_size = read_buffer_size
         p.hangup_delay = hangup_delay
+        assert p.get_info()
+        assert repr(p)
+        p.enable_default_compressor()
+        p.enable_default_encoder()
         return p
+
+    def test_verify_packet(self):
+        for x in (True, 1, "hello", {}, None):
+            assert verify_packet(x) is False
+        assert verify_packet(["foo", 1]) is True
+        assert verify_packet(["no-floats test", 1.1]) is False, "floats are not allowed"
+        assert verify_packet(["foo", [1,2,3], {1:2}]) is True
+        assert verify_packet(["foo", [None], {1:2}]) is False, "no None values"
+        assert verify_packet(["foo", [1,2,3], {object() : 2}]) is False
+        assert verify_packet(["foo", [1,2,3], {1 : 2.2}]) is False
 
     def test_invalid_data(self):
         self.do_test_invalid_data([b"\0"*1])
@@ -111,9 +123,9 @@ class ProtocolTest(unittest.TestCase):
             if protocol.input_raw_packetcount==0:
                 errs.append("not read any raw packets")
             loop.quit()
-        loop = glib.MainLoop()
-        glib.timeout_add(500, check_failed)
-        glib.timeout_add(TIMEOUT*1000, loop.quit)
+        loop = GLib.MainLoop()
+        GLib.timeout_add(500, check_failed)
+        GLib.timeout_add(TIMEOUT*1000, loop.quit)
         protocol.start()
         loop.run()
         assert not errs, "%s" % csv(errs)
@@ -152,7 +164,7 @@ class ProtocolTest(unittest.TestCase):
         p.enable_compressor("lz4")
         #catch network packets before we write them:
         data = []
-        def raw_write(items, *_args):
+        def raw_write(_packet_type, items, *_args):
             for item in items:
                 data.append(item)
         p.raw_write = raw_write
@@ -170,8 +182,8 @@ class ProtocolTest(unittest.TestCase):
             else:
                 parsed_packets.append(packet[0])
         #run the protocol on this data:
-        loop = glib.MainLoop()
-        glib.timeout_add(TIMEOUT*1000, loop.quit)
+        loop = GLib.MainLoop()
+        GLib.timeout_add(TIMEOUT*1000, loop.quit)
         protocol = self.make_memory_protocol(ldata, read_buffer_size=65536, process_packet_cb=process_packet_cb)
         start = monotonic_time()
         protocol.start()
@@ -214,11 +226,11 @@ class ProtocolTest(unittest.TestCase):
                 return (None, )
         def process_packet_cb(proto, packet):
             if packet[0]==Protocol.CONNECTION_LOST:
-                glib.timeout_add(1000, loop.quit)
+                GLib.timeout_add(1000, loop.quit)
         protocol = self.make_memory_protocol(None, process_packet_cb=process_packet_cb, get_packet_cb=get_packet_cb)
         conn = protocol._conn
-        loop = glib.MainLoop()
-        glib.timeout_add(TIMEOUT*1000, loop.quit)
+        loop = GLib.MainLoop()
+        GLib.timeout_add(TIMEOUT*1000, loop.quit)
         protocol.enable_compressor("lz4")
         protocol.enable_encoder("rencode")
         protocol.start()

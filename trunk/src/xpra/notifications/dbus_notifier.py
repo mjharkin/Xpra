@@ -5,7 +5,7 @@
 
 import os
 
-from xpra.util import repr_ellipsized, csv
+from xpra.util import ellipsizer, csv
 from xpra.os_util import bytestostr
 from xpra.dbus.helper import native_to_dbus
 from xpra.notifications.notifier_base import NotifierBase, log
@@ -37,7 +37,7 @@ def DBUS_Notifier_factory(*args):
 class DBUS_Notifier(NotifierBase):
 
     def __init__(self, *args):
-        NotifierBase.__init__(self, *args)
+        super().__init__(*args)
         self.app_name_format = NOTIFICATION_APP_NAME
         self.last_notification = None
         self.actual_notification_id = {}
@@ -67,39 +67,46 @@ class DBUS_Notifier(NotifierBase):
         NotifierBase.cleanup(self)
 
 
-    def show_notify(self, dbus_id, tray, nid, app_name, replaces_nid, app_icon, summary, body, actions, hints, expire_timeout, icon):
+    def show_notify(self, dbus_id, tray, nid,
+                    app_name, replaces_nid, app_icon,
+                    summary, body, actions, hints, timeout, icon):
         if not self.dbus_check(dbus_id):
             return
         self.may_retry = True
         try:
             icon_string = self.get_icon_string(nid, app_icon, icon)
-            log("get_icon_string%s=%s", (nid, app_icon, repr_ellipsized(str(icon))), icon_string)
+            log("get_icon_string%s=%s", (nid, app_icon, ellipsizer(icon)), icon_string)
             try:
                 app_str = self.app_name_format % app_name
             except TypeError:
                 app_str = app_name or "Xpra"
-            self.last_notification = (dbus_id, tray, nid, app_name, replaces_nid, app_icon, summary, body, expire_timeout, icon)
+            self.last_notification = (
+                dbus_id, tray, nid, app_name, replaces_nid,
+                app_icon, summary, body, timeout, icon,
+                )
             def NotifyReply(notification_id):
                 log("NotifyReply(%s) for nid=%i", notification_id, nid)
                 self.actual_notification_id[nid] = int(notification_id)
             dbus_hints = self.parse_hints(hints)
-            self.dbusnotify.Notify(app_str, 0, icon_string, summary, body, actions, dbus_hints, expire_timeout,
+            log("calling %s%s", self.dbusnotify.Notify,
+                (app_str, 0, icon_string, summary, body, actions, dbus_hints, timeout))
+            self.dbusnotify.Notify(app_str, 0, icon_string, summary, body, actions, dbus_hints, timeout,
                  reply_handler = NotifyReply,
                  error_handler = self.NotifyError)
         except Exception:
             log.error("Error: dbus notify failed", exc_info=True)
 
-    def _find_nid(self, actual_id):
+    def _find_nid(self, actual_id : int):
         aid = int(actual_id)
         for k,v in self.actual_notification_id.items():
             if v==aid:
                 return k
         return None
 
-    def noparse_hints(self, h):
+    def noparse_hints(self, h) -> dict:
         return h
 
-    def parse_hints(self, h):
+    def parse_hints(self, h) -> dict:
         hints = {}
         for x in ("action-icons", "category", "desktop-entry", "resident", "transient", "x", "y", "urgency"):
             v = h.get(x)
@@ -129,7 +136,7 @@ class DBUS_Notifier(NotifierBase):
         return hints
 
 
-    def NotificationClosed(self, actual_id, reason):
+    def NotificationClosed(self, actual_id : int, reason):
         nid = self._find_nid(actual_id)
         reason_str = {
              1  : "expired",
@@ -147,7 +154,7 @@ class DBUS_Notifier(NotifierBase):
             if self.closed_cb:
                 self.closed_cb(nid, int(reason), reason_str)
 
-    def ActionInvoked(self, actual_id, action):
+    def ActionInvoked(self, actual_id : int, action):
         nid = self._find_nid(actual_id)
         log("ActionInvoked(%s, %s) nid=%s", actual_id, action, nid)
         if nid:
@@ -180,7 +187,7 @@ class DBUS_Notifier(NotifierBase):
         log.error(" %s", dbus_error)
         return False
 
-    def close_notify(self, nid):
+    def close_notify(self, nid : int):
         actual_id = self.actual_notification_id.get(nid)
         if actual_id is None:
             log("close_notify(%i) actual notification not found, already closed?", nid)
@@ -188,7 +195,7 @@ class DBUS_Notifier(NotifierBase):
         log("close_notify(%i) actual id=%s", nid, actual_id)
         self.do_close(nid, actual_id)
 
-    def do_close(self, nid, actual_id):
+    def do_close(self, nid : int, actual_id : int):
         log("do_close_notify(%i)", actual_id)
         def CloseNotificationReply():
             try:
@@ -204,9 +211,7 @@ class DBUS_Notifier(NotifierBase):
 
 
 def main():
-    from xpra.gtk_common.gobject_compat import import_glib, import_gtk
-    glib = import_glib()
-    gtk = import_gtk()
+    from gi.repository import GLib, Gtk
     def show():
         n = DBUS_Notifier_factory()
         #actions = ["0", "Hello", "1", "Bye"]
@@ -214,9 +219,9 @@ def main():
         n.show_notify("", None, 0, "Test", 0, "", "Summary", "Body line1\nline2...",
                       actions, {}, 0, "")
         return False
-    glib.idle_add(show)
-    glib.timeout_add(20000, gtk.main_quit)
-    gtk.main()
+    GLib.idle_add(show)
+    GLib.timeout_add(20000, Gtk.main_quit)
+    Gtk.main()
 
 
 if __name__ == "__main__":

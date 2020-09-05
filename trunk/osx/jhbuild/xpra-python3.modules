@@ -5,7 +5,7 @@
 
 	<repository type="tarball" name="files.pythonhosted.org" href="https://files.pythonhosted.org"/>
 	<repository type="tarball" name="pypi.python.org" href="https://pypi.python.org"/>
-	<repository type="tarball" name="xpra.org" href="http://xpra.org"/>
+	<repository type="tarball" name="xpra.org" href="https://xpra.org"/>
 	<repository type="tarball" name="ftp.gnome.org" default="yes" href="ftp://ftp.gnome.org/pub/gnome/sources/"/>
 	<repository type="tarball" name="github.com" default="yes" href="https://github.com/"/>
 	<repository type="tarball" name="github-tarball" default="yes" href="https://github.com/"/>
@@ -28,9 +28,9 @@
 
 	<distutils id="python3-setuptools" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/68/0c/e470db6866aedbff3c4c88faf7f81b90343d8ff32cd68b62db1b65037fb4/setuptools-41.1.0.zip"
-			hash="sha256:c519b84c299911fd94ef47e3de4fe678c254aefc5cdf8a9b12e4cdc8cc3744a8"
-			version="41.1.0"/>
+			module="/packages/68/75/d1d7b7340b9eb6e0388bf95729e63c410b381eb71fe8875cdfd949d8f9ce/setuptools-45.2.0.zip"
+			hash="sha256:89c6e6011ec2f6d57d43a3f9296c4ef022c2cbf49bab26b407fe67992ae3397f"
+			version="45.2.0"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -39,11 +39,11 @@
 		</after>
 	</distutils>
 
-	<distutils id="python3-enum34" python3="1">
-		<branch repo="pypi.python.org"
-			module="/packages/bf/3e/31d502c25302814a7c2f1d3959d2a3b3f78e509002ba91aea64993936876/enum34-1.1.6.tar.gz"
-			hash="sha256:8ad8c4783bf61ded74527bffb48ed9b54166685e4230386a9ed9b1279e2df5b1"
-			version="1.1.6"/>
+	<distutils id="python3-coverage" python3="1">
+		<branch repo="files.pythonhosted.org"
+			module="/packages/6d/1d/d44ed71d9a254453f4dd296cadf497957454995a35defcc7a7424caec89d/coverage-5.0.3.tar.gz"
+			hash="sha256:77afca04240c40450c331fa796b3eab6f1e15c5ecf8bf2b8bee9706cd5452fef"
+			version="5.0.3"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -54,8 +54,8 @@
 
 	<distutils id="python3-enum-compat" python3="1">
 		<branch repo="pypi.python.org"
-			module="/packages/95/6e/26bdcba28b66126f66cf3e4cd03bcd63f7ae330d29ee68b1f6b623550bfa/enum-compat-0.0.2.tar.gz"
-			hash="sha256:939ceff18186a5762ae4db9fa7bfe017edbd03b66526b798dd8245394c8a4192"
+			module="/packages/41/46/8ed2368976d934652d8f33f1fdd86f5580fab45e890c90a848e83097a093/enum-compat-0.0.3.tar.gz"
+			hash="sha256:3677daabed56a6f724451d585662253d8fb4e5569845aafa8bb0da36b1a8751e"
 			version="0.0.2"/>
 		<dependencies>
 			<dep package="python3"/>
@@ -76,11 +76,10 @@
 	</distutils>
 
 	<distutils id="python3-zeroconf" python3="1">
-		<branch repo="github.com"
-			module="/jstasiak/python-zeroconf/tar.gz/0.23.0"
-			hash="sha256:e194df93ae5d5158fd62434e395fe73ef9eb9580e5d326aad06d02c56031b31a"
-			checkoutdir="python-zeroconf-0.23.0"
-			version="0.23.0"/>
+		<branch repo="files.pythonhosted.org"
+			module="/packages/8c/5f/627662968753c3e03475d2b62a223c90f6ce98eb6e6d2d03ed03b560292e/zeroconf-0.28.0.tar.gz"
+			hash="sha256:881da2ed3d7c8e0ab59fb1cc8b02b53134351941c4d8d3f3553a96700f257a03"
+			version="0.28"/>
 		<dependencies>
 			<dep package="python3-ifaddr"/>
 			<dep package="python3-enum-compat"/>
@@ -118,14 +117,16 @@
 
 	<distutils id="python3-cffi" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="packages/93/1a/ab8c62b5838722f29f3daffcc8d4bd61844aa9b5f437341cc890ceee483b/cffi-1.12.3.tar.gz"
-			hash="sha256:041c81822e9f84b1d9c401182e174996f0bae9991f33725d059b771744290774"
-			version="1.12.3"/>
+			module="/packages/05/54/3324b0c46340c31b909fcec598696aaec7ddc8c18a63f2db352562d3354c/cffi-1.14.0.tar.gz"
+			hash="sha256:2d384f4a127a15ba701207f7639d94106693b6cd64173d6c8988e2c25f3ac2b6"
+			version="1.14.0"/>
 		<dependencies>
+	        <dep package="libffi"/>
 			<dep package="python3"/>
 			<dep package="python3-cparser"/>
 		</dependencies>
 		<after>
+	        <dep package="libffi"/>
 			<dep package="python3"/>
 			<dep package="python3-cparser"/>
 		</after>
@@ -133,9 +134,9 @@
 
 	<distutils id="python3-six" python3="1">
 		<branch repo="pypi.python.org"
-			module="/packages/dd/bf/4138e7bfb757de47d1f4b6994648ec67a51efe58fa907c1e11e350cddfca/six-1.12.0.tar.gz"
-			hash="sha256:d16a0141ec1a18405cd4ce8b4613101da75da0e9a7aec5bdd4fa804d0e0eba73"
-			version="1.12.0"/>
+			module="/packages/21/9f/b251f7f8a76dec1d6651be194dfba8fb8d7781d10ab3987190de8391d08e/six-1.14.0.tar.gz"
+			hash="sha256:236bdbdce46e6e6a3d61a337c0f8b763ca1e8717c03b369e87a7ec7ce1319c0a"
+			version="1.14.0"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -145,10 +146,10 @@
 	</distutils>
 
 	<distutils id="python3-parsing" python3="1">
-		<branch repo="files.pythonhosted.org"
-			module="/packages/7e/24/eaa8d7003aee23eda270099eeec754d7bf4399f75c6a011ef948304f66a2/pyparsing-2.4.2.tar.gz"
-			hash="sha256:6f98a7b9397e206d78cc01df10131398f1c8b8510a2f4d97d9abd82e1aacdd80"
-			version="2.4.2"/>
+		<branch repo="pypi.python.org"
+			module="/packages/c1/47/dfc9c342c9842bbe0036c7f763d2d6686bcf5eb1808ba3e170afdb282210/pyparsing-2.4.7.tar.gz"
+			hash="sha256:c203ec8783bf771a155b207279b9bccb8dea02d8f0c9e5f8ead507bc3246ecc1"
+			version="2.4.7"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -159,9 +160,9 @@
 
 	<distutils id="python3-packaging" python3="1">
 		<branch repo="pypi.python.org"
-			module="/packages/8b/3a/5bfe64c319be5775ed7ea3bc1a8e5667e0d57a740cc0498ce03e032eaf93/packaging-19.1.tar.gz"
-			hash="sha256:c491ca87294da7cc01902edbe30a5bc6c4c28172b5138ab4e4aa1b9d7bfaeafe"
-			version="19.1"/>
+			module="/packages/7b/d5/199f982ae38231995276421377b72f4a25d8251f4fa56f6be7cfcd9bb022/packaging-20.1.tar.gz"
+			hash="sha256:e665345f9eef0c621aa0bf2f8d78cf6d21904eef16a93f020240b704a57f1334"
+			version="20.1"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -171,11 +172,10 @@
 	</distutils>
 
 	<distutils id="python3-asn1crypto" python3="1">
-		<branch repo="github-tarball"
-			module="/wbond/asn1crypto/archive/0.24.0.tar.gz"
-			hash="sha256:d2a82bb3c29e1abcb376b59679510b58dd796c813f8983f2db9b45e9ab228190"
-			checkoutdir="asn1crypto-0.24.0"
-			version="0.24.0"/>
+		<branch repo="files.pythonhosted.org"
+			module="/packages/9f/3d/8beae739ed8c1c8f00ceac0ab6b0e97299b42da869e24cf82851b27a9123/asn1crypto-1.3.0.tar.gz"
+			hash="sha256:5a215cb8dc12f892244e3a113fe05397ee23c5c4ca7a69cd6e69811755efc42d"
+			version="1.3.0"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -186,9 +186,9 @@
 
 	<distutils id="python3-cryptography" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/c2/95/f43d02315f4ec074219c6e3124a87eba1d2d12196c2767fadfdc07a83884/cryptography-2.7.tar.gz"
-			hash="sha256:e6347742ac8f35ded4a46ff835c60e68c22a536a8ae5c4422966d06946b6d4c6"
-			version="2.7"/>
+			module="/packages/56/3b/78c6816918fdf2405d62c98e48589112669f36711e50158a0c15d804c30d/cryptography-2.9.2.tar.gz"
+			hash="sha256:a0c30272fb4ddda5f5ffc1089d7405b7a71b0b0f51993cb4e5dbb4590b2fc229"
+			version="2.9.2"/>
 		<dependencies>
 			<dep package="python3"/>
 			<dep package="openssl"/>
@@ -196,7 +196,6 @@
 			<dep package="python3-cffi"/>
 			<dep package="python3-six"/>
 			<dep package="python3-asn1crypto"/>
-			<dep package="python3-enum34"/>
 			<dep package="python3-parsing"/>
 			<dep package="python3-packaging"/>
 		</dependencies>
@@ -207,9 +206,9 @@
 
 	<distutils id="python3-pyasn1" python3="1">
 		<branch repo="pypi.python.org"
-			module="/packages/e3/12/dfffc84b783e280e942409d6b651fe4a5a746433c34589da7362db2c99c6/pyasn1-0.4.6.tar.gz"
-			hash="sha256:b773d5c9196ffbc3a1e13bdf909d446cad80a039aa3340bcad72f395b76ebc86"
-			version="0.4.6">
+			module="/packages/a4/db/fffec68299e6d7bad3d504147f9094830b704527a7fc098b721d38cc7fa7/pyasn1-0.4.8.tar.gz"
+			hash="sha256:aef77c9fb94a3ac588e87841208bdec464471d9871bd5050a287cc9a475cd0ba"
+			version="0.4.8">
 		</branch>
 		<dependencies>
 			<dep package="python3"/>
@@ -221,9 +220,9 @@
 
 	<distutils id="python3-pillow" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/51/fe/18125dc680720e4c3086dd3f5f95d80057c41ab98326877fc7d3ff6d0ee5/Pillow-6.1.0.tar.gz"
-			hash="sha256:0804f77cb1e9b6dbd37601cee11283bba39a8d44b9ddb053400c58e0c0d7d9de"
-			version="6.1.0"/>
+			module="/packages/3e/02/b09732ca4b14405ff159c470a612979acfc6e8645dc32f83ea0129709f7a/Pillow-7.2.0.tar.gz"
+			hash="sha256:97f9e7953a77d5a70f49b9a48da7776dc51e9b738151b22dacf101641594a626"
+			version="7.2.0"/>
 		<dependencies>
 			<dep package="python3"/>
 			<dep package="libwebp"/>
@@ -240,9 +239,9 @@
 
 	<distutils id="python3-py2app" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/4d/a2/c01b3eb13163be0fe3065c0c5461f75e702ab0dc66a7f42f8987884448a5/py2app-0.19.tar.gz"
-			hash="sha256:f3b9f4deb466998304fedea739bfa7bc553a1887656f7ee6accb2899e9e45b52"
-			version="0.19"/>
+			module="/packages/50/59/915918ada9f2d892eb584ecd14b71f4f87b31ec6a26b5ac4102f4ac3f704/py2app-0.21.tar.gz"
+			hash="sha256:4516dfb01a0bf560ca4918e1e0e38eb4fcc76c9c2f527456e022310a80d52dc8"
+			version="0.21"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -253,9 +252,9 @@
 
 	<distutils id="python3-cython" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/a5/1f/c7c5450c60a90ce058b47ecf60bb5be2bfe46f952ed1d3b95d1d677588be/Cython-0.29.13.tar.gz"
-			hash="sha256:c29d069a4a30f472482343c866f7486731ad638ef9af92bfe5fca9c7323d638e"
-			version="0.29.13"/>
+			module="/packages/6c/9f/f501ba9d178aeb1f5bf7da1ad5619b207c90ac235d9859961c11829d0160/Cython-0.29.21.tar.gz"
+			hash="sha256:e57acb89bd55943c8d8bf813763d20b9099cc7165c0f16b707631a7654be9cad"
+			version="0.29.21"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -266,10 +265,9 @@
 
 	<distutils id="python3-numpy" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/cb/79/96df883cd6df0c86cb010e6f4ff790b7a30a45016a9509c94ea72c8695cd/numpy-1.17.1.zip"
-			checkoutdir="numpy-1.17.1"
-			version="1.17.1"
-			hash="sha256:f11331530f0eff69a758d62c2461cd98cdc2eae0147279d8fc86e0464eb7e8ca"/>
+			module="/packages/2c/2f/7b4d0b639a42636362827e611cfeba67975ec875ae036dd846d459d52652/numpy-1.19.1.zip"
+			version="1.19.1"
+			hash="sha256:b8456987b637232602ceb4d663cb34106f7eb780e247d51a260b84760fd8f491"/>
 		<dependencies>
 			<dep package="python"/>
 		</dependencies>
@@ -306,13 +304,26 @@
 
 	<distutils id="python3-paramiko" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/54/68/dde7919279d4ecdd1607a7eb425a2874ccd49a73a5a71f8aa4f0102d3eb8/paramiko-2.6.0.tar.gz"
-			hash="sha256:f4b2edfa0d226b70bd4ca31ea7e389325990283da23465d572ed1f70a7583041"
-			version="2.6.0"/>
+			module="/packages/ac/15/4351003352e11300b9f44a13576bff52dcdc6e4a911129c07447bda0a358/paramiko-2.7.1.tar.gz"
+			hash="sha256:920492895db8013f6cc0179293147f830b8c7b21fdfc839b6bad760c27459d9f"
+			version="2.7.1"/>
 		<dependencies>
 			<dep package="python3"/>
 			<dep package="python3-bcrypt"/>
 			<dep package="python3-nacl"/>
+		</dependencies>
+		<after>
+			<dep package="python3"/>
+		</after>
+	</distutils>
+
+	<distutils id="python3-dns" python3="1">
+		<branch repo="files.pythonhosted.org"
+			module="/packages/ec/c5/14bcd63cb6d06092a004793399ec395405edf97c2301dfdc146dfbd5beed/dnspython-1.16.0.zip"
+			hash="sha256:36c5e8e38d4369a08b6780b7f27d790a292b2b08eea01607865bf0936c558e01"
+			version="1.16.0"/>
+		<dependencies>
+			<dep package="python3"/>
 		</dependencies>
 		<after>
 			<dep package="python3"/>
@@ -335,9 +346,9 @@
 
 	<distutils id="python3-setuptools-scm" python3="1">
 		<branch repo="pypi.python.org"
-			module="/packages/83/44/53cad68ce686585d12222e6769682c4bdb9686808d2739671f9175e2938b/setuptools_scm-3.3.3.tar.gz"
-			hash="sha256:bd25e1fb5e4d603dcf490f1fde40fb4c595b357795674c3e5cb7f6217ab39ea5"
-			version="3.3.3"/>
+			module="/packages/b2/f7/60a645aae001a2e06cf4b8db2fba9d9f36b8fd378f10647e3e218b61b74b/setuptools_scm-3.5.0.tar.gz"
+			hash="sha256:5bdf21a05792903cafe7ae0c9501182ab52497614fa6b1750d9dbae7b60c1a87"
+			version="3.5.0"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -374,9 +385,9 @@
 
 	<distutils id="python3-test-runner" python3="1">
 		<branch repo="pypi.python.org"
-			module="/packages/d9/6d/4b41a74b31720e25abd4799be72d54811da4b4d0233e38b75864dcc1f7ad/pytest-runner-5.1.tar.gz"
-			hash="sha256:25a013c8d84f0ca60bb01bd11913a3bcab420f601f0f236de4423074af656e7a"
-			version="5.1"/>
+			module="/packages/5b/82/1462f86e6c3600f2471d5f552fcc31e39f17717023df4bab712b4a9db1b3/pytest-runner-5.2.tar.gz"
+			hash="sha256:96c7e73ead7b93e388c5d614770d2bae6526efd997757d3543fe17b557a0942b"
+			version="5.2"/>
 		<dependencies>
 			<dep package="python3"/>
 			<dep package="python3-setuptools-scm"/>
@@ -389,9 +400,9 @@
 
 	<distutils id="python3-lz4" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/31/84/1803982b9fb05059af574cf4d4986efd8239ed24702dd35a7382f6bf699b/lz4-2.1.10.tar.gz"
-			hash="sha256:db4ac5a9b54d6d6b5bb0d6f9b77790f1460e2aeb37cd8ec76c96fe78aaf4a2a8"
-			version="2.1.10">
+			module="/packages/4c/c3/97c5aaeb8c70eafb0cba7dcbcb7709c2697d8a92bdef90d36b018dc502f6/lz4-3.1.0.tar.gz"
+			hash="sha256:debe75513db3eb9e5cdcd82a329ff38374b6316ab65b848b571e0404746c1e05"
+			version="3.1.0">
 		</branch>
 		<dependencies>
 			<dep package="lz4"/>
@@ -428,9 +439,9 @@
 
 	<distutils id="python3-brotli" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/cd/9c/7955895f5672ecc85270244582c6b53ff95bb4c24bf77bd9271d42351635/Brotli-1.0.7.zip"
-			hash="sha256:0538dc1744fd17c314d2adc409ea7d1b779783b89fd95bcfb0c2acc93a6ea5a7"
-			version="1.0.7">
+			module="/packages/2a/18/70c32fe9357f3eea18598b23aa9ed29b1711c3001835f7cf99a9818985d0/Brotli-1.0.9.zip"
+			hash="sha256:4d1b810aa0ed773f81dceda2cc7b403d01057458730e309856356d4ef4188438"
+			version="1.0.9">
 		</branch>
 		<dependencies>
 			<dep package="python3"/>
@@ -453,9 +464,9 @@
 
 	<distutils id="python3-ldap3" python3="1">
 		<branch repo="pypi.python.org"
-			module="/packages/79/66/d297c6f3c30b69c813c06e8933769c2732c83d35ca584107346d81ab2eee/ldap3-2.6.tar.gz"
-			hash="sha256:0533eefc18d5ce0532f07fe1ce4e1f27128e1073845a6bf39fef2c828a401bb8"
-			version="2.6">
+			module="/packages/c2/49/3bf179229a92ae87ff2dca1609c2ad599c497938f90fd5d66d02aa8e977e/ldap3-2.7.tar.gz"
+			hash="sha256:17f04298b70bf7ecaa5db8a7d8622b5a962ef7fc2b245b2eea705ac1c24338c0"
+			version="2.7">
 		</branch>
 		<dependencies>
 			<dep package="python3-pyasn1"/>
@@ -467,9 +478,9 @@
 
 	<distutils id="python3-ldap" python3="1">
 		<branch repo="pypi.python.org"
-			module="/packages/7f/1c/28d721dff2fcd2fef9d55b40df63a00be26ec8a11e8c6fc612ae642f9cfd/python-ldap-3.1.0.tar.gz"
-			hash="sha256:41975e79406502c092732c57ef0c2c2eb318d91e8e765f81f5d4ab6c1db727c5"
-			version="3.1.0">
+			module="/packages/9d/e2/deb47064d443344b708ffb5899ea269b201d7c22dcc653ebadcbb44c57d5/python-ldap-3.3.1.tar.gz"
+			hash="sha256:4711cacf013e298754abd70058ccc995758177fb425f1c2d30e71adfc1d00aa5"
+			version="3.3.1">
 		</branch>
 		<dependencies>
 			<dep package="python3-pyasn1"/>
@@ -523,9 +534,9 @@
 
 	<distutils id="python3-decorator" python3="1">
 		<branch repo="pypi.python.org"
-			module="https://files.pythonhosted.org/packages/ba/19/1119fe7b1e49b9c8a9f154c930060f37074ea2e8f9f6558efc2eeaa417a2/decorator-4.4.0.tar.gz"
-			hash="sha256:86156361c50488b84a3f148056ea716ca587df2f0de1d34750d35c21312725de"
-			version="4.4.0">
+			module="/packages/da/93/84fa12f2dc341f8cf5f022ee09e109961055749df2d0c75c5f98746cfe6c/decorator-4.4.2.tar.gz"
+			hash="sha256:e3a62f0520172440ca0dcc823749319382e377f37f140a0b99ef45fecb84bfe7"
+			version="4.4.2">
 		</branch>
 		<dependencies>
 			<dep package="python3"/>
@@ -537,9 +548,9 @@
 
 	<distutils id="python3-gssapi" python3="1">
 		<branch repo="pypi.python.org"
-			module="/packages/21/00/61ab7b1e246787ef32e3122011a418f906ec4c8c60ae7fd6e07956b8d611/gssapi-1.6.1.tar.gz"
-			hash="sha256:99172a907ecc2d831390f389d3d2099863f48a16975f3c823f3ff3ad1579d5bf"
-			version="1.6.1">
+			module="/packages/bc/55/8339ffe57571eac30d319b83cef63f7539c4e9ce28b7dbbbcb30cdfeb5bc/gssapi-1.6.9.tar.gz"
+			hash="sha256:0b0aac7138abd3c6d2d8b8400e83933c04a811734456e387e3cb7d59ec4547b9"
+			version="1.6.9">
 		</branch>
 		<dependencies>
 			<dep package="python3-decorator"/>
@@ -551,9 +562,9 @@
 
 	<distutils id="python3-macholib" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/72/60/2b22bef6edfb2864f7c0dc1d55b75e70ba1c3670899bead37e059e29b738/macholib-1.11.tar.gz"
-			hash="sha256:c4180ffc6f909bf8db6cd81cff4b6f601d575568f4d5dee148c830e9851eb9db"
-			version="1.11"/>
+			module="/packages/0d/fe/61e8f6b569c8273a8f2dd73921738239e03a2acbfc55be09f8793261f269/macholib-1.14.tar.gz"
+			hash="sha256:0c436bc847e7b1d9bda0560351bf76d7caf930fb585a828d13608839ef42c432"
+			version="1.14"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -564,9 +575,9 @@
 
 	<distutils id="python3-modulegraph" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/64/76/0af68379caf5cc5a7757a3874c136327ef213aefe808fb50fa8860c36940/modulegraph-0.17.tar.gz"
-			hash="sha256:d2824588c489c0ba6f815c066950400755e8e287da64bcddae4c0d6e76f8f5f3"
-			version="0.17"/>
+			module="/packages/0a/e6/3aeee6d736951e6ca0c5d9196b65a6745c61c750baff674f381e5d455a30/modulegraph-0.18.tar.gz"
+			hash="sha256:11c03dac1368bb9e7f780b58d251a0880c30b5a14816b6f88ec5a6fe1e3e5611"
+			version="0.18"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -577,9 +588,9 @@
 
 	<distutils id="python3-altgraph" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/da/a4/6c508ac94d7a65859a7a47e6fbde4aa6b81d0f0863aa45861241e782391c/altgraph-0.16.1.tar.gz"
-			hash="sha256:ddf5320017147ba7b810198e0b6619bd7b5563aa034da388cea8546b877f9b0c"
-			version="0.16.1"/>
+			module="/packages/22/5a/ac50b52581bbf0d8f6fd50ad77d20faac19a2263b43c60e7f3af8d1ec880/altgraph-0.17.tar.gz"
+			hash="sha256:1f05a47122542f97028caf78775a095fbe6a2699b5089de8477eb583167d69aa"
+			version="0.17"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -590,9 +601,9 @@
 
 	<distutils id="python3-pyopengl" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/2e/4a/626c0b35740515b8cac9c6c21825189c65a7224e821d7f12b313ce0d7a3f/PyOpenGL-3.1.3b1.tar.gz"
-			hash="sha256:85cd5372636b8bda173a261b0d572500b2a3432105eaad1311ecd61b372bd6e8"
-			version="3.1.3b1"/>
+			module="/packages/b8/73/31c8177f3d236e9a5424f7267659c70ccea604dab0585bfcd55828397746/PyOpenGL-3.1.5.tar.gz"
+			hash="sha256:4107ba0d0390da5766a08c242cf0cf3404c377ed293c5f6d701e457c57ba3424"
+			version="3.1.5"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -603,9 +614,9 @@
 
 	<distutils id="python3-pyopengl-accelerate" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/1e/09/1d1dba973e447686e4764c121b46ec77fb3facb54fd05820cd64917f822b/PyOpenGL-accelerate-3.1.3b1.tar.gz"
-			hash="sha256:e687eea7e006d65f531933b49b3b3d2feaaf51279147a904247f9d189762a36f"
-			version="3.1.3b1"/>
+			module="/packages/a2/3c/f42a62b7784c04b20f8b88d6c8ad04f4f20b0767b721102418aad94d8389/PyOpenGL-accelerate-3.1.5.tar.gz"
+			hash="sha256:12e5518b0216a478527c7ce5ddce623c3d0517adeb87226da767772e8b7f2f06"
+			version="3.1.5"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -617,9 +628,9 @@
 
 	<distutils id="python3-pyobjc-core" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/d3/f5/07579f2986f2eb639932626f69a082598f5e6d4535e1f54a331d9efa97d7/pyobjc-core-5.2.tar.gz"
-			hash="sha256:cd13a2e9be890064a6dd11db7790bbf38502350c532a9a9d05511abb8683b8ea"
-			version="5.2"/>
+			module="/packages/47/da/8739c856f27d98b546e2e52b053931686b81e8a37aabedd182ec4a460982/pyobjc-core-6.2.2.tar.gz"
+			hash="sha256:38e7b15a042439dadd18b28b78229e52fb882460fc16ddbae342b9972d5a827c"
+			version="6.2.2"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -630,9 +641,9 @@
 
 	<distutils id="python3-pyobjc-framework-cocoa" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/63/fa/a9224a241fffe25f7635235f784d01c5baaed381f534e6c843a07254fd18/pyobjc-framework-Cocoa-5.2.tar.gz"
-			hash="sha256:561785bbc4dd2f05cc836464733382ef6a69cb13338a7bc5f8297f5cd021d0bd"
-			version="5.2"/>
+			module="/packages/2a/da/d68987558518135d5ddc2075e1b32ab81b69427c4178ec15f82c01a34818/pyobjc-framework-Cocoa-6.2.2.tar.gz"
+			hash="sha256:75821b98fb789d240bea7034c4f96396b2eac3e7b02428b4be9101fc899b7fc3"
+			version="6.2.2"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -643,9 +654,9 @@
 
 	<distutils id="python3-pyobjc-framework-quartz" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/78/cc/e0d1d6dbe15306651beb5dea0af23abb9f9c06b12acfbab841594587e513/pyobjc-framework-Quartz-5.2.tar.gz"
-			hash="sha256:89d41e86b075788deb65695e32001de488412ae9b60191294a3fd31e8b3d2613"
-			version="5.2"/>
+			module="/packages/99/c1/cb74227d3264d662b999555512613336ae9215ea55956ea4b41c70f4e76c/pyobjc-framework-Quartz-6.2.2.tar.gz"
+			hash="sha256:5a56cfc0289061eaf33f04e3c73e749e04f177b0c1ee8749aa46e87d1e897cda"
+			version="6.2.2"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -656,9 +667,35 @@
 
 	<distutils id="python3-pyobjc-framework-avfoundation" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/4e/a7/2707a8da1683d7884defd73540dddeda1f471c1630a079c7fe19116bb443/pyobjc-framework-AVFoundation-5.2.tar.gz"
-			hash="sha256:b2b2d0c0c68c8189f8187fdc647c05a34cc93ca50e7f8a47b1f75a4ac47a1e17"
-			version="5.2"/>
+			module="/packages/ea/79/a0b0c933950acbec620206735b15fae1a17b26539ed1adda4c764b8c491f/pyobjc-framework-AVFoundation-6.2.2.tar.gz"
+			hash="sha256:9d347c71b99f900770b7fb93881fa30a43d61bd8b9390b432878acff0edfe2fb"
+			version="6.2.2"/>
+		<dependencies>
+			<dep package="python3"/>
+		</dependencies>
+		<after>
+			<dep package="python3"/>
+		</after>
+	</distutils>
+
+	<distutils id="python3-pyobjc-framework-coremedia" python3="1">
+		<branch repo="files.pythonhosted.org"
+			module="/packages/ac/c7/6a41339cba43d105b4f575a520430afce290976d1caf11f1e0b8292042d3/pyobjc-framework-CoreMedia-6.2.2.tar.gz"
+			hash="sha256:962d0bb705a7c3934a37e5e128c82e153fe9261246897d366bc5b5c6f3de2a69"
+			version="6.2.2"/>
+		<dependencies>
+			<dep package="python3"/>
+		</dependencies>
+		<after>
+			<dep package="python3"/>
+		</after>
+	</distutils>
+
+	<distutils id="python3-pyobjc-framework-libdispatch" python3="1">
+		<branch repo="files.pythonhosted.org"
+			module="/packages/79/b8/ddd0601a2f6dcb19da27cd2cdf50560cace9f21ca6621bfd00de5b7ee685/pyobjc-framework-libdispatch-6.2.2.tar.gz"
+			hash="sha256:a69aa6d4b6d396c9006ee9b10b2cfb678005ba4f68e3306e58bb7f92b39d3a24"
+			version="6.2.2"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -669,9 +706,9 @@
 
 	<distutils id="python3-pyobjc-framework-SystemConfiguration" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/95/a8/6f8907a6713ff66b82c567f02dbbbea1d80b1d2d55dc4cab47d29e10d310/pyobjc-framework-SystemConfiguration-5.2.tar.gz"
-			hash="sha256:709327f66a210424cc5468379f9430e668c9afefa65ce34151c2fb7558ce398d"
-			version="5.2"/>
+			module="/packages/28/7a/d4a053eb647c58cb22dd506e6a003bfa0d4579d4877a6454212bf81b3f80/pyobjc-framework-SystemConfiguration-6.2.2.tar.gz"
+			hash="sha256:1611f6c561669beff0bad18a9f4fe0724424acc92ed47cc8fc3949532402c95d"
+			version="6.2.2"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -697,9 +734,22 @@
 
 	<distutils id="python3-yaml" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/e3/e8/b3212641ee2718d556df0f23f78de8303f068fe29cdaa7a91018849582fe/PyYAML-5.1.2.tar.gz"
-			hash="sha256:01adf0b6c6f61bd11af6e10ca52b7d4057dd0be0343eb9283c878cf3af56aee4"
-			version="5.1.2"/>
+			module="/packages/3d/d9/ea9816aea31beeadccd03f1f8b625ecf8f645bd66744484d162d84803ce5/PyYAML-5.3.tar.gz"
+			hash="sha256:e9f45bd5b92c7974e59bcd2dcc8631a6b6cc380a904725fce7bc08872e691615"
+			version="5.3"/>
+		<dependencies>
+			<dep package="python3"/>
+		</dependencies>
+		<after>
+			<dep package="python3"/>
+		</after>
+	</distutils>
+
+	<distutils id="python3-psutil" python3="1">
+		<branch repo="files.pythonhosted.org"
+			module="/packages/aa/3e/d18f2c04cf2b528e18515999b0c8e698c136db78f62df34eee89cee205f1/psutil-5.7.2.tar.gz"
+			hash="sha256:90990af1c3c67195c44c9a889184f84f5b2320dce3ee3acbd054e3ba0b4a7beb"
+			version="5.7.2"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -710,9 +760,9 @@
 
 	<distutils id="python3-pycups" python3="1">
 		<branch repo="pypi.python.org"
-			module="/packages/00/ce/836a0deb8b24bcd5f850f8fb97f99fb4abd7374e078b9e6df5a0838f8eb5/pycups-1.9.74.tar.bz2"
-			hash="sha256:86090f259a7c5d0d5caa3407a0e57c9e134027620cbc8f90bf4e37c8b53ed7b9"
-			version="1.9.74"/>
+			module="/packages/0c/bb/82546806a86dc16f5eeb76f62ffdc42cce3d43aacd4e25a8b5300eec0263/pycups-2.0.1.tar.gz"
+			hash="sha256:57434ce5f62548eb12949ca8217f066f4eeb21a5d6ab8b13471dce350e380c90"
+			version="2.0.1"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -723,9 +773,9 @@
 
 	<distutils id="python3-ipaddress" python3="1">
 		<branch repo="pypi.python.org"
-			module="/packages/97/8d/77b8cedcfbf93676148518036c6b1ce7f8e14bf07e95d7fd4ddcb8cc052f/ipaddress-1.0.22.tar.gz"
-			hash="sha256:b146c751ea45cad6188dd6cf2d9b757f6f4f8d6ffb96a023e6f2e26eea02a72c"
-			version="1.0.22"/>
+			module="/packages/b9/9a/3e9da40ea28b8210dd6504d3fe9fe7e013b62bf45902b458d1cdc3c34ed9/ipaddress-1.0.23.tar.gz"
+			hash="sha256:b7f8e0369580bb4a24d5ba1d7cc29660a4a6987763faf1d8a8046830e020e7e2"
+			version="1.0.23"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -736,9 +786,9 @@
 
 	<distutils id="python3-idna" python3="1">
 		<branch repo="pypi.python.org"
-			module="/packages/ad/13/eb56951b6f7950cadb579ca166e448ba77f9d24efc03edd7e55fa57d04b7/idna-2.8.tar.gz"
-			hash="sha256:c357b3f628cf53ae2c4c05627ecc484553142ca23264e593d327bcde5e9c3407"
-			version="2.8"/>
+			module="/packages/cb/19/57503b5de719ee45e83472f339f617b0c01ad75cba44aba1e4c97c2b0abd/idna-2.9.tar.gz"
+			hash="sha256:7588d1c14ae4c77d74036e8c22ff447b26d0fde8f007354fd48a7814db15b7cb"
+			version="2.9"/>
 		<dependencies>
 			<dep package="python3"/>
 		</dependencies>
@@ -750,6 +800,7 @@
 	<metamodule id="meta-osx-xpra-python3-deps">
 		<dependencies>
 		  <dep package="python3-setuptools"/>
+		  <dep package="python3-coverage"/>
 		  <dep package="python3-enum-compat"/>
 		  <dep package="python3-zeroconf"/>
 		  <dep package="python3-netifaces"/>
@@ -762,6 +813,7 @@
 		  <dep package="python3-pycups"/>
 		  <dep package="python3-bcrypt"/>
 		  <dep package="python3-paramiko"/>
+		  <dep package="python3-dns"/>
 		  <dep package="python3-nose"/>
 		  <dep package="python3-setuptools-scm"/>
 		  <dep package="python3-test-runner"/>
@@ -782,6 +834,7 @@
 		  <dep package="python3-cryptography"/>
 		  <dep package="python3-rencode"/>
 		  <dep package="python3-yaml"/>
+		  <dep package="python3-psutil"/>
 		  <dep package="python3-macholib"/>
 		  <dep package="python3-modulegraph"/>
 		  <dep package="python3-altgraph"/>
@@ -791,6 +844,8 @@
 		  <dep package="python3-pyobjc-framework-cocoa"/>
 		  <dep package="python3-pyobjc-framework-quartz"/>
 		  <dep package="python3-pyobjc-framework-avfoundation"/>
+		  <dep package="python3-pyobjc-framework-coremedia"/>
+		  <dep package="python3-pyobjc-framework-libdispatch"/>
 		  <dep package="python3-pyobjc-framework-SystemConfiguration"/>
 		</dependencies>
 	</metamodule>

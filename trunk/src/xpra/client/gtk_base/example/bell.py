@@ -1,39 +1,51 @@
 #!/usr/bin/env python
-# Copyright (C) 2017 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2017-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-from xpra.gtk_common.gobject_compat import import_gtk
-from xpra.gtk_common.gtk_util import WIN_POS_CENTER, add_close_accel
-from xpra.os_util import POSIX
-if POSIX:
+from xpra.os_util import POSIX, OSX
+from xpra.platform import program_context
+if POSIX and not OSX:
     from xpra.x11.gtk_x11.gdk_display_source import init_gdk_display_source
     init_gdk_display_source()
+from xpra.platform.gui import force_focus
+from xpra.gtk_common.gtk_util import add_close_accel, get_icon_pixbuf
 
-gtk = import_gtk()
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk, GLib
 
 
-class BellWindow(gtk.Window):
+class BellWindow(Gtk.Window):
     def __init__(self):
-        super(BellWindow, self).__init__()
-        self.set_position(WIN_POS_CENTER)
+        super().__init__()
+        self.set_position(Gtk.WindowPosition.CENTER)
         self.set_default_size(320, 120)
         self.set_title("Test System Bell")
-        self.connect("destroy", gtk.main_quit)
-        btn = gtk.Button("default bell")
+        self.connect("destroy", Gtk.main_quit)
+        icon = get_icon_pixbuf("bell.png")
+        if icon:
+            self.set_icon(icon)
+        btn = Gtk.Button(label="default bell")
         btn.connect('clicked', self.bell)
         self.add(btn)
+
+    def show_with_focus(self):
+        force_focus()
         self.show_all()
-        add_close_accel(self, gtk.main_quit)
+        super().present()
 
     def bell(self, *_args):
         from xpra.platform.gui import system_bell
         system_bell(self.get_window(), 0, 100, 2000, 1000, 0, 0, "test")
 
 def main():
-    BellWindow()
-    gtk.main()
-    return 0
+    with program_context("bell", "Bell"):
+        w = BellWindow()
+        add_close_accel(w, Gtk.main_quit)
+        GLib.idle_add(w.show_with_focus)
+        Gtk.main()
+        return 0
 
 
 if __name__ == "__main__":

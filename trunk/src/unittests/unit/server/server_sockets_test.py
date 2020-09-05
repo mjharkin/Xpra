@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # This file is part of Xpra.
-# Copyright (C) 2016-2017 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2016-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -9,42 +9,49 @@ import shutil
 import unittest
 import tempfile
 
-from xpra.util import repr_ellipsized
-from xpra.os_util import load_binary_file, pollwait, OSX, POSIX
-from xpra.exit_codes import EXIT_OK, EXIT_CONNECTION_LOST, EXIT_SSL_FAILURE, EXIT_STR
+from xpra.util import repr_ellipsized, envint
+from xpra.os_util import load_binary_file, pollwait, monotonic_time, OSX, POSIX
+from xpra.exit_codes import EXIT_OK, EXIT_CONNECTION_FAILED, EXIT_SSL_CERTIFICATE_VERIFY_FAILURE
 from xpra.net.net_util import get_free_tcp_port
-from unit.server_test_util import ServerTestUtil, log
+from xpra.platform.dotxpra import DISPLAY_PREFIX
+from unit.server_test_util import ServerTestUtil, log, estr
 
 
-def estr(r):
-	s = EXIT_STR.get(r)
-	if s:
-		return "%s : %s" % (r, s)
-	return str(r)
+CONNECT_WAIT = envint("XPRA_TEST_CONNECT_WAIT", 20)
+SUBPROCESS_WAIT = envint("XPRA_TEST_SUBPROCESS_WAIT", CONNECT_WAIT*2)
 
 
 class ServerSocketsTest(ServerTestUtil):
 
+	def get_run_env(self):
+		env = super().get_run_env()
+		env["XPRA_CONNECT_TIMEOUT"] = str(CONNECT_WAIT)
+		return env
+
 	def start_server(self, *args):
 		server_proc = self.run_xpra(["start", "--no-daemon"]+list(args))
-		if pollwait(server_proc, 5) is not None:
+		if pollwait(server_proc, 10) is not None:
 			r = server_proc.poll()
 			raise Exception("server failed to start with args=%s, returned %s" % (args, estr(r)))
 		return server_proc
 
-	def _test_connect(self, server_args=(), auth="none", client_args=(), password=None, uri_prefix=":", exit_code=0):
+	def _test_connect(self, server_args=(), auth="none", client_args=(), password=None, uri_prefix=DISPLAY_PREFIX, exit_code=0):
 		display_no = self.find_free_display_no()
 		display = ":%s" % display_no
 		log("starting test server on %s", display)
 		server = self.start_server(display, "--auth=%s" % auth, "--printing=no", *server_args)
 		#we should always be able to get the version:
 		uri = uri_prefix + str(display_no)
-		client = self.run_xpra(["version", uri] + server_args)
-		if pollwait(client, 5)!=0:
-			r = client.poll()
-			if client.poll() is None:
+		start = monotonic_time()
+		while True:
+			client = self.run_xpra(["version", uri] + server_args)
+			r = pollwait(client, CONNECT_WAIT)
+			if r==0:
+				break
+			if r is None:
 				client.terminate()
-			raise Exception("version client failed to connect, returned %s" % estr(r))
+			if monotonic_time()-start>SUBPROCESS_WAIT:
+				raise Exception("version client failed to connect, returned %s" % estr(r))
 		#try to connect
 		cmd = ["connect-test", uri] + client_args
 		f = None
@@ -53,21 +60,28 @@ class ServerSocketsTest(ServerTestUtil):
 			cmd += ["--password-file=%s" % f.name]
 			cmd += ["--challenge-handlers=file:filename=%s" % f.name]
 		client = self.run_xpra(cmd)
-		r = pollwait(client, 10)
+		r = pollwait(client, SUBPROCESS_WAIT)
 		if f:
 			f.close()
-		if client.poll() is None:
+		if r is None:
 			client.terminate()
 		server.terminate()
 		if r!=exit_code:
+			log.error("Exit code mismatch")
+			log.error(" server args=%s", server_args)
+			log.error(" client args=%s", client_args)
+			if r is None:
+				raise Exception("expected info client to return %s but it is still running" % (estr(exit_code),))
 			raise Exception("expected info client to return %s but got %s" % (estr(exit_code), estr(r)))
+		pollwait(server, 10)
 
 	def test_default_socket(self):
-		self._test_connect([], "allow", [], b"hello", ":", EXIT_OK)
+		self._test_connect([], "allow", [], b"hello", DISPLAY_PREFIX, EXIT_OK)
 
 	def test_tcp_socket(self):
 		port = get_free_tcp_port()
 		self._test_connect(["--bind-tcp=0.0.0.0:%i" % port], "allow", [], b"hello", "tcp://127.0.0.1:%i/" % port, EXIT_OK)
+		port = get_free_tcp_port()
 		self._test_connect(["--bind-tcp=0.0.0.0:%i" % port], "allow", [], b"hello", "ws://127.0.0.1:%i/" % port, EXIT_OK)
 
 	def test_ws_socket(self):
@@ -120,7 +134,7 @@ class ServerSocketsTest(ServerTestUtil):
 			server = self.start_server(display, *server_args)
 
 			#test it with openssl client:
-			for port in (tcp_port, ssl_port):
+			for port in (tcp_port, ssl_port, ws_port, wss_port):
 				openssl_verify_command = ("openssl", "s_client", "-connect", "127.0.0.1:%i" % port, "-CAfile", certfile)
 				devnull = os.open(os.devnull, os.O_WRONLY)
 				openssl = self.run_command(openssl_verify_command, stdin=devnull, shell=True)
@@ -130,10 +144,10 @@ class ServerSocketsTest(ServerTestUtil):
 			def test_connect(uri, exit_code, *client_args):
 				cmd = ["info", uri] + list(client_args)
 				client = self.run_xpra(cmd)
-				r = pollwait(client, 5)
+				r = pollwait(client, CONNECT_WAIT)
 				if client.poll() is None:
 					client.terminate()
-				assert r==exit_code, "expected info client to return %s but got %s" % (exit_code, client.poll())
+				assert r==exit_code, "expected info client to return %s but got %s" % (estr(exit_code), estr(client.poll()))
 			noverify = "--ssl-server-verify-mode=none"
 			#connect to ssl socket:
 			test_connect("ssl://127.0.0.1:%i/" % ssl_port, EXIT_OK, noverify)
@@ -145,10 +159,10 @@ class ServerSocketsTest(ServerTestUtil):
 			test_connect("wss://127.0.0.1:%i/" % ws_port, EXIT_OK, noverify)
 
 			#self signed cert should fail without noverify:
-			test_connect("ssl://127.0.0.1:%i/" % ssl_port, EXIT_SSL_FAILURE)
-			test_connect("ssl://127.0.0.1:%i/" % tcp_port, EXIT_SSL_FAILURE)
-			test_connect("wss://127.0.0.1:%i/" % ws_port, EXIT_SSL_FAILURE)
-			test_connect("wss://127.0.0.1:%i/" % wss_port, EXIT_SSL_FAILURE)
+			test_connect("ssl://127.0.0.1:%i/" % ssl_port, EXIT_SSL_CERTIFICATE_VERIFY_FAILURE)
+			test_connect("ssl://127.0.0.1:%i/" % tcp_port, EXIT_SSL_CERTIFICATE_VERIFY_FAILURE)
+			test_connect("wss://127.0.0.1:%i/" % ws_port, EXIT_SSL_CERTIFICATE_VERIFY_FAILURE)
+			test_connect("wss://127.0.0.1:%i/" % wss_port, EXIT_SSL_CERTIFICATE_VERIFY_FAILURE)
 
 		finally:
 			shutil.rmtree(tmpdir)
@@ -170,27 +184,21 @@ class ServerSocketsTest(ServerTestUtil):
 			args = ["--socket-dir=%s" % tmpdir]
 			#tell the client about it, or don't - both cases should work:
 			#(it will also use the default socket dirs)
-			self._test_connect(args, "none", args, None, ":", EXIT_OK)
-			self._test_connect(args, "none", [], None, ":", EXIT_OK)
+			self._test_connect(args, "none", args, None, DISPLAY_PREFIX, EXIT_OK)
+			self._test_connect(args, "none", [], None, DISPLAY_PREFIX, EXIT_OK)
 			#now run with ONLY this socket dir:
 			ServerSocketsTest.default_xpra_args = [x for x in saved_default_xpra_args if not x.startswith("--socket-dir")]
 			args = ["--socket-dirs=%s" % tmpdir]
 			#tell the client:
-			self._test_connect(args, "none", args, None, ":", EXIT_OK)
+			self._test_connect(args, "none", args, None, DISPLAY_PREFIX, EXIT_OK)
 			#if the client doesn't know about the socket location, it should fail:
-			self._test_connect(args, "none", [], None, ":", EXIT_CONNECTION_LOST)
+			self._test_connect(args, "none", [], None, DISPLAY_PREFIX, EXIT_CONNECTION_FAILED)
 			#use the exact path to the socket:
 			from xpra.platform.dotxpra_common import PREFIX
 			self._test_connect(args, "none", [], None, "socket:"+os.path.join(tmpdir, PREFIX))
 		finally:
 			ServerSocketsTest.default_xpra_args = saved_default_xpra_args
 			shutil.rmtree(tmpdir)
-
-	def get_run_env(self):
-		env = ServerTestUtil.get_run_env(self)
-		#we want commands to timeout quickly
-		env["XPRA_CONNECT_TIMEOUT"] = "5"
-		return env
 
 
 def main():

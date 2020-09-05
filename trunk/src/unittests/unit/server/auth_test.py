@@ -16,6 +16,7 @@ from xpra.os_util import (
     strtobytes, bytestostr,
     monotonic_time,
     WIN32, OSX, POSIX,
+    get_hex_uuid,
     )
 from xpra.net.digest import get_digests, get_digest_module, gendigest
 
@@ -24,7 +25,7 @@ def temp_filename(prefix=""):
     return os.path.join(os.environ.get("TEMP", "/tmp"), "file-auth-%s-test-%s" % (prefix, monotonic_time()))
 
 
-class TempFileContext(object):
+class TempFileContext:
 
     def __init__(self, prefix="prefix"):
         self.prefix = prefix
@@ -44,12 +45,6 @@ class TempFileContext(object):
             os.unlink(self.filename)
 
 
-class FakeOpts(object):
-    def __init__(self, d):
-        self._d = d or {}
-    def __getattr__(self, name):
-        return self._d.get(name)
-
 class TestAuth(unittest.TestCase):
 
     def a(self, name):
@@ -57,15 +52,16 @@ class TestAuth(unittest.TestCase):
         auth_module = __import__(pmod, globals(), locals(), ["%s_auth" % name], 0)
         mod = getattr(auth_module, "%s_auth" % name, None)
         assert mod, "cannot load '%s_auth' from %s" % (name, pmod)
+        assert str(mod)
         return mod
 
-    def _init_auth(self, mod_name, options=None, username="foo", **kwargs):
+    def _init_auth(self, mod_name, username="foo", **kwargs):
         mod = self.a(mod_name)
-        return self.do_init_auth(mod, options, username, **kwargs)
+        a = self.do_init_auth(mod, username, **kwargs)
+        assert repr(a)
+        return a
 
-    def do_init_auth(self, module, options=None, username="foo", **kwargs):
-        opts = FakeOpts(options)
-        module.init(opts)
+    def do_init_auth(self, module, username="foo", **kwargs):
         try:
             c = module.Authenticator
         except AttributeError:
@@ -81,6 +77,8 @@ class TestAuth(unittest.TestCase):
     def _test_module(self, module):
         a = self._init_auth(module)
         assert a
+        assert str(a)
+        assert repr(a)
         if a.requires_challenge():
             challenge = a.get_challenge(get_digests())
             assert challenge
@@ -121,9 +119,13 @@ class TestAuth(unittest.TestCase):
         a = self._init_auth("reject")
         assert a.requires_challenge()
         c, mac = a.get_challenge(get_digests())
+        assert a.get_uid()==-1
+        assert a.get_gid()==-1
+        assert a.get_password() is None
         assert c and mac
         assert not a.get_sessions()
         assert not a.get_passwords()
+        assert a.choose_salt_digest("xor")=="xor"
         for x in (None, "bar"):
             assert not a.authenticate(x, c)
             assert not a.authenticate(x, x)
@@ -180,7 +182,7 @@ class TestAuth(unittest.TestCase):
         self._test_hmac_auth("password", password, value=password)
 
 
-    def _test_file_auth(self, mod_name, genauthdata):
+    def _test_file_auth(self, mod_name, genauthdata, display_count=0):
         #no file, no go:
         a = self._init_auth(mod_name)
         assert a.requires_challenge()
@@ -190,15 +192,23 @@ class TestAuth(unittest.TestCase):
         assert a.get_challenge(get_digests())
         assert not a.get_challenge(get_digests())
         assert not a.get_challenge(get_digests())
-        for muck in (0, 1):
+        #muck:
+        # 0 - OK
+        # 1 - bad: with warning about newline
+        # 2 - verify bad passwords
+        # 3 - verify no password
+        for muck in (0, 1, 2, 3):
             with TempFileContext(prefix=mod_name) as context:
                 f = context.file
                 filename = context.filename
                 with f:
-                    a = self._init_auth(mod_name, {"password_file" : [filename]})
+                    a = self._init_auth(mod_name, filename=filename)
                     password, filedata = genauthdata(a)
                     #print("saving password file data='%s' to '%s'" % (filedata, filename))
-                    f.write(strtobytes(filedata))
+                    if muck!=3:
+                        f.write(strtobytes(filedata))
+                    if muck==1:
+                        f.write(b"\n")
                     f.flush()
                     assert a.requires_challenge()
                     salt, mac = a.get_challenge(get_digests())
@@ -214,25 +224,66 @@ class TestAuth(unittest.TestCase):
                         digestmod = get_digest_module(mac)
                         verify = hmac.HMAC(password, auth_salt, digestmod=digestmod).hexdigest()
                         assert a.authenticate(verify, client_salt), "%s failed" % a.authenticate
+                        if display_count>0:
+                            sessions = a.get_sessions()
+                            assert len(sessions)>=3
+                            displays = sessions[2]
+                            assert len(displays)==display_count, "expected %i displays but got %i : %s" % (
+                                display_count, len(sessions), sessions)
                         assert not a.authenticate(verify, client_salt), "authenticated twice!"
                         passwords = a.get_passwords()
                         assert len(passwords)==1, "expected just one password in file, got %i" % len(passwords)
                         assert password in passwords
-                    elif muck==1:
+                    else:
                         for verify in ("whatever", None, "bad"):
                             assert not a.authenticate(verify, client_salt)
+        return a
 
     def test_file(self):
         def genfiledata(_a):
             password = uuid.uuid4().hex
             return password, password
         self._test_file_auth("file", genfiledata)
+        #no digest -> no challenge
+        a = self._init_auth("file", filename="foo")
+        assert a.requires_challenge()
+        try:
+            a.get_challenge(["not-a-valid-digest"])
+        except ValueError:
+            pass
+        a.password_filename = "./this-path-should-not-exist"
+        assert a.load_password_file() is None
+        assert a.stat_password_filetime()==0
+        #inaccessible:
+        filename = "./test-file-auth-%s-%s" % (get_hex_uuid(), os.getpid())
+        with open(filename, 'wb') as f:
+            os.fchmod(f.fileno(), 0o200)    #write-only
+        a.password_filename = filename
+        a.load_password_file()
 
     def test_multifile(self):
         def genfiledata(a):
             password = uuid.uuid4().hex
-            return password, "%s|%s|||" % (a.username, password)
-        self._test_file_auth("multifile", genfiledata)
+            lines = [
+                "#comment",
+                "%s|%s|||" % (a.username, password),
+                "incompleteline",
+                "duplicateentry|pass1",
+                "duplicateentry|pass2",
+                "user|pass",
+                "otheruser|otherpassword|1000|1000||env1=A,env2=B|compression=0", 
+                ]
+            return password, "\n".join(lines)
+        self._test_file_auth("multifile", genfiledata, 1)
+        def nodata(_a):
+            return "abc", ""
+        try:
+            self._test_file_auth("multifile", nodata, 1)
+        except AssertionError:
+            pass
+        else:
+            raise Exception("authentication with no data should have failed")
+
 
     def test_sqlite(self):
         from xpra.server.auth.sqlite_auth import main as sqlite_main
@@ -271,7 +322,7 @@ class TestAuth(unittest.TestCase):
         sockpath = "./socket-test"
         try:
             os.unlink(sockpath)
-        except (OSError, IOError):
+        except OSError:
             pass
         from xpra.net.bytestreams import SocketConnection
         import socket
@@ -284,7 +335,7 @@ class TestAuth(unittest.TestCase):
         def wait_for_connection():
             conn, addr = sock.accept()
             s = SocketConnection(conn, sockpath, addr, sockpath, "unix")
-            pc = self._init_auth("peercred", options={}, username="foo", connection=s)
+            pc = self._init_auth("peercred", username="foo", connection=s)
             assert not pc.requires_challenge()
             assert pc.get_uid()==os.getuid()
             verified.append(True)
@@ -300,7 +351,7 @@ class TestAuth(unittest.TestCase):
         for x in to_close:
             try:
                 x.close()
-            except (OSError, IOError):
+            except OSError:
                 pass
         assert verified
 

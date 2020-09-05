@@ -1,8 +1,7 @@
 %define _build_id_links none
 
 Name:	     x264-xpra
-Version:     20190109
-%define SNAPSHOTTYPE -stable
+Version:     20200706
 %if 0%{?beta} < 1
 Release:     1%{?dist}
 %else
@@ -13,13 +12,14 @@ Summary:     x264 library for xpra
 Group:       Applications/Multimedia
 License:     GPL
 URL:	     http://www.videolan.org/developers/x264.html
-Source0:     http://download.videolan.org/pub/x264/snapshots/x264-snapshot-%{version}-2245%{?SNAPSHOTTYPE}.tar.bz2
+Source0:     http://download.videolan.org/pub/x264/snapshots/x264-%{version}.tar.bz2
 BuildRoot:   %(mktemp -ud %{_tmppath}/%{name}-%{version}-%{release}-XXXXXX)
+AutoProv:    0
 
 BuildRequires:	yasm
 
 
-%if 0%{?fedora}>=27
+%if 0%{?fedora}%{?el8}
 %global debug_package %{nil}
 %endif
 
@@ -35,13 +35,15 @@ Summary: Development files for the x264 library
 Group: Development/libraries
 Requires: %{name} = %{version}
 Requires: pkgconfig
+Requires: x264-xpra = %{version}
+AutoReq:  0
 
 %description devel
 This package contains the development files for %{name}.
 
 
 %prep
-%setup -q -n x264-snapshot-%{version}-2245%{?SNAPSHOTTYPE}
+%setup -q -n x264-master
 
 
 %build
@@ -49,6 +51,7 @@ This package contains the development files for %{name}.
     --prefix="%{_prefix}" \
     --libdir="%{_libdir}/xpra" \
     --includedir="%{_includedir}/xpra" \
+    --bit-depth=all \
     --enable-shared \
     --enable-static
 
@@ -59,8 +62,9 @@ make %{?_smp_mflags}
 rm -rf %{buildroot}
 make install DESTDIR=%{buildroot}
 
-# remove executable
+# remove executable and bash completion:
 rm %{buildroot}/usr/bin/x264
+rm %{buildroot}/usr/share/bash-completion/completions/x264
 
 %post -p /sbin/ldconfig
 %postun -p /sbin/ldconfig
@@ -82,6 +86,13 @@ rm -rf %{buildroot}
 %{_libdir}/xpra/pkgconfig/x264.pc
 
 %changelog
+* Mon Jul 06 2020 Antoine Martin <antoine@xpra.org> 20200706-1
+- use a newer snapshot
+- remove autoreq / autoprov
+
+* Mon May 11 2017 Antoine Martin <antoine@xpra.org> 20200510-1
+- use a newer snapshot
+
 * Sat Dec 23 2017 Antoine Martin <antoine@xpra.org> 20171222-1
 - use a newer snapshot
 

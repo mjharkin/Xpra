@@ -58,11 +58,11 @@ NUMPAD_TO_NAME = {
 		"ArrowUp"			: "KP_Up",
 		"PageUp"			: "KP_Prior",
 };
-for (var i=0; i<=9; i++) {
+for (let i=0; i<=9; i++) {
 	KEY_TO_NAME["Numpad"+i]	= ""+i;
 	KEY_TO_NAME["KP"+i]	= "KP"+i;
 }
-for (var i=1; i<=20; i++) {
+for (let i=1; i<=20; i++) {
 	KEY_TO_NAME["F"+i]	= "F"+i;
 }
 
@@ -1621,12 +1621,13 @@ KEYSYM_TO_UNICODE = {
 };
 
 CHAR_TO_NAME = {
+	" "					: "space",
 	};
 //console.debug("KEYSYM_TO_UNICODE=", KEYSYM_TO_UNICODE);
-for (var keysym in KEYSYM_TO_UNICODE) {
-    var u = KEYSYM_TO_UNICODE[keysym];
-    var char = String.fromCharCode(u);
-    CHAR_TO_NAME[char] = keysym;
+for (let keysym in KEYSYM_TO_UNICODE) {
+	const u = KEYSYM_TO_UNICODE[keysym];
+	const character = String.fromCharCode(u);
+	CHAR_TO_NAME[character] = keysym;
 }
 //console.debug("CHAR_TO_NAME=", KEYSYM_TO_UNICODE);
 
@@ -1645,7 +1646,7 @@ KEYSYM_TO_LAYOUT = {
 	"Armenian"	: "am",
 	"Georgian"	: "ge",
 	"braille"	: "brai",
-}
+};
 
 
 /**
@@ -1695,7 +1696,6 @@ CHARCODE_TO_NAME = {
 	144	: "Num_Lock",
 	145	: "Scroll_Lock",
 	160	: "dead_circumflex",
-	167 : "underscore",
 	161	: "exclam",
 	162	: "quotedbl",
 	163	: "numbersign",
@@ -1724,18 +1724,27 @@ CHARCODE_TO_NAME = {
 	221	: "bracketright",
 	222	: "apostrophe",
 };
-for (var i=0; i<26; i++) {
+for (let i=0; i<26; i++) {
 	CHARCODE_TO_NAME[65+i] = "abcdefghijklmnopqrstuvwxyz"[i];
 }
-for (i=0; i<10; i++) {
+for (let i=0; i<10; i++) {
 	CHARCODE_TO_NAME[48+i] = ""+i;
 	CHARCODE_TO_NAME[96+i] = ""+i;
 	//fix for OSX numpad?
 	//CHARCODE_TO_NAME[96+i] = "KP_"+i;
 }
-for (i=1; i<=24; i++) {
+for (let i=1; i<=24; i++) {
 	CHARCODE_TO_NAME[111+i] = "F"+i;
 }
+//overrides: only for 'de' layout?
+CHARCODE_TO_NAME[192] = "dead_circumflex";
+CHARCODE_TO_NAME[219] = "backtick";
+CHARCODE_TO_NAME[221] = "dead_acute";
+CHARCODE_TO_NAME[220] = "dead_circumflex";
+CHARCODE_TO_NAME[187] = "dead_acute";
+CHARCODE_TO_NAME_SHIFTED = {}
+CHARCODE_TO_NAME_SHIFTED[187] = "dead_grave";
+CHARCODE_TO_NAME_SHIFTED[221] = "dead_grave";
 
 
 /**
@@ -1745,7 +1754,7 @@ for (i=1; i<=24; i++) {
  * @returns {Array} of strings
  */
 function get_event_modifiers(event) {
-	var modifiers = [];
+	const modifiers = [];
 	if (event.getModifierState) {
 		if (event.getModifierState("Control"))
 			modifiers.push("control");

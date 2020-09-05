@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # This file is part of Xpra.
-# Copyright (C) 2013-2017 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2013-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -8,7 +8,7 @@ import sys
 import os
 
 from xpra.util import pver, print_nested_dict, engs, envbool, csv
-from xpra.os_util import bytestostr, strtobytes
+from xpra.os_util import bytestostr, strtobytes, POSIX
 from xpra.log import Logger
 
 log = Logger("encoder", "util")
@@ -16,7 +16,7 @@ log = Logger("encoder", "util")
 MIN_VERSION = 375
 
 nvml_init_warned = False
-def wrap_nvml_init(nvmlInit):
+def wrap_nvml_init(nvmlInit) -> bool:
     try:
         nvmlInit()
         return True
@@ -32,24 +32,28 @@ def wrap_nvml_init(nvmlInit):
 def get_nvml_driver_version():
     try:
         from pynvml import nvmlInit, nvmlShutdown, nvmlSystemGetDriverVersion
+    except ImportError as e:
+        log("cannot use nvml to query the kernel module version:")
+        log(" %s", e)
+    else:
         try:
             if wrap_nvml_init(nvmlInit):
-                v = nvmlSystemGetDriverVersion()
+                try:
+                    v = nvmlSystemGetDriverVersion()
+                finally:
+                    nvmlShutdown()
                 log("nvmlSystemGetDriverVersion=%s", bytestostr(v))
                 return v.split(b".")
         except Exception as e:
             log("get_nvml_driver_version() pynvml error", exc_info=True)
             log.warn("Warning: failed to query the NVidia kernel module version using NVML:")
             log.warn(" %s", e)
-        finally:
-            nvmlShutdown()
-    except ImportError as e:
-        log("cannot use nvml to query the kernel module version:")
-        log(" %s", e)
     return ()
 
 
 def get_proc_driver_version():
+    if not POSIX:
+        return ()
     from xpra.os_util import load_binary_file
     proc_file = "/proc/driver/nvidia/version"
     v = load_binary_file(proc_file)
@@ -272,7 +276,7 @@ def get_license_keys(version=0, basefilename="nvenc"):
                 with open(keys_file, "rb") as f:
                     fkeys = []
                     for line in f:
-                        sline = bytestostr(line.strip().rstrip(b'\r\n').strip())
+                        sline = line.strip().rstrip(b'\r\n').strip().decode("latin1")
                         if not sline:
                             log("skipping empty line")
                             continue

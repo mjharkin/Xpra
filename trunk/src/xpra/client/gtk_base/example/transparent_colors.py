@@ -1,43 +1,46 @@
 #!/usr/bin/env python
-# Copyright (C) 2017 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2017-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
+from xpra.platform import program_context
+from xpra.platform.gui import force_focus
+from xpra.gtk_common.gtk_util import add_close_accel, get_icon_pixbuf
+
 import cairo
+import gi
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gtk, Gdk, GLib
 
-from xpra.gtk_common.gobject_compat import import_gtk, is_gtk3
-from xpra.gtk_common.gtk_util import WIN_POS_CENTER, KEY_PRESS_MASK, add_close_accel
 
-gtk = import_gtk()
-
-
-class TransparentColorWindow(gtk.Window):
+class TransparentColorWindow(Gtk.Window):
 
     def __init__(self):
-        super(TransparentColorWindow, self).__init__()
-        self.set_position(WIN_POS_CENTER)
+        super().__init__()
+        self.set_title("Transparent Colors")
+        self.set_position(Gtk.WindowPosition.CENTER)
         self.set_default_size(320, 320)
+        icon = get_icon_pixbuf("encoding.png")
+        if icon:
+            self.set_icon(icon)
         screen = self.get_screen()
         visual = screen.get_rgba_visual()
-        if is_gtk3():
-            if visual and screen.is_composited():
-                self.set_visual(visual)
-            else:
-                print("transparency not available!")
+        if visual and screen.is_composited():
+            self.set_visual(visual)
         else:
-            colormap = screen.get_rgba_colormap()
-            if colormap:
-                self.set_colormap(colormap)
-            else:
-                print("transparency not available!")
+            print("transparency not available!")
         self.set_app_paintable(True)
-        self.set_events(KEY_PRESS_MASK)
-        if is_gtk3():
-            self.connect("draw", self.area_draw)
-        else:
-            self.connect("expose-event", self.do_expose_event)
-        self.connect("destroy", gtk.main_quit)
+        self.set_events(Gdk.EventMask.KEY_PRESS_MASK)
+        drawing_area = Gtk.DrawingArea()
+        drawing_area.connect("draw", self.area_draw)
+        self.add(drawing_area)
+        self.connect("destroy", Gtk.main_quit)
+
+    def show_with_focus(self):
+        force_focus()
         self.show_all()
+        super().present()
 
     def do_expose_event(self, *_args):
         cr = self.get_window().cairo_create()
@@ -48,7 +51,8 @@ class TransparentColorWindow(gtk.Window):
         #Clear everything:
         cr.save()
         cr.set_operator(cairo.OPERATOR_CLEAR)
-        w, h = widget.get_size()
+        alloc = widget.get_allocated_size()[0]
+        w, h = alloc.width, alloc.height
         cr.rectangle(0, 0, w, h)
         cr.fill()
         cr.restore()
@@ -62,7 +66,7 @@ class TransparentColorWindow(gtk.Window):
             #top and bottom thirds as a shade to transparent on the edges:
             shade_h = h//2//3
             for i in range(shade_h):
-                alpha = i/float(shade_h)
+                alpha = i/shade_h
                 cr.set_source_rgba(r, g, b, alpha)
                 cr.rectangle(x, y+i, x+w//2, 1)
                 cr.fill()
@@ -83,15 +87,21 @@ class TransparentColorWindow(gtk.Window):
         #Black block:
         paint_block("BLACK", w//2, h//2, 0, 0, 0)
 
-
 def main():
-    import signal
-    def signal_handler(*_args):
-        gtk.main_quit()
-    signal.signal(signal.SIGINT, signal_handler)
-    w = TransparentColorWindow()
-    add_close_accel(w, gtk.main_quit)
-    gtk.main()
+    from xpra.platform.gui import init, set_default_icon
+    with program_context("transparent-colors", "Transparent Colors"):
+        set_default_icon("encoding.png")
+        init()
+
+        import signal
+        def signal_handler(*_args):
+            Gtk.main_quit()
+        signal.signal(signal.SIGINT, signal_handler)
+        w = TransparentColorWindow()
+        add_close_accel(w, Gtk.main_quit)
+        GLib.idle_add(w.show_with_focus)
+        Gtk.main()
+        return 0
 
 
 if __name__ == "__main__":

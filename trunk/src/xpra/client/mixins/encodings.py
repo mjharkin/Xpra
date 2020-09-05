@@ -6,12 +6,12 @@
 
 import os
 
-from xpra.codecs.codec_constants import PREFERED_ENCODING_ORDER, PROBLEMATIC_ENCODINGS
+from xpra.codecs.codec_constants import PREFERRED_ENCODING_ORDER, PROBLEMATIC_ENCODINGS
 from xpra.codecs.loader import load_codec, codec_versions, has_codec, get_codec
 from xpra.codecs.video_helper import getVideoHelper, NO_GFX_CSC_OPTIONS
 from xpra.scripts.config import parse_bool_or_int
 from xpra.net import compression
-from xpra.util import envint, envbool, updict, csv
+from xpra.util import envint, envbool, updict, csv, typedict
 from xpra.client.mixins.stub_client_mixin import StubClientMixin
 from xpra.log import Logger
 
@@ -22,6 +22,10 @@ PAINT_FLUSH = envbool("XPRA_PAINT_FLUSH", True)
 MAX_SOFT_EXPIRED = envint("XPRA_MAX_SOFT_EXPIRED", 5)
 SEND_TIMESTAMPS = envbool("XPRA_SEND_TIMESTAMPS", False)
 VIDEO_MAX_SIZE = tuple(int(x) for x in os.environ.get("XPRA_VIDEO_MAX_SIZE", "4096,4096").replace("x", ",").split(","))
+SCROLL_ENCODING = envbool("XPRA_SCROLL_ENCODING", True)
+
+#we assume that any server will support at least those:
+DEFAULT_ENCODINGS = os.environ.get("XPRA_DEFAULT_ENCODINGS", "rgb32,rgb24,jpeg,png").split(",")
 
 
 """
@@ -32,7 +36,6 @@ class Encodings(StubClientMixin):
     def __init__(self):
         StubClientMixin.__init__(self)
         self.allowed_encodings = []
-        self.core_encodings = None
         self.encoding = None
         self.quality = -1
         self.min_quality = 0
@@ -47,13 +50,12 @@ class Encodings(StubClientMixin):
         self.server_encodings_with_speed = ()
         self.server_encodings_with_quality = ()
         self.server_encodings_with_lossless_mode = ()
-        self.server_auto_video_encoding = False
 
         #what we told the server about our encoding defaults:
         self.encoding_defaults = {}
 
 
-    def init(self, opts, _extra_args=()):
+    def init(self, opts):
         self.allowed_encodings = opts.encodings
         self.encoding = opts.encoding
         if opts.video_scaling.lower() in ("auto", "on"):
@@ -80,46 +82,72 @@ class Encodings(StubClientMixin):
     def cleanup(self):
         try:
             getVideoHelper().cleanup()
-        except Exception:
+        except Exception:   # pragma: no cover
             log.error("error on video cleanup", exc_info=True)
 
 
-    def get_caps(self):
+    def init_authenticated_packet_handlers(self):
+        self.add_packet_handler("encodings", self._process_encodings, False)
+
+
+    def _process_encodings(self, packet):
+        caps = typedict(packet[1])
+        self._parse_server_capabilities(caps)
+
+
+    def get_info(self):
+        return {
+            "encodings" : {
+                "core"          : self.get_core_encodings(),
+                "window-icon"   : self.get_window_icon_encodings(),
+                "cursor"        : self.get_cursor_encodings(),
+                "quality"       : self.quality,
+                "min-quality"   : self.min_quality,
+                "speed"         : self.speed,
+                "min-speed"     : self.min_speed,
+                "encoding"      : self.encoding or "auto",
+                "video-scaling" : self.video_scaling if self.video_scaling is not None else "auto",
+                },
+            "server-encodings"  : self.server_core_encodings,
+            }
+
+
+    def get_caps(self) -> dict:
         caps = {
-            #legacy (not needed in 1.0 - can be dropped soon):
-            "generic-rgb-encodings"     : True,
             "encodings"                 : self.get_encodings(),
             "encodings.core"            : self.get_core_encodings(),
             "encodings.window-icon"     : self.get_window_icon_encodings(),
             "encodings.cursor"          : self.get_cursor_encodings(),
+            "encodings.packet"          : True,
             }
         updict(caps, "batch",           self.get_batch_caps())
         updict(caps, "encoding",        self.get_encodings_caps())
         return caps
 
-    def parse_server_capabilities(self):
-        c = self.server_capabilities
-        self.server_encodings = c.strlistget("encodings")
-        self.server_core_encodings = c.strlistget("encodings.core", self.server_encodings)
+    def parse_server_capabilities(self, caps : typedict) -> bool:
+        self._parse_server_capabilities(caps)
+        return True
+
+    def _parse_server_capabilities(self, c):
+        self.server_encodings = c.strtupleget("encodings", DEFAULT_ENCODINGS)
+        self.server_core_encodings = c.strtupleget("encodings.core", self.server_encodings)
         #server is telling us to try to avoid those:
-        self.server_encodings_problematic = c.strlistget("encodings.problematic", PROBLEMATIC_ENCODINGS)
+        self.server_encodings_problematic = c.strtupleget("encodings.problematic", PROBLEMATIC_ENCODINGS)
         #old servers only supported x264:
-        self.server_encodings_with_speed = c.strlistget("encodings.with_speed", ("h264",))
-        self.server_encodings_with_quality = c.strlistget("encodings.with_quality", ("jpeg", "webp", "h264"))
-        self.server_encodings_with_lossless_mode = c.strlistget("encodings.with_lossless_mode", ())
-        self.server_auto_video_encoding = c.boolget("auto-video-encoding")
+        self.server_encodings_with_speed = c.strtupleget("encodings.with_speed", ("h264",))
+        self.server_encodings_with_quality = c.strtupleget("encodings.with_quality", ("jpeg", "webp", "h264"))
+        self.server_encodings_with_lossless_mode = c.strtupleget("encodings.with_lossless_mode", ())
         e = c.strget("encoding")
-        if e:
+        if e and not c.boolget("encodings.delayed"):
             if self.encoding and e!=self.encoding:
                 if self.encoding not in self.server_core_encodings:
                     log.warn("server does not support %s encoding and has switched to %s", self.encoding, e)
                 else:
                     log.info("server is using %s encoding instead of %s", e, self.encoding)
             self.encoding = e
-        return True
 
 
-    def get_batch_caps(self):
+    def get_batch_caps(self) -> dict:
         #batch options:
         caps = {}
         for bprop in ("always", "min_delay", "max_delay", "delay", "max_events", "max_pixels", "time_unit"):
@@ -132,25 +160,18 @@ class Encodings(StubClientMixin):
         log("get_batch_caps()=%s", caps)
         return caps
 
-    def get_encodings_caps(self):
+    def get_encodings_caps(self) -> dict:
         if B_FRAMES:
             video_b_frames = ("h264", ) #only tested with dec_avcodec2
         else:
             video_b_frames = ()
         caps = {
-            "flush"                     : PAINT_FLUSH,
-            "client_options"            : True,
-            "csc_atoms"                 : True,
-            #TODO: check for csc support (swscale only?)
-            "video_reinit"              : True,
-            "video_scaling"             : True,
+            "flush"                     : PAINT_FLUSH,      #v4 servers assume this is available
+            "video_scaling"             : True,             #v4 servers assume this is available
             "video_b_frames"            : video_b_frames,
             "video_max_size"            : self.video_max_size,
-            "webp_leaks"                : False,
-            "rgb24zlib"                 : True,
             "max-soft-expired"          : MAX_SOFT_EXPIRED,
             "send-timestamps"           : SEND_TIMESTAMPS,
-            "supports_delta"            : tuple(x for x in ("png", "rgb24", "rgb32") if x in self.get_core_encodings()),
             }
         if self.video_scaling is not None:
             caps["scaling.control"] = self.video_scaling
@@ -217,12 +238,9 @@ class Encodings(StubClientMixin):
         cenc = self.get_core_encodings()
         if ("rgb24" in cenc or "rgb32" in cenc) and "rgb" not in cenc:
             cenc.append("rgb")
-        return [x for x in PREFERED_ENCODING_ORDER if x in cenc and x not in ("rgb32", "rgb24")]
-
-    def get_core_encodings(self):
-        if self.core_encodings is None:
-            self.core_encodings = self.do_get_core_encodings()
-        return self.core_encodings
+        if "grayscale" not in cenc:
+            cenc.append("grayscale")
+        return [x for x in PREFERRED_ENCODING_ORDER if x in cenc and x not in ("rgb32", "rgb24")]
 
     def get_cursor_encodings(self):
         e = ["raw"]
@@ -236,7 +254,7 @@ class Encodings(StubClientMixin):
             e.append("png")
         return e
 
-    def do_get_core_encodings(self):
+    def get_core_encodings(self):
         """
             This method returns the actual encodings supported.
             ie: ["rgb24", "vp8", "webp", "png", "png/L", "png/P", "jpeg", "h264", "vpx"]
@@ -249,9 +267,13 @@ class Encodings(StubClientMixin):
         for codec in ("dec_pillow", "dec_webp", "dec_jpeg"):
             if has_codec(codec):
                 c = get_codec(codec)
-                for e in c.get_encodings():
+                encs = c.get_encodings()
+                log("%s.get_encodings()=%s", codec, encs)
+                for e in encs:
                     if e not in core_encodings:
                         core_encodings.append(e)
+        if SCROLL_ENCODING:
+            core_encodings.append("scroll")
         #we enable all the video decoders we know about,
         #what will actually get used by the server will still depend on the csc modes supported
         video_decodings = getVideoHelper().get_decodings()
@@ -260,14 +282,13 @@ class Encodings(StubClientMixin):
             if encoding not in core_encodings:
                 core_encodings.append(encoding)
         #remove duplicates and use prefered encoding order:
-        core_encodings = [x for x in PREFERED_ENCODING_ORDER
+        core_encodings = [x for x in PREFERRED_ENCODING_ORDER
                           if x in set(core_encodings) and x in self.allowed_encodings]
         return core_encodings
 
     def set_encoding(self, encoding):
         log("set_encoding(%s)", encoding)
         if encoding=="auto":
-            assert self.server_auto_video_encoding
             self.encoding = ""
         else:
             assert encoding in self.get_encodings(), "encoding %s is not supported!" % encoding
@@ -276,7 +297,7 @@ class Encodings(StubClientMixin):
                 log.error(" the only encodings allowed are:")
                 log.error(" %s", csv(self.server_encodings))
                 return
-        self.encoding = encoding
+            self.encoding = encoding
         self.send("encoding", self.encoding)
 
     def send_quality(self):

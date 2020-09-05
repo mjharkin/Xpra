@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -39,6 +39,11 @@ etc
 """
 class WindowsMixin(StubSourceMixin):
 
+    @classmethod
+    def is_needed(cls, caps : typedict) -> bool:
+        return caps.boolget("windows")
+
+
     def __init__(self):
         self.get_transient_for = None
         self.get_focus = None
@@ -46,6 +51,10 @@ class WindowsMixin(StubSourceMixin):
         self.get_window_id = None
         self.window_filters = []
         self.readonly = False
+        #duplicated from encodings:
+        self.global_batch_config = None
+        #duplicated from clientconnection:
+        self.statistics = None
 
     def init_from(self, _protocol, server):
         self.get_transient_for  = server.get_transient_for
@@ -66,7 +75,6 @@ class WindowsMixin(StubSourceMixin):
         self.send_bell = False
         self.send_windows = True
         self.pointer_grabs = False
-        self.window_initiate_moveresize = False
         self.window_min_size = 0, 0
         self.window_max_size = 0, 0
         self.system_tray = False
@@ -123,37 +131,33 @@ class WindowsMixin(StubSourceMixin):
 
 
     def parse_client_caps(self, c):
-        #self.ui_client = c.boolget("ui_client", True)
-        self.send_windows = self.ui_client and c.boolget("windows", True)
+        self.send_windows = c.boolget("ui_client", True) and c.boolget("windows", True)
         self.pointer_grabs = c.boolget("pointer.grabs")
         self.send_cursors = self.send_windows and c.boolget("cursors")
-        self.cursor_encodings = c.strlistget("encodings.cursor")
+        self.cursor_encodings = c.strtupleget("encodings.cursor")
         self.send_bell = c.boolget("bell")
-        self.window_initiate_moveresize = c.boolget("window.initiate-moveresize")
         self.system_tray = c.boolget("system_tray")
-        self.metadata_supported = c.strlistget("metadata.supported", DEFAULT_METADATA_SUPPORTED)
+        self.metadata_supported = c.strtupleget("metadata.supported", DEFAULT_METADATA_SUPPORTED)
         self.window_frame_sizes = typedict(c.dictget("window.frame_sizes", {}))
-        self.window_min_size = c.intlistget("window.min-size", (0, 0))
-        self.window_max_size = c.intlistget("window.max-size", (0, 0))
-        log("cursors=%s (encodings=%s), bell=%s, notifications=%s",
-            self.send_cursors, self.cursor_encodings, self.send_bell, self.send_notifications)
-        log("client uuid %s", self.uuid)
-
+        self.window_min_size = c.inttupleget("window.min-size", (0, 0))
+        self.window_max_size = c.inttupleget("window.max-size", (0, 0))
+        log("cursors=%s (encodings=%s), bell=%s",
+            self.send_cursors, self.cursor_encodings, self.send_bell)
         #window filters:
         try:
-            for object_name, property_name, operator, value in c.listget("window-filters"):
+            for object_name, property_name, operator, value in c.tupleget("window-filters"):
                 self.add_window_filter(object_name, property_name, operator, value)
         except Exception as e:
             filterslog.error("Error parsing window-filters: %s", e)
 
 
-    def get_caps(self):
+    def get_caps(self) -> dict:
         return {}
 
 
     ######################################################################
     # info:
-    def get_info(self):
+    def get_info(self) -> dict:
         info = {
             "windows"       : self.send_windows,
             "cursors"       : self.send_cursors,
@@ -171,7 +175,7 @@ class WindowsMixin(StubSourceMixin):
         info.update(self.get_window_info())
         return info
 
-    def get_window_info(self):
+    def get_window_info(self) -> dict:
         """
             Adds encoding and window specific information
         """
@@ -185,10 +189,13 @@ class WindowsMixin(StubSourceMixin):
                                "packet_queue"           : {"size" : {"current" : len(self.packet_queue)}},
                                "packet_queue_pixels"    : pqpi,
                                },
-                "batch"     : self.global_batch_config.get_info(),
-                }
-        info.update(self.statistics.get_info())
-
+            }
+        gbc = self.global_batch_config
+        if gbc:
+            info["batch"] = self.global_batch_config.get_info()
+        s = self.statistics
+        if s:
+            info.update(s.get_info())
         if self.window_sources:
             total_pixels = 0
             total_time = 0.0
@@ -231,8 +238,9 @@ class WindowsMixin(StubSourceMixin):
         if not self.send_cursors or self.suspended or not self.hello_sent:
             return
         #if not pending already, schedule it:
-        if not self.cursor_timer:
-            delay = max(10, int(self.global_batch_config.delay/4))
+        gbc = self.global_batch_config
+        if not self.cursor_timer and gbc:
+            delay = max(10, int(gbc.delay/4))
             self.cursor_timer = self.timeout_add(delay, self.do_send_cursor, delay)
 
     def cancel_cursor_timer(self):
@@ -256,7 +264,7 @@ class WindowsMixin(StubSourceMixin):
         self.last_cursor_sent = cursor_data[:9]
         w, h, _xhot, _yhot, serial, pixels, name = cursor_data[2:9]
         #compress pixels if needed:
-        encoding = None
+        encoding = "raw"
         if pixels is not None:
             #convert bytearray to string:
             cpixels = strtobytes(pixels)
@@ -283,9 +291,7 @@ class WindowsMixin(StubSourceMixin):
             cursor_data[7] = cpixels
         cursorlog("do_send_cursor(..) %sx%s %s cursor name='%s', serial=%#x with delay=%s (cursor_encodings=%s)",
                   w, h, (encoding or "empty"), bytestostr(name), serial, delay, self.cursor_encodings)
-        args = list(cursor_data[:9]) + [cursor_sizes[0]] + list(cursor_sizes[1])
-        if self.cursor_encodings and encoding:
-            args = [encoding] + args
+        args = [encoding] + list(cursor_data[:9]) + [cursor_sizes[0]] + list(cursor_sizes[1])
         self.send_more("cursor", *args)
 
     def send_empty_cursor(self):
@@ -344,7 +350,7 @@ class WindowsMixin(StubSourceMixin):
     ######################################################################
     # windows:
     def initiate_moveresize(self, wid, window, x_root, y_root, direction, button, source_indication):
-        if not self.can_send_window(window) or not self.window_initiate_moveresize:
+        if not self.can_send_window(window):
             return
         log("initiate_moveresize sending to %s", self)
         self.send("initiate-moveresize", wid, x_root, y_root, direction, button, source_indication)
@@ -558,10 +564,13 @@ class WindowsMixin(StubSourceMixin):
         if not self.can_send_window(window):
             return
         assert window is not None
-        damage_options = {}
         if options:
             damage_options = options.copy()
-        self.statistics.damage_last_events.append((wid, monotonic_time(), w*h))
+        else:
+            damage_options = {}
+        s = self.statistics
+        if s:
+            s.damage_last_events.append((wid, monotonic_time(), w*h))
         ws = self.make_window_source(wid, window)
         ws.damage(x, y, w, h, damage_options)
 

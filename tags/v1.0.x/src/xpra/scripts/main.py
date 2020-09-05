@@ -22,8 +22,8 @@ from xpra import __version__ as XPRA_VERSION
 from xpra.platform.dotxpra import DotXpra
 from xpra.platform.features import LOCAL_SERVERS_SUPPORTED, SHADOW_SUPPORTED, CAN_DAEMONIZE
 from xpra.platform.options import add_client_options
-from xpra.util import csv, envbool, envint, DEFAULT_PORT
-from xpra.os_util import getuid, getgid, is_Ubuntu, getUbuntuVersion
+from xpra.util import csv, envbool, envint, DEFAULT_PORT, unsetenv
+from xpra.os_util import getuid, getgid, is_Ubuntu, getUbuntuVersion, pollwait
 from xpra.scripts.config import OPTION_TYPES, \
     InitException, InitInfo, InitExit, \
     fixup_debug_option, fixup_options, dict_to_validated_config, \
@@ -135,12 +135,22 @@ def main(script_file, cmdline):
         log = Logger("util")
         log(msg, exc_info=True)
 
+    #some environment variables cause us problems if set:
+    unsetenv("GDK_SCALE")
+
     if envbool("XPRA_NOMD5", False):
         import hashlib
         def nomd5(*_args):
             raise ValueError("md5 support is disabled")
         hashlib.algorithms_available.remove("md5")
         hashlib.md5 = nomd5
+
+    #turn off gdk scaling to make sure we get the actual window geometry:
+    os.environ["GDK_SCALE"]="1"
+    #client side decorations break window geometry,
+    #disable this "feature" unless explicitly enabled:
+    if os.environ.get("GTK_CSD") is None:
+        os.environ["GTK_CSD"] = "0"
 
     try:
         try:
@@ -1195,7 +1205,18 @@ def run_mode(script_file, error_cb, options, args, mode, defaults):
                 systemd_run = False
             else:
                 from xpra.os_util import is_systemd_pid1
-                systemd_run = is_systemd_pid1()
+                if is_systemd_pid1():
+                    cmd = ["systemd-run", "--quiet", "--user", "--scope", "--", "true"]
+                    proc = Popen(cmd, stdin=None, stdout=None, stderr=None, shell=False)
+                    r = pollwait(proc, timeout=1)
+                    if r is None:
+                        try:
+                            proc.terminate()
+                        except:
+                            pass
+                    systemd_run = r==0
+                else:
+                    systemd_run = False
         if systemd_run:
             #check if we have wrapped it already (or if disabled via env var)
             wrapit = envbool("XPRA_SYSTEMD_RUN", True)

@@ -8,14 +8,18 @@ import time
 import unittest
 
 from xpra.util import AdHocStruct
-from unit.server.mixins.servermixintest_util import ServerMixinTest
 from xpra.server.source.stub_source_mixin import StubSourceMixin
+from xpra.server.mixins.logging_server import LoggingServer
+from unit.server.mixins.servermixintest_util import ServerMixinTest
 
+
+class nostr():
+    def __str__(self):
+        raise Exception("test format failure")
 
 class InputMixinTest(ServerMixinTest):
 
     def test_logging(self):
-        from xpra.server.mixins.logging_server import LoggingServer
         opts = AdHocStruct()
         opts.remote_logging = "yes"
         log_messages = []
@@ -34,6 +38,19 @@ class InputMixinTest(ServerMixinTest):
         message = log_messages[0]
         assert message[0]==10
         assert message[1].endswith("hello")
+        #multi-part:
+        self.handle_packet(("logging", 20, ["multi", "messages"], time.time()))
+        #invalid:
+        self.handle_packet(("logging", 20, nostr(), time.time()))
+
+
+    def test_invalid(self):
+        l = LoggingServer()
+        opts = AdHocStruct()
+        opts.remote_logging = "on"
+        l.init(opts)
+        l._process_logging(None, None)  #pylint: disable=protected-access
+
 
 def main():
     unittest.main()

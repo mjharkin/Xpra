@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # This file is part of Xpra.
-# Copyright (C) 2014-2017 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2014-2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -9,19 +9,13 @@ import sys
 
 #default implementation uses pycups
 from xpra.util import envbool, print_nested_dict
-from xpra.os_util import WIN32, PYTHON3
+from xpra.os_util import WIN32
 from xpra.log import Logger
 
 log = Logger("printing")
 
 RAW_MODE = envbool("XPRA_PRINTER_RAW", False)
 
-if PYTHON3:
-    unicode = str       #@ReservedAssignment
-
-
-def err(*args, **kwargs):
-    log.error(*args, **kwargs)
 
 def get_printers():
     return {}
@@ -99,8 +93,8 @@ if not WIN32:
         assert get_printers and print_files and printing_finished and init_printing, cleanup_printing
     except Exception as e:
         log("cannot load pycups", exc_info=True)
-        err("Error: printing disabled:")
-        err(" %s", e)
+        log.warn("Warning: printer forwarding disabled:")
+        log.warn(" %s", e)
         del e
 
 platform_import(globals(), "printing", False,
@@ -114,17 +108,17 @@ platform_import(globals(), "printing", False,
                 "DEFAULT_MIMETYPES")
 
 
-def main():
-    if "-v" in sys.argv or "--verbose" in sys.argv:
+def main(argv):
+    if "-v" in argv or "--verbose" in argv:
         from xpra.log import add_debug_category, enable_debug_for
         add_debug_category("printing")
         enable_debug_for("printing")
         try:
-            sys.argv.remove("-v")
+            argv.remove("-v")
         except ValueError:
             pass
         try:
-            sys.argv.remove("--verbose")
+            argv.remove("--verbose")
         except ValueError:
             pass
 
@@ -134,8 +128,8 @@ def main():
         try:
             for pk,pv in d.items():
                 try:
-                    if isinstance(pv, unicode):
-                        sv = pv.encode("utf8")
+                    if isinstance(pv, bytes):
+                        sv = pv.decode("utf8")
                     else:
                         sv = nonl(pver(pv))
                 except Exception as e:
@@ -168,7 +162,7 @@ def main():
         except Exception as e:
             print("Error: initializing the printing tool")
             print(" %s" % e)
-        if len(sys.argv)<=1:
+        if len(argv)<=1:
             dump_printers(get_printers())
             print("")
             dump_info(get_info())
@@ -177,8 +171,8 @@ def main():
         if not printers:
             print("Cannot print: no printers found")
             return 1
-        if len(sys.argv)==2:
-            filename = sys.argv[1]
+        if len(argv)==2:
+            filename = argv[1]
             if not os.path.exists(filename):
                 print("Cannot print file '%s': file does not exist" % filename)
                 return 1
@@ -189,20 +183,20 @@ def main():
                     print("More than one printer found: %s", csv(printer.keys()))
             print("Using printer '%s'" % printer)
             filenames = [filename]
-        if len(sys.argv)>2:
-            printer = sys.argv[1]
+        if len(argv)>2:
+            printer = argv[1]
             if printer not in printers:
                 print("Invalid printer '%s'" % printer)
                 return 1
-            filenames = sys.argv[2:]
+            filenames = argv[2:]
             for filename in filenames:
                 if not os.path.exists(filename):
                     print("File '%s' does not exist" % filename)
                     return 1
         print("Printing: %s" % csv(filenames))
         print_files(printer, filenames, "Print Command", {})
-        return 0
+    return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv))

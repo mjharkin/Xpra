@@ -28,8 +28,8 @@ class TestMotion(unittest.TestCase):
 
 	def do_calculate_distances(self, rect, array1, array2, min_hits=2, max_distance=1000):
 		sd = motion.ScrollData(*rect)
-		sd._test_update(array1)
-		sd._test_update(array2)
+		sd.test_update(array1)
+		sd.test_update(array2)
 		sd.calculate(max_distance)
 		return sd.get_scroll_values(min_hits)
 
@@ -42,22 +42,23 @@ class TestMotion(unittest.TestCase):
 			line_defs = scrolls.get(distance)
 			assert line_defs, "distance %i not found in scroll data: %s for a1=%s, a2=%s" % (distance, scrolls, a1, a2)
 			linecount = sum(line_defs.values())
-			assert linecount==matches, "expected %i matches for distance=%i but got %i for a1=%s, a2=%s, result=%s" % (matches, distance, linecount, a1, a2, line_defs)
-		for N in (1, 10, 100):
+			assert linecount==matches, "expected %i matches for distance=%i but got %i for a1=%s, a2=%s, result=%s" % (
+				matches, distance, linecount, a1, a2, line_defs)
+		for N in (motion.MIN_LINE_COUNT+1, 10, 100):
 			a = range(1, N+1)
 			t(a, a, 0, N)		#identity: all match
 
 			a = [1]*N
 			t(a, a, 0, N)
 
-		#from a1 to a2: shift by 2, get 2 hits
-		t([3, 4, 5, 6], [1, 2, 3, 4], 2, 2)
-		#from a2 to a1: shift by -2, get 2 hits
-		t([1, 2, 3, 4], [3, 4, 5, 6], -2, 2)
+		#from a1 to a2: shift by 2, get 6 hits
+		t([3, 4, 5, 6, 7, 8, 9, 10], [1, 2, 3, 4, 5, 6, 7, 8], 2, 6)
+		#from a2 to a1: shift by -2, get 6 hits
+		t([1, 2, 3, 4, 5, 6, 7, 8], [3, 4, 5, 6, 7, 8, 9, 10], -2, 6)
 		N = 100
 		S = 1
 		a1 = range(S, S+N)
-		for M in (2, 3, 10, 100):
+		for M in (motion.MIN_LINE_COUNT, motion.MIN_LINE_COUNT+1, motion.MIN_LINE_COUNT+10, 90):
 			a2 = range(M, M+N)
 			t(a1, a2, S-M, S+N-M)
 			t(a2, a1, M-S, S+N-M)
@@ -107,24 +108,9 @@ class TestMotion(unittest.TestCase):
 		#W, H, BPP = 2, 4, 4
 		LEN = W * H * BPP
 		import numpy as np
-		try:
-			na1 = np.random.randint(255, size=LEN, dtype="uint8")
-		except TypeError as e:
-			#older numpy version may not have dtype argument..
-			#and may not accept 64-bit values
-			print("skipping motion detection test")
-			print(" because of incompatible numpy version: %s" % e)
-			try:
-				print(" numpy %s" % np.version.version)
-			except:
-				pass
-			return
+		na1 = np.random.randint(255, size=LEN, dtype="uint8")
 		def tobytes(a):
-			try:
-				return a.tobytes()
-			except:
-				#older versions of numpy (ie: centos7)
-				return a.tostring()
+			return a.tobytes()
 		buf1 = tobytes(na1)
 		#push first image:
 		sd = motion.ScrollData(0, 0, W, H)
@@ -154,13 +140,12 @@ class TestMotion(unittest.TestCase):
 			linecount = sum(line_defs.values())
 			assert linecount>0, "could not find distance %i in %s" % (N, line_defs)
 			assert linecount == (H-N), "expected to match %i lines but got %i" % (H-N, linecount)
-		if False:
-			import binascii
-			log("na1:\n%s" % binascii.hexlify(tobytes(na1)))
-			log("na2:\n%s" % binascii.hexlify(tobytes(na2)))
-			np.set_printoptions(threshold=np.inf)
-			log("na1:\n%s" % (na1, ))
-			log("na2:\n%s" % (na2, ))
+		#import binascii
+		#log("na1:\n%s" % binascii.hexlify(tobytes(na1)))
+		#log("na2:\n%s" % binascii.hexlify(tobytes(na2)))
+		#np.set_printoptions(threshold=np.inf)
+		#log("na1:\n%s" % (na1, ))
+		#log("na2:\n%s" % (na2, ))
 
 	def test_csum_data(self):
 		a1=[
@@ -202,27 +187,28 @@ class TestMotion(unittest.TestCase):
 			17157005122993541799, 5218869126146608853, 13274228147453099388, 16342723934713827717, 2435034235422505275, 3689766606612767057, 13721141386368216492, 14859793948180065358,
 			]
 		#distances = motion.scroll_distances(a1[100:400], a2[100:400], 2, 1000)
-		sd = motion.ScrollData(0, 0, 1050, len(a1))
-		sd._test_update(a1)
-		sd._test_update(a2)
+		x, y, w = 0, 0, 1050
+		h = len(a1)
+		sd = motion.ScrollData(x, y, w, h)
+		sd.test_update(a1)
+		sd.test_update(a2)
 		sd.calculate(1000)
 		scroll, count = sd.get_best_match()
-		wh = len(a1)
 		log("best match: %s" % ((scroll, count),))
-		x, y, w, h = 0, 0, 1050, 1151
 		raw_scroll, non_scroll = sd.get_scroll_values()
 		assert len(non_scroll)>0
 		scrolls = []
 		def hexstr(v):
 			return hex(v).lstrip("0x").rstrip("L")
-		for i in range(wh):
+		for i in range(h):
 			log("%2i:	%16s	%16s" % (i, hexstr(a1[i]), hexstr(a2[i])))
 		for scroll, line_defs in raw_scroll.items():
 			if scroll==0:
 				continue
 			for line, count in line_defs.items():
 				assert y+line+scroll>=0, "cannot scroll rectangle by %i lines from %i+%i" % (scroll, y, line)
-				assert y+line+scroll<=wh, "cannot scroll rectangle %i high by %i lines from %i+%i (window height is %i)" % (count, scroll, y, line, wh)
+				assert y+line+scroll<=h, "cannot scroll rectangle %i high by %i lines from %i+%i (window height is %i)" % (
+					count, scroll, y, line, h)
 				scrolls.append((x, y+line, w, count, 0, scroll))
 
 

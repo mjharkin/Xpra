@@ -26,6 +26,8 @@ REPAINT_ALL = os.environ.get("XPRA_REPAINT_ALL", "")
 SIMULATE_MOUSE_DOWN = envbool("XPRA_SIMULATE_MOUSE_DOWN", True)
 PROPERTIES_DEBUG = [x.strip() for x in os.environ.get("XPRA_WINDOW_PROPERTIES_DEBUG", "").split(",")]
 
+WIN32 = sys.platform.startswith("win")
+
 
 class ClientWindowBase(ClientWidgetBase):
 
@@ -399,6 +401,9 @@ class ClientWindowBase(ClientWidgetBase):
             v = size_constraints.intpair(a)
             if v:
                 v1, v2 = v
+                if a==b"maximum-size" and v1>=32000 and v2>=32000 and WIN32:
+                    #causes problems, see #2714
+                    continue
                 hints[h1], hints[h2] = self._client.sp(v1, v2)
         for (a, h) in [
             (b"minimum-aspect-ratio", b"min_aspect"),

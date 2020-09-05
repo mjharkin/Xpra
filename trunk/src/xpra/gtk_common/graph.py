@@ -1,15 +1,11 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2012, 2013 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2012-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import math
-
-from xpra.gtk_common.gobject_compat import import_gdk, import_cairo
-
-gdk = import_gdk()
-cairo = import_cairo()
+import cairo
 
 DEFAULT_COLOURS = ((0.8, 0, 0), (0, 0, 0.8), (0.1, 0.65, 0.1), (0, 0.6, 0.6), (0.1, 0.1, 0.1))
 
@@ -30,11 +26,7 @@ def make_graph_imagesurface(data, labels=None, width=320, height=200, title=None
                       colours=DEFAULT_COLOURS, dots=False, curves=True):
     #print("make_graph_pixmap(%s, %s, %s, %s, %s, %s, %s, %s, %s)" % (data, labels, width, height, title,
     #                  show_y_scale, show_x_scale, min_y_scale, colours))
-    try:
-        fmt = cairo.Format.RGB24
-    except AttributeError:
-        fmt = cairo.FORMAT_RGB24
-    surface = cairo.ImageSurface(fmt, width, height)
+    surface = cairo.ImageSurface(cairo.Format.RGB24, width, height)  #pylint: disable=no-member
     y_label_chars = 4
     x_offset = y_label_chars*8
     y_offset = 20
@@ -43,7 +35,7 @@ def make_graph_imagesurface(data, labels=None, width=320, height=200, title=None
     #inner dimensions (used for graph only)
     w = width - x_offset
     h = height - y_offset*2
-    context = cairo.Context(surface)
+    context = cairo.Context(surface)  #pylint: disable=no-member
     #fill with white:
     context.rectangle(0, 0, width, height)
     context.set_source_rgb(1, 1, 1)

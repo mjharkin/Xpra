@@ -1,21 +1,23 @@
 # This file is part of Xpra.
 # Copyright (C) 2010 Nathaniel Smith <njs@pobox.com>
-# Copyright (C) 2011-2017 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2011-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 # Platform-specific code for Win32.
 #pylint: disable=bare-except
 
+import sys
+if not sys.platform.startswith("win"):
+    raise ImportError("not to be used on %s" % sys.platform)
+
 import errno
 import os.path
-import sys
 import ctypes
-from ctypes import WINFUNCTYPE, WinDLL, POINTER, byref, c_int
+from ctypes import WINFUNCTYPE, WinDLL, POINTER, byref, c_int, wintypes, create_unicode_buffer
 from ctypes.wintypes import BOOL, HANDLE, DWORD, LPWSTR, LPCWSTR, LPVOID, POINT, WORD, SMALL_RECT
 
 from xpra.util import envbool
-from xpra.os_util import PYTHON2, PYTHON3
 from xpra.platform.win32 import constants as win32con
 from xpra.platform.win32.common import (
     GetStdHandle,
@@ -44,31 +46,40 @@ REDIRECT_OUTPUT = envbool("XPRA_REDIRECT_OUTPUT", frozen is True and GetConsoleC
 if frozen:
     #cx_freeze paths:
     PATH = os.environ.get("PATH", "").split(os.pathsep)
-    edir = os.path.dirname(sys.executable)
-    def jedir(*paths):
-        return os.path.join(*([edir]+list(paths)))
-    def addsyspath(*paths):
-        v = jedir(*paths)
-        if os.path.exists(v):
-            if v not in sys.path:
-                sys.path.append(v)
-            if os.path.isdir(v) and v not in PATH:
-                PATH.append(v)
-    addsyspath('')
-    addsyspath('lib')
-    os.environ['GI_TYPELIB_PATH'] = jedir('lib', 'girepository-1.0')
+    edir = os.path.abspath(os.path.dirname(sys.executable))
+    libdir = os.path.join(edir, "lib")
+    for d in (libdir, edir):
+        if not os.path.exists(d) or not os.path.isdir(d):
+            continue
+        try:
+            sys.path.remove(d)
+        except:
+            pass
+        sys.path.insert(0, d)
+        try:
+            PATH.remove(d)
+        except:
+            pass
+        PATH.insert(0, d)
+    os.environ['GI_TYPELIB_PATH'] = os.path.join(libdir, "girepository-1.0")
     os.environ["PATH"] = os.pathsep.join(PATH)
+    if not os.environ.get("GTK_THEME") and not os.environ.get("GTK_DEBUG"):
+        for theme in ("Windows-10", "win32"):
+            tdir = os.path.join(edir, "share", "themes", theme)
+            if os.path.exists(tdir):
+                os.environ["GTK_THEME"] = theme
+                break
 
-#don't know why this breaks with Python 3 yet...
-FIX_UNICODE_OUT = envbool("XPRA_FIX_UNICODE_OUT", not REDIRECT_OUTPUT and PYTHON2)
+if REDIRECT_OUTPUT:
+    FIX_UNICODE_OUT = False
+else:
+    #don't know why this breaks with Python 3 yet...
+    FIX_UNICODE_OUT = envbool("XPRA_FIX_UNICODE_OUT", False)
 
 
 def is_wine():
     try:
-        try:
-            import _winreg as winreg
-        except ImportError:
-            import winreg   #@UnresolvedImport @Reimport
+        import winreg   #@UnresolvedImport @Reimport
         hKey = winreg.OpenKey(win32con.HKEY_LOCAL_MACHINE, r"Software\\Wine")   #@UndefinedVariable
         return hKey is not None
     except:
@@ -77,15 +88,35 @@ def is_wine():
     return False
 
 
+def get_csidl_folder(csidl):
+    try:
+        buf = create_unicode_buffer(wintypes.MAX_PATH)
+        shell32 = WinDLL("shell32", use_last_error=True)
+        SHGetFolderPath = shell32.SHGetFolderPathW
+        SHGetFolderPath(0, csidl, None, 0, buf)
+        return buf.value
+    except:
+        return None
+
+def get_common_startmenu_dir():
+    CSIDL_COMMON_STARTMENU = 0x16
+    return get_csidl_folder(CSIDL_COMMON_STARTMENU)
+
+def get_startmenu_dir():
+    CSIDL_STARTMENU = 0xb
+    return get_csidl_folder(CSIDL_STARTMENU)
+
+def get_commonappdata_dir():
+    CSIDL_COMMON_APPDATA = 35
+    return get_csidl_folder(CSIDL_COMMON_APPDATA)
+
+
 prg_name = "Xpra"
 def set_prgname(name):
     global prg_name
     prg_name = name
     try:
         SetConsoleTitleA(name)
-        if PYTHON2:
-            import glib     #@UnresolvedImport
-            glib.set_prgname(name)
     except:
         pass
 
@@ -96,10 +127,6 @@ def not_a_console(handle):
             or GetConsoleMode(handle, byref(DWORD())) == 0)
 
 def fix_unicode_out():
-    if PYTHON3:
-        _unicode = str
-    else:
-        _unicode = unicode  #@UndefinedVariable
     #code found here:
     #http://stackoverflow.com/a/3259271/428751
     import codecs
@@ -191,11 +218,11 @@ def fix_unicode_out():
                 def write(self, text):
                     try:
                         if self._hConsole is None:
-                            if isinstance(text, _unicode):
+                            if isinstance(text, str):
                                 text = text.encode('utf-8')
                             self._stream.write(text)
                         else:
-                            if not isinstance(text, _unicode):
+                            if not isinstance(text, str):
                                 text = str(text).decode('utf-8')
                             remaining = len(text)
                             while remaining:
@@ -332,9 +359,13 @@ def do_init():
         if not log_filename:
             from xpra.platform.win32.paths import _get_data_dir
             from xpra.platform import get_prgname
-            log_filename = os.path.join(_get_data_dir(False), (get_prgname() or "Xpra")+".log")
+            data_dir = _get_data_dir(False)
+            if not os.path.exists(data_dir):
+                os.mkdir(data_dir)
+            log_filename = os.path.join(data_dir, (get_prgname() or "Xpra")+".log")
         sys.stdout = open(log_filename, "a")
         sys.stderr = sys.stdout
+        os.environ["XPRA_LOG_FILENAME"] = log_filename
 
 
 MB_ICONEXCLAMATION  = 0x00000030

@@ -1,11 +1,12 @@
 # This file is part of Xpra.
-# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008, 2010 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import os
 import sys
+import uuid
 import signal
 import socket
 import string
@@ -14,6 +15,7 @@ from xpra.log import Logger
 from xpra.scripts.config import InitExit
 from xpra.child_reaper import getChildReaper, reaper_cleanup
 from xpra.net import compression
+from xpra.net.common import may_log_packet, PACKET_TYPES
 from xpra.net.protocol_classes import get_client_protocol_class
 from xpra.net.protocol import Protocol, sanity_checks
 from xpra.net.net_util import get_network_caps
@@ -26,14 +28,14 @@ from xpra.net.crypto import (
 from xpra.version_util import get_version_info, XPRA_VERSION
 from xpra.platform.info import get_name
 from xpra.os_util import (
-    get_machine_id, get_user_uuid,
-    load_binary_file, force_quit,
-    SIGNAMES, PYTHON3, BITS,
+    get_machine_id, get_user_uuid, register_SIGUSR_signals,
+    filedata_nocrlf, force_quit,
+    SIGNAMES, BITS,
     strtobytes, bytestostr, hexstr, monotonic_time, use_tty,
     )
 from xpra.util import (
-    flatten_dict, typedict, updict, parse_simple_dict,
-    repr_ellipsized,nonl,
+    flatten_dict, typedict, updict, parse_simple_dict, noerr,
+    repr_ellipsized, ellipsizer, nonl,
     envbool, envint, disconnect_is_an_error, dump_all_frames, engs, csv, obsc,
     )
 from xpra.client.mixins.serverinfo_mixin import ServerInfoMixin
@@ -73,6 +75,8 @@ def noop():
 """
 class XpraClientBase(ServerInfoMixin, FilePrintMixin):
 
+    INSTALL_SIGNAL_HANDLERS = True
+
     def __init__(self):
         #this may be called more than once,
         #skip doing internal init again:
@@ -94,6 +98,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         self.exit_code = None
         self.exit_on_signal = False
         self.display_desc = {}
+        self.progress_process = None
         #connection attributes:
         self.hello_extra = {}
         self.compression_level = 0
@@ -119,16 +124,16 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         self._mouse_position_delay = MOUSE_DELAY
         self._mouse_position_timer = 0
         self._aliases = {}
-        self._reverse_aliases = {}
         #server state and caps:
-        self.server_capabilities = None
+        self.connection_established = False
         self.completed_startup = False
         self.uuid = get_user_uuid()
+        self.session_id = uuid.uuid4().hex
         self.init_packet_handlers()
         self.have_more = noop
         sanity_checks()
 
-    def init(self, opts, _extra_args=()):
+    def init(self, opts):
         if self._init_done:
             #the gtk client classes can inherit this method
             #from multiple parents, skip initializing twice
@@ -142,10 +147,28 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         self.password = opts.password
         self.password_file = opts.password_file
         self.encryption = opts.encryption or opts.tcp_encryption
-        if self.encryption:
-            crypto_backend_init()
         self.encryption_keyfile = opts.encryption_keyfile or opts.tcp_encryption_keyfile
         self.init_challenge_handlers(opts.challenge_handlers)
+        self.init_aliases()
+        if self.INSTALL_SIGNAL_HANDLERS:
+            self.install_signal_handlers()
+
+
+    def show_progress(self, pct, text=""):
+        log("progress(%s, %s)", pct, text)
+        pp = self.progress_process
+        if not pp:
+            return
+        if pp.poll():
+            self.progress_process = None
+            return
+        noerr(pp.stdin.write, ("%i:%s\n" % (pct, text)).encode("latin1"))
+        noerr(pp.stdin.flush)
+        if pct==100:
+            #it should exit on its own, but just in case:
+            #kill it if it's still running after 2 seconds
+            self.timeout_add(2000, self.stop_progress_process)
+
 
     def init_challenge_handlers(self, challenge_handlers):
         #register the authentication challenge handlers:
@@ -155,7 +178,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         for ch_name in ch:
             if ch_name=="none":
                 continue
-            elif ch_name=="all":
+            if ch_name=="all":
                 items = ALL_AUTH_HANDLERS
                 ierror = authlog
             else:
@@ -209,6 +232,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         sys.stderr.flush()
         self.cleanup()
         force_quit(128 + signum)
+
     def handle_app_signal(self, signum, _frame=None):
         try:
             log.info("exiting")
@@ -225,12 +249,13 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
             try:
                 sys.stderr.write("\n")
                 sys.stderr.flush()
-                log.info("got signal %s", SIGNAMES.get(signum, signum))
+                log.info("client got signal %s", SIGNAMES.get(signum, signum))
             except Exception:
                 pass
             self.handle_app_signal(signum)
         signal.signal(signal.SIGINT, os_signal)
         signal.signal(signal.SIGTERM, os_signal)
+        register_SIGUSR_signals(self.idle_add)
 
     def signal_disconnect_and_quit(self, exit_code, reason):
         log("signal_disconnect_and_quit(%s, %s) exit_on_signal=%s", exit_code, reason, self.exit_on_signal)
@@ -275,7 +300,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         sys.exit()
 
 
-    def client_type(self):
+    def client_type(self) -> str:
         #overriden in subclasses!
         return "Python"
 
@@ -287,26 +312,29 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         if conn.socktype=="udp":
             self.add_packet_handler("udp-control", self._process_udp_control, False)
         protocol_class = get_client_protocol_class(conn.socktype)
-        self._protocol = protocol_class(self.get_scheduler(), conn, self.process_packet, self.next_packet)
+        protocol = protocol_class(self.get_scheduler(), conn, self.process_packet, self.next_packet)
+        self._protocol = protocol
         for x in (b"keymap-changed", b"server-settings", b"logging", b"input-devices"):
-            self._protocol.large_packets.append(x)
-        self._protocol.set_compression_level(self.compression_level)
-        self._protocol.receive_aliases.update(self._aliases)
-        self._protocol.enable_default_encoder()
-        self._protocol.enable_default_compressor()
-        if self.encryption and ENCRYPT_FIRST_PACKET:
+            protocol.large_packets.append(x)
+        protocol.set_compression_level(self.compression_level)
+        protocol.receive_aliases.update(self._aliases)
+        protocol.enable_default_encoder()
+        protocol.enable_default_compressor()
+        encryption = self.get_encryption()
+        if encryption and ENCRYPT_FIRST_PACKET:
             key = self.get_encryption_key()
-            self._protocol.set_cipher_out(self.encryption,
-                                          DEFAULT_IV, key, DEFAULT_SALT, DEFAULT_ITERATIONS, INITIAL_PADDING)
-        self.have_more = self._protocol.source_has_more
+            protocol.set_cipher_out(encryption,
+                                    DEFAULT_IV, key, DEFAULT_SALT, DEFAULT_ITERATIONS, INITIAL_PADDING)
+        self.have_more = protocol.source_has_more
         if conn.timeout>0:
             self.timeout_add((conn.timeout + EXTRA_TIMEOUT) * 1000, self.verify_connected)
-        process = getattr(conn, "process", None)        #ie: ssh is handled by anotherprocess
+        process = getattr(conn, "process", None)        #ie: ssh is handled by another process
         if process:
             proc, name, command = process
             if proc:
                 getChildReaper().add_process(proc, name, command, ignore=True, forget=False)
-        netlog("setup_connection(%s) protocol=%s", conn, self._protocol)
+        netlog("setup_connection(%s) protocol=%s", conn, protocol)
+        return protocol
 
     def _process_udp_control(self, packet):
         #send it back to the protocol object:
@@ -314,18 +342,18 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
 
 
     def init_aliases(self):
-        packet_types = list(self._packet_handlers.keys())
-        packet_types += list(self._ui_packet_handlers.keys())
         i = 1
-        for key in packet_types:
+        for key in PACKET_TYPES:
             self._aliases[i] = key
-            self._reverse_aliases[key] = i
             i += 1
 
-    def has_password(self):
+    def has_password(self) -> bool:
         return self.password or self.password_file or os.environ.get('XPRA_PASSWORD')
 
     def send_hello(self, challenge_response=None, client_salt=None):
+        if not self._protocol:
+            log("send_hello(..) skipped, no protocol (listen mode?)")
+            return
         try:
             hello = self.make_hello_base()
             if self.has_password() and not challenge_response:
@@ -354,7 +382,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         self.send("hello", hello)
 
     def verify_connected(self):
-        if self.server_capabilities is None:
+        if not self.connection_established:
             #server has not said hello yet
             self.warn_and_quit(EXIT_TIMEOUT, "connection timed out")
 
@@ -369,11 +397,10 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         capabilities.update(FilePrintMixin.get_caps(self))
         capabilities.update({
                 "version"               : XPRA_VERSION,
-                "encoding.generic"      : True,
-                "namespace"             : True,
                 "websocket.multi-packet": True,
                 "hostname"              : socket.gethostname(),
                 "uuid"                  : self.uuid,
+                "session-id"            : self.session_id,
                 "username"              : self.username,
                 "name"                  : get_name(),
                 "client_type"           : self.client_type(),
@@ -391,14 +418,16 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         mid = get_machine_id()
         if mid:
             capabilities["machine_id"] = mid
-        if self.encryption:
-            assert self.encryption in ENCRYPTION_CIPHERS
+        encryption = self.get_encryption()
+        if encryption:
+            crypto_backend_init()
+            assert encryption in ENCRYPTION_CIPHERS, "invalid encryption '%s', options: %s" % (encryption, csv(ENCRYPTION_CIPHERS))
             iv = get_iv()
             key_salt = get_salt()
             iterations = get_iterations()
             padding = choose_padding(self.server_padding_options)
             up("cipher", {
-                    ""                      : self.encryption,
+                    ""                      : encryption,
                     "iv"                    : iv,
                     "key_salt"              : key_salt,
                     "key_stretch_iterations": iterations,
@@ -406,15 +435,12 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
                     "padding.options"       : PADDING_OPTIONS,
                     })
             key = self.get_encryption_key()
-            if key is None:
-                self.warn_and_quit(EXIT_ENCRYPTION, "encryption key is missing")
-                return None
-            self._protocol.set_cipher_in(self.encryption, iv, key, key_salt, iterations, padding)
+            self._protocol.set_cipher_in(encryption, iv, key, key_salt, iterations, padding)
             netlog("encryption capabilities: %s", dict((k,v) for k,v in capabilities.items() if k.startswith("cipher")))
         capabilities.update(self.hello_extra)
         return capabilities
 
-    def get_version_info(self):
+    def get_version_info(self) -> dict:
         return get_version_info()
 
     def make_hello(self):
@@ -422,21 +448,24 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
                         "randr_notify"        : False,        #only client.py cares about this
                         "windows"            : False,        #only client.py cares about this
                        }
-        if self._reverse_aliases:
-            capabilities["aliases"] = self._reverse_aliases
+        if self._aliases:
+            reverse_aliases = {}
+            for i, packet_type in self._aliases.items():
+                reverse_aliases[packet_type] = i
+            capabilities["aliases"] = reverse_aliases
         return capabilities
 
     def compressed_wrapper(self, datatype, data, level=5):
-        #ugly assumptions here, should pass by name
-        zlib = "zlib" in self.server_compressors and compression.use_zlib
-        lz4 = "lz4" in self.server_compressors and compression.use_lz4
-        lzo = "lzo" in self.server_compressors and compression.use_lzo
-        brotli = False
-        #never use brotli as a generic compressor
-        #brotli = "brotli" in self.server_compressors and compression.use_brotli
-        if level>0 and len(data)>=256 and (zlib or lz4 or lzo):
+        if level>0 and len(data)>=256:
+            #ugly assumptions here, should pass by name
+            zlib = "zlib" in self.server_compressors
+            lz4 = "lz4" in self.server_compressors
+            lzo = "lzo" in self.server_compressors
+            #never use brotli as a generic compressor
+            #brotli = "brotli" in self.server_compressors and compression.use_brotli
             cw = compression.compressed_wrapper(datatype, data, level=level,
-                                                zlib=zlib, lz4=lz4, lzo=lzo, brotli=brotli,
+                                                zlib=zlib, lz4=lz4, lzo=lzo,
+                                                brotli=False, none=True,
                                                 can_inline=False)
             if len(cw)<len(data):
                 #the compressed version is smaller, use it:
@@ -510,9 +539,25 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         return packet, None, None, None, synchronous, has_more
 
 
+    def stop_progress_process(self):
+        pp = self.progress_process
+        if not pp:
+            return
+        self.progress_process = None
+        if pp.poll():
+            return
+        try:
+            pp.terminate()
+        except Exception:
+            pass
+
     def cleanup(self):
+        self.stop_progress_process()
         reaper_cleanup()
-        FilePrintMixin.cleanup(self)
+        try:
+            FilePrintMixin.cleanup(self)
+        except Exception:
+            log.error("%s", FilePrintMixin.cleanup, exc_info=True)
         p = self._protocol
         log("XpraClientBase.cleanup() protocol=%s", p)
         if p:
@@ -526,11 +571,13 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
 
     def glib_init(self):
         #this will take care of calling threads_init if needed:
-        from xpra.gtk_common.gobject_compat import import_glib
-        import_glib()
+        from gi.repository import GLib
+        register_SIGUSR_signals(GLib.idle_add)
 
     def run(self):
-        self._protocol.start()
+        #protocol may be None in "listen" mode
+        if self._protocol:
+            self._protocol.start()
 
     def quit(self, exit_code=0):
         raise Exception("override me!")
@@ -548,7 +595,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         #ie: ("disconnect", "version error", "incompatible version")
         info = tuple(nonl(bytestostr(x)) for x in packet[1:])
         reason = info[0]
-        if not self.server_capabilities:
+        if not self.connection_established:
             #server never sent hello to us - so disconnect is an error
             #(but we don't know which one - the info message may help)
             self.server_disconnect_warning("disconnected before the session could be established", *info)
@@ -579,11 +626,11 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         if p and p.input_raw_packetcount==0:
             props = p.get_info()
             c = props.get("compression", "unknown")
-            e = props.get("encoder", "unknown")
+            e = props.get("encoder", "rencode")
             netlog.error("Error: failed to receive anything, not an xpra server?")
             netlog.error("  could also be the wrong protocol, username, password or port")
             netlog.error("  or the session was not found")
-            if c!="unknown" or e!="unknown":
+            if c!="unknown" or e!="rencode":
                 netlog.error("  or maybe this server does not support '%s' compression or '%s' packet encoding?", c, e)
         if self.exit_code is None:
             self.warn_and_quit(EXIT_CONNECTION_LOST, "Connection lost")
@@ -637,6 +684,20 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
             authlog("password read from tty via getpass: %s", obsc(password))
             self.send_challenge_reply(packet, password)
             return True
+        else:
+            from xpra.platform.paths import get_nodock_command
+            cmd = get_nodock_command()+["_pass", prompt]
+            try:
+                from subprocess import Popen, PIPE
+                proc = Popen(cmd, stdout=PIPE)
+                getChildReaper().add_process(proc, "password-prompt", cmd, True, True)
+                out, err = proc.communicate(None, 60)
+                authlog("err(%s)=%s", cmd, err)
+                password = out.decode()
+                self.send_challenge_reply(packet, password)
+                return True
+            except Exception:
+                log("Error: failed to show GUi for password prompt", exc_info=True)
         return False
 
     def auth_error(self, code, message, server_message="authentication failed"):
@@ -690,18 +751,16 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
                 self.auth_error(EXIT_PASSWORD_REQUIRED,
                                 "this server requires authentication and no password is available")
             return
-        server_salt = bytestostr(packet[1])
-        if self.encryption:
+        encryption = self.get_encryption()
+        if encryption:
             assert len(packet)>=3, "challenge does not contain encryption details to use for the response"
             server_cipher = typedict(packet[2])
             key = self.get_encryption_key()
-            if key is None:
-                self.auth_error(EXIT_ENCRYPTION, "the server does not use any encryption", "client requires encryption")
-                return
             if not self.set_server_encryption(server_cipher, key):
                 return
         #all server versions support a client salt,
         #they also tell us which digest to use:
+        server_salt = bytestostr(packet[1])
         digest = bytestostr(packet[3])
         actual_digest = digest.split(":", 1)[0]
         l = len(server_salt)
@@ -742,10 +801,10 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         padding = caps.strget("cipher.padding", DEFAULT_PADDING)
         #server may tell us what it supports,
         #either from hello response or from challenge packet:
-        self.server_padding_options = caps.strlistget("cipher.padding.options", [DEFAULT_PADDING])
+        self.server_padding_options = caps.strtupleget("cipher.padding.options", (DEFAULT_PADDING,))
         if not cipher or not cipher_iv:
             self.warn_and_quit(EXIT_ENCRYPTION,
-                               "the server does not use or support encryption/password, cannot continue with %s cipher" % self.encryption)
+                               "the server does not use or support encryption/password, cannot continue")
             return False
         if cipher not in ENCRYPTION_CIPHERS:
             self.warn_and_quit(EXIT_ENCRYPTION,
@@ -762,21 +821,42 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         return True
 
 
+    def get_encryption(self):
+        conn = self._protocol._conn
+        #prefer the socket option, fallback to "--encryption=" option:
+        encryption = conn.options.get("encryption", self.encryption)
+        cryptolog("get_encryption() connection options encryption=%s", encryption)
+        #specifying keyfile or keydata is enough:
+        if not encryption and any(conn.options.get(x) for x in ("encryption-keyfile", "keyfile", "keydata")):
+            cryptolog("found keyfile or keydata attribute, enabling 'AES' encryption")
+            encryption = "AES"
+        return encryption
+
     def get_encryption_key(self):
-        key = None
-        if self.encryption_keyfile and os.path.exists(self.encryption_keyfile):
-            key = load_binary_file(self.encryption_keyfile)
-            cryptolog("get_encryption_key() loaded %i bytes from '%s'", len(key or ""), self.encryption_keyfile)
-        else:
-            cryptolog("get_encryption_key() file '%s' does not exist", self.encryption_keyfile)
-        if not key:
-            XPRA_ENCRYPTION_KEY = "XPRA_ENCRYPTION_KEY"
-            key = strtobytes(os.environ.get(XPRA_ENCRYPTION_KEY, ''))
-            cryptolog("get_encryption_key() got %i bytes from '%s' environment variable",
-                      len(key or ""), XPRA_ENCRYPTION_KEY)
-        if not key:
-            raise InitExit(1, "no encryption key")
-        return key.strip(b"\n\r")
+        conn = self._protocol._conn
+        key = conn.options.get("keydata", None)
+        cryptolog("get_encryption_key() connection options keydata=%s", key)
+        if key:
+            #may be specified as hex:
+            if key.lower().startswith("0x"):
+                import binascii
+                return binascii.unhexlify(key[2:])
+            return strtobytes(key)
+        keyfile = conn.options.get("encryption-keyfile") or conn.options.get("keyfile") or self.encryption_keyfile
+        if keyfile:
+            if os.path.exists(keyfile):
+                key = filedata_nocrlf(keyfile)
+                cryptolog("get_encryption_key() loaded %i bytes from '%s'",
+                          len(key or ""), keyfile)
+                return key
+            cryptolog("get_encryption_key() file '%s' does not exist", keyfile)
+        XPRA_ENCRYPTION_KEY = "XPRA_ENCRYPTION_KEY"
+        key = strtobytes(os.environ.get(XPRA_ENCRYPTION_KEY, ''))
+        cryptolog("get_encryption_key() got %i bytes from '%s' environment variable",
+                  len(key or ""), XPRA_ENCRYPTION_KEY)
+        if key:
+            return key.strip(b"\n\r")
+        raise InitExit(1, "no encryption key")
 
     def _process_hello(self, packet):
         self.remove_packet_handlers("challenge")
@@ -784,69 +864,60 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
             self.warn_and_quit(EXIT_NO_AUTHENTICATION, "the server did not request our password")
             return
         try:
-            self.server_capabilities = typedict(packet[1])
-            netlog("processing hello from server: %s", repr_ellipsized(str(self.server_capabilities)))
-            if not self.server_connection_established():
+            caps = typedict(packet[1])
+            netlog("processing hello from server: %s", ellipsizer(caps))
+            if not self.server_connection_established(caps):
                 self.warn_and_quit(EXIT_FAILURE, "failed to establish connection")
+            else:
+                self.connection_established = True
         except Exception as e:
             netlog.info("error in hello packet", exc_info=True)
             self.warn_and_quit(EXIT_FAILURE, "error processing hello packet from server: %s" % e)
 
-    def capsget(self, capabilities, key, default):
-        v = capabilities.get(strtobytes(key), default)
-        if PYTHON3 and isinstance(v, bytes):
-            v = bytestostr(v)
-        return v
 
-
-    def server_connection_established(self):
-        netlog("server_connection_established()")
-        if not self.parse_encryption_capabilities():
-            netlog("server_connection_established() failed encryption capabilities")
+    def server_connection_established(self, caps : typedict) -> bool:
+        netlog("server_connection_established(..)")
+        if not self.parse_encryption_capabilities(caps):
+            netlog("server_connection_established(..) failed encryption capabilities")
             return False
-        if not self.parse_server_capabilities():
-            netlog("server_connection_established() failed server capabilities")
+        if not self.parse_server_capabilities(caps):
+            netlog("server_connection_established(..) failed server capabilities")
             return False
-        if not self.parse_network_capabilities():
-            netlog("server_connection_established() failed network capabilities")
+        if not self.parse_network_capabilities(caps):
+            netlog("server_connection_established(..) failed network capabilities")
             return False
-        #raise packet size if required:
-        if self.file_transfer:
-            self._protocol.max_packet_size = max(self._protocol.max_packet_size, self.file_size_limit*1024*1024)
-        netlog("server_connection_established() adding authenticated packet handlers")
+        netlog("server_connection_established(..) adding authenticated packet handlers")
         self.init_authenticated_packet_handlers()
-        self.init_aliases()
         return True
 
 
-    def parse_server_capabilities(self):
+    def parse_server_capabilities(self, caps : typedict) -> bool:
         for c in XpraClientBase.__bases__:
-            if not c.parse_server_capabilities(self):
+            if not c.parse_server_capabilities(self, caps):
                 return False
-        self.server_client_shutdown = self.server_capabilities.boolget("client-shutdown", True)
-        self.server_compressors = self.server_capabilities.strlistget("compressors", ["zlib"])
+        self.server_client_shutdown = caps.boolget("client-shutdown", True)
+        self.server_compressors = caps.strtupleget("compressors", ("zlib",))
         return True
 
-    def parse_network_capabilities(self):
-        c = self.server_capabilities
+    def parse_network_capabilities(self, caps : typedict) -> bool:
         p = self._protocol
-        if not p or not p.enable_encoder_from_caps(c):
+        if not p or not p.enable_encoder_from_caps(caps):
             return False
-        p.enable_compressor_from_caps(c)
+        p.enable_compressor_from_caps(caps)
         p.accept()
-        p.parse_remote_caps(c)
+        p.parse_remote_caps(caps)
         return True
 
-    def parse_encryption_capabilities(self):
-        c = self.server_capabilities
+    def parse_encryption_capabilities(self, caps : typedict) -> bool:
         p = self._protocol
         if not p:
             return False
-        if self.encryption:
+        encryption = self.get_encryption()
+        if encryption:
             #server uses a new cipher after second hello:
             key = self.get_encryption_key()
             assert key, "encryption key is missing"
-            if not self.set_server_encryption(c, key):
+            if not self.set_server_encryption(caps, key):
                 return False
         return True
 
@@ -861,7 +932,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
 
 
     def _process_gibberish(self, packet):
-        log("process_gibberish(%s)", repr_ellipsized(packet))
+        log("process_gibberish(%s)", ellipsizer(packet))
         message, data = packet[1:3]
         p = self._protocol
         show_as_text = p and p.input_packetcount==0 and all(c in string.printable for c in bytestostr(data))
@@ -885,7 +956,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
     def _process_invalid(self, packet):
         message, data = packet[1:3]
         netlog.info("Received invalid packet: %s", message)
-        netlog(" data: %s", repr_ellipsized(data))
+        netlog(" data: %s", ellipsizer(data))
         self.quit(EXIT_PACKET_FAILURE)
 
 
@@ -935,15 +1006,18 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
             packet_type = packet[0]
             if packet_type!=int:
                 packet_type = bytestostr(packet_type)
+            def call_handler():
+                may_log_packet(False, packet_type, packet)
+                handler(packet)
             handler = self._packet_handlers.get(packet_type)
             if handler:
-                handler(packet)
+                call_handler()
                 return
             handler = self._ui_packet_handlers.get(packet_type)
             if not handler:
                 netlog.error("unknown packet type: %s", packet_type)
                 return
-            self.idle_add(handler, packet)
+            self.idle_add(call_handler)
         except Exception:
             netlog.error("Unhandled error while processing a '%s' packet from peer using %s",
                          packet_type, handler, exc_info=True)

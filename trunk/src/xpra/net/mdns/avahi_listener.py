@@ -42,7 +42,7 @@ class AvahiListener:
 
     def service_resolved(self, interface, protocol, name, stype, domain, host, x, address, port, text_array, v):
         log("AvahiListener.service_resolved%s",
-		(interface, protocol, name, stype, domain, host, x, address, port, "..", v))
+        (interface, protocol, name, stype, domain, host, x, address, port, "..", v))
         if self.mdns_add:
             #parse text data:
             text = {}
@@ -114,10 +114,9 @@ def main():
     loop_init()
     listener = AvahiListener(XPRA_MDNS_TYPE, mdns_found, mdns_add, mdns_remove)
     try:
-        from xpra.gtk_common.gobject_compat import import_glib
-        glib = import_glib()
-        glib.idle_add(listener.start)
-        glib.MainLoop().run()
+        from gi.repository import GLib
+        GLib.idle_add(listener.start)
+        GLib.MainLoop().run()
     finally:
         listener.stop()
 

@@ -30,7 +30,7 @@ NRECS = 100
 TARGET_LATENCY_TOLERANCE = envint("XPRA_TARGET_LATENCY_TOLERANCE", 20)/1000.0
 
 
-class WindowPerformanceStatistics(object):
+class WindowPerformanceStatistics:
     """
     Statistics which belong to a specific WindowSource
     """
@@ -65,6 +65,7 @@ class WindowPerformanceStatistics(object):
         self.packet_count = 0
 
         self.last_resized = 0
+        self.last_packet_time = 0
 
         #these values are calculated from the values above (see update_averages)
         self.target_latency = self.DEFAULT_TARGET_LATENCY
@@ -164,7 +165,7 @@ class WindowPerformanceStatistics(object):
         return factors
 
 
-    def get_info(self):
+    def get_info(self) -> dict:
         info = {"damage"    : {"events"         : self.damage_events_count,
                                "packets_sent"   : self.packet_count,
                                "target-latency" : int(1000*self.target_latency),
@@ -234,7 +235,7 @@ class WindowPerformanceStatistics(object):
             sent_before = monotonic_time()-(self.target_latency+TARGET_LATENCY_TOLERANCE)
             dropped_acks_time = monotonic_time()-60      #1 minute
             drop_missing_acks = []
-            for sequence, item in self.damage_ack_pending.items():
+            for sequence, item in tuple(self.damage_ack_pending.items()):
                 start_send_at = item[0]
                 end_send_at = item[3]
                 if end_send_at==0 or start_send_at>sent_before:

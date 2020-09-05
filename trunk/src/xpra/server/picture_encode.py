@@ -50,8 +50,13 @@ def rgb_encode(coding, image, rgb_formats, supports_transparency, speed, rgb_zli
     #    (coding, image, rgb_formats, supports_transparency, speed, rgb_zlib, rgb_lz4), pixel_format, rgb_formats)
     if pixel_format not in rgb_formats:
         log("rgb_encode reformatting because %s not in %s", pixel_format, rgb_formats)
-        if not rgb_reformat(image, rgb_formats, supports_transparency):
-            raise Exception("cannot find compatible rgb format to use for %s! (supported: %s)" % (pixel_format, rgb_formats))
+        if coding=="rgb24":
+            fmts = tuple(x for x in rgb_formats if len(x)==3)
+        else:
+            fmts = tuple(x for x in rgb_formats if len(x)==4)
+        if not rgb_reformat(image, fmts, supports_transparency):
+            raise Exception("cannot find compatible rgb format to use for %s! (supported: %s, from: %s)" % (
+                pixel_format, fmts, rgb_formats))
         #get the new format:
         pixel_format = bytestostr(image.get_pixel_format())
         #switch encoding if necessary:
@@ -61,9 +66,8 @@ def rgb_encode(coding, image, rgb_formats, supports_transparency, speed, rgb_zli
             coding = "rgb24"
         else:
             raise Exception("invalid pixel format %s" % pixel_format)
-    else:
-        #we may still want to re-stride:
-        image.may_restride()
+    #we may still want to re-stride:
+    image.may_restride()
     #always tell client which pixel format we are sending:
     options = {"rgb_format" : pixel_format}
 
@@ -87,20 +91,11 @@ def rgb_encode(coding, image, rgb_formats, supports_transparency, speed, rgb_zli
             #and use a lower level (max=5)
             level = max(0, min(5, int(115-speed)//20))
     if level>0:
-        if rgb_lz4 and compression.use_lz4:
-            cwrapper = compression.compressed_wrapper(coding, pixels, lz4=True, level=level)
-            algo = "lz4"
-            level = 1
-        elif rgb_lzo and compression.use_lzo:
-            cwrapper = compression.compressed_wrapper(coding, pixels, lzo=True)
-            algo = "lzo"
-            level = 1
-        elif rgb_zlib and compression.use_zlib:
-            cwrapper = compression.compressed_wrapper(coding, pixels, zlib=True, level=level//2)
-            algo = "zlib"
-        else:
-            cwrapper = None
-        if cwrapper is None or len(cwrapper)>=(len(pixels)-32):
+        cwrapper = compression.compressed_wrapper(coding, pixels, level=level,
+                                                  zlib=rgb_zlib, lz4=rgb_lz4, lzo=rgb_lzo,
+                                                  brotli=False, none=True)
+        algo = cwrapper.algorithm
+        if algo=="none" or len(cwrapper)>=(len(pixels)-32):
             #no compression is enabled, or compressed is actually bigger!
             #(fall through to uncompressed)
             level = 0

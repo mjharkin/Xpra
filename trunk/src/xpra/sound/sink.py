@@ -1,33 +1,33 @@
 #!/usr/bin/env python
 # This file is part of Xpra.
-# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import sys
 from collections import deque
 from threading import Lock
+from gi.repository import GObject
 
 from xpra.sound.sound_pipeline import SoundPipeline
-from xpra.gtk_common.gobject_util import one_arg_signal, gobject
+from xpra.gtk_common.gobject_util import one_arg_signal
 from xpra.sound.gstreamer_util import (
     plugin_str, get_decoder_elements,
     get_queue_time, normv, get_decoders,
-    get_default_sink, get_sink_plugins,
+    get_default_sink_plugin, get_sink_plugins,
     MP3, CODEC_ORDER, gst, QUEUE_LEAK,
     GST_QUEUE_NO_LEAK, MS_TO_NS, DEFAULT_SINK_PLUGIN_OPTIONS,
+    GST_FLOW_OK,
     )
-from xpra.gtk_common.gobject_compat import import_glib
 from xpra.net.compression import decompress_by_name
 from xpra.scripts.config import InitExit
 from xpra.util import csv, envint, envbool
-from xpra.os_util import thread, monotonic_time
+from xpra.os_util import monotonic_time
+from xpra.make_thread import start_thread
 from xpra.log import Logger
 
 log = Logger("sound")
 gstlog = Logger("gstreamer")
-
-glib = import_glib()
 
 
 SINK_SHARED_DEFAULT_ATTRIBUTES = {"sync"    : False,
@@ -68,7 +68,7 @@ class SoundSink(SoundPipeline):
 
     def __init__(self, sink_type=None, sink_options=None, codecs=(), codec_options=None, volume=1.0):
         if not sink_type:
-            sink_type = get_default_sink()
+            sink_type = get_default_sink_plugin()
         if sink_type not in get_sink_plugins():
             raise InitExit(1, "invalid sink: %s" % sink_type)
         matching = [x for x in CODEC_ORDER if (x in codecs and x in get_decoders())]
@@ -78,7 +78,7 @@ class SoundSink(SoundPipeline):
                 csv(codecs), csv(get_decoders().keys())))
         codec = matching[0]
         decoder, parser, stream_compressor = get_decoder_elements(codec)
-        SoundPipeline.__init__(self, codec)
+        super().__init__(codec)
         self.container_format = (parser or "").replace("demux", "").replace("depay", "")
         self.sink_type = sink_type
         self.stream_compressor = stream_compressor
@@ -171,13 +171,13 @@ class SoundSink(SoundPipeline):
 
     def start_adjust_volume(self, interval=100):
         if self.volume_timer!=0:
-            glib.source_remove(self.volume_timer)
+            self.source_remove(self.volume_timer)
         self.volume_timer = self.timeout_add(interval, self.adjust_volume)
         return False
 
     def cancel_volume_timer(self):
         if self.volume_timer!=0:
-            glib.source_remove(self.volume_timer)
+            self.source_remove(self.volume_timer)
             self.volume_timer = 0
 
 
@@ -213,7 +213,7 @@ class SoundSink(SoundPipeline):
         now = monotonic_time()
         if self.queue_state=="starting" or 1000*(now-self.start_time)<GRACE_PERIOD:
             gstlog("ignoring underrun during startup")
-            return 1
+            return True
         self.underruns += 1
         gstlog("queue_underrun")
         self.queue_state = "underrun"
@@ -228,7 +228,7 @@ class SoundSink(SoundPipeline):
                 self.set_max_level()
                 self.set_min_level()
         self.emit_info()
-        return 1
+        return True
 
     def get_level_range(self, mintime=2, maxtime=10):
         now = monotonic_time()
@@ -238,13 +238,13 @@ class SoundSink(SoundPipeline):
             minl = min(filtered)
             #range of the levels recorded:
             return maxl-minl
-        return 0
+        return GST_FLOW_OK
 
     def queue_overrun(self, *_args):
         now = monotonic_time()
         if self.queue_state=="starting" or 1000*(now-self.start_time)<GRACE_PERIOD:
             gstlog("ignoring overrun during startup")
-            return 1
+            return True
         clt = self.queue.get_property("current-level-time")//MS_TO_NS
         log("queue_overrun level=%ims", clt)
         now = monotonic_time()
@@ -256,7 +256,7 @@ class SoundSink(SoundPipeline):
             self.set_max_level()
             self.overrun_events.append(now)
         self.overruns += 1
-        return 1
+        return True
 
     def set_min_level(self):
         if not self.queue:
@@ -339,9 +339,9 @@ class SoundSink(SoundPipeline):
         if self.src:
             self.src.emit('end-of-stream')
         self.cleanup()
-        return 0
+        return GST_FLOW_OK
 
-    def get_info(self):
+    def get_info(self) -> dict:
         info = SoundPipeline.get_info(self)
         if QUEUE_TIME>0 and self.queue:
             clt = self.queue.get_property("current-level-time")
@@ -415,7 +415,7 @@ class SoundSink(SoundPipeline):
                 d = normv(d)
                 if d>0:
                     buf.duration = normv(d)
-        if self.push_buffer(buf):
+        if self.push_buffer(buf)==GST_FLOW_OK:
             self.inc_buffer_count()
             self.inc_byte_count(len(data))
             return True
@@ -438,18 +438,19 @@ class SoundSink(SoundPipeline):
         #buf.offset_end = offset_end
         #buf.set_caps(gst.caps_from_string(caps))
         r = self.src.emit("push-buffer", buf)
-        if r!=gst.FlowReturn.OK:
-            if self.queue_state != "error":
-                log.error("Error pushing buffer: %s", r)
-                self.update_state("error")
-                self.emit('error', "push-buffer error: %s" % r)
-            return 0
+        if r==gst.FlowReturn.OK:
+            return r
+        if self.queue_state!="error":
+            log.error("Error pushing buffer: %s", r)
+            self.update_state("error")
+            self.emit('error', "push-buffer error: %s" % r)
         return 1
 
-gobject.type_register(SoundSink)
+GObject.type_register(SoundSink)
 
 
 def main():
+    from gi.repository import GLib
     from xpra.platform import program_context
     with program_context("Sound-Record"):
         args = sys.argv
@@ -494,16 +495,16 @@ def main():
         ss = SoundSink(codecs=codecs)
         def eos(*args):
             print("eos%s" % (args,))
-            glib.idle_add(glib_mainloop.quit)
+            GLib.idle_add(glib_mainloop.quit)
         ss.connect("eos", eos)
         ss.start()
 
-        glib_mainloop = glib.MainLoop()
+        glib_mainloop = GLib.MainLoop()
 
         import signal
         def deadly_signal(*_args):
-            glib.idle_add(ss.stop)
-            glib.idle_add(glib_mainloop.quit)
+            GLib.idle_add(ss.stop)
+            GLib.idle_add(glib_mainloop.quit)
             def force_quit(_sig, _frame):
                 sys.exit()
             signal.signal(signal.SIGINT, force_quit)
@@ -515,12 +516,12 @@ def main():
             qtime = ss.queue.get_property("current-level-time")//MS_TO_NS
             if qtime<=0:
                 log.info("underrun (end of stream)")
-                thread.start_new_thread(ss.stop, ())        #@UndefinedVariable
-                glib.timeout_add(500, glib_mainloop.quit)
+                start_thread(ss.stop, "stop", daemon=True)
+                GLib.timeout_add(500, glib_mainloop.quit)
                 return False
             return True
-        glib.timeout_add(1000, check_for_end)
-        glib.idle_add(ss.add_data, data)
+        GLib.timeout_add(1000, check_for_end)
+        GLib.idle_add(ss.add_data, data)
 
         glib_mainloop.run()
         return 0

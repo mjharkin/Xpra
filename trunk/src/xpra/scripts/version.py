@@ -4,9 +4,6 @@
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-from xpra.scripts.config import python_platform
-#only imported to make sure we can get hold of a reference to the real "platform" module
-assert python_platform
 from xpra.version_util import get_version_info, get_platform_info, get_host_info
 from xpra.util import print_nested_dict
 
@@ -31,7 +28,8 @@ def main():
         from xpra.platform.info import get_version_info as pvinfo
         d.update(pvinfo())
         print_nested_dict(d)
+    return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()

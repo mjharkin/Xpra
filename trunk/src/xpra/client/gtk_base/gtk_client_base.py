@@ -1,46 +1,40 @@
 # This file is part of Xpra.
 # Copyright (C) 2011 Serviware (Arthur Huillet, <ahuillet@serviware.com>)
-# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008, 2010 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import os
 import weakref
+from gi.repository import Gtk, Gdk, GdkPixbuf
 
-from xpra.gtk_common.gobject_compat import import_gobject, import_gtk, import_gdk, import_pango, is_gtk3
 from xpra.client.gtk_base.gtk_client_window_base import HAS_X11_BINDINGS, XSHAPE
-from xpra.gtk_common.quit import gtk_main_quit_really, gtk_main_quit_on_fatal_exceptions_enable
 from xpra.util import (
-    updict, pver, iround, flatten_dict, envbool, repr_ellipsized, csv, first_time,
+    updict, pver, iround, flatten_dict,
+    envbool, envint, repr_ellipsized, csv, first_time, typedict,
     DEFAULT_METADATA_SUPPORTED, XPRA_OPENGL_NOTIFICATION_ID,
     )
 from xpra.os_util import (
     bytestostr, strtobytes, hexstr, monotonic_time,
-    WIN32, OSX, POSIX, PYTHON3, is_Wayland,
+    WIN32, OSX, POSIX, is_Wayland,
     )
 from xpra.simple_stats import std_unit
 from xpra.exit_codes import EXIT_PASSWORD_REQUIRED
 from xpra.scripts.config import TRUE_OPTIONS, FALSE_OPTIONS
 from xpra.gtk_common.cursor_names import cursor_types
 from xpra.gtk_common.gtk_util import (
-    get_gtk_version_info, scaled_image, get_default_cursor, color_parse, gtk_main,
-    new_Cursor_for_display, new_Cursor_from_pixbuf, icon_theme_get_default,
-    pixbuf_new_from_file, display_get_default, screen_get_default, get_pixbuf_from_data,
-    get_default_root_window, get_root_size, get_xwindow, image_new_from_stock,
-    get_screen_sizes, load_contents_async, load_contents_finish, GDKWindow,
-    FILE_CHOOSER_ACTION_OPEN,
-    CLASS_INPUT_ONLY,
-    RESPONSE_CANCEL, RESPONSE_OK, RESPONSE_ACCEPT, RESPONSE_REJECT,
-    INTERP_BILINEAR, WINDOW_TOPLEVEL, DIALOG_MODAL, DESTROY_WITH_PARENT, MESSAGE_INFO,
-    BUTTONS_CLOSE, ICON_SIZE_BUTTON, GRAB_STATUS_STRING,
-    BUTTON_PRESS_MASK, BUTTON_RELEASE_MASK, POINTER_MOTION_MASK, POINTER_MOTION_HINT_MASK,
-    ENTER_NOTIFY_MASK, LEAVE_NOTIFY_MASK,
+    get_gtk_version_info, scaled_image, get_default_cursor, color_parse,
+    get_pixbuf_from_data,
+    get_default_root_window, get_root_size,
+    get_screen_sizes, GDKWindow,
+    GRAB_STATUS_STRING,
     )
 from xpra.gtk_common.gobject_util import no_arg_signal
 from xpra.client.ui_client_base import UIXpraClient
 from xpra.client.gobject_client_base import GObjectXpraClient
 from xpra.client.gtk_base.gtk_keyboard_helper import GTKKeyboardHelper
+from xpra.client.gtk_base.css_overrides import inject_css_overrides
 from xpra.client.mixins.window_manager import WindowClient
 from xpra.platform.paths import get_icon_filename
 from xpra.platform.gui import (
@@ -49,14 +43,11 @@ from xpra.platform.gui import (
     )
 from xpra.log import Logger
 
-gobject = import_gobject()
-gtk = import_gtk()
-gdk = import_gdk()
-
 log = Logger("gtk", "client")
 opengllog = Logger("gtk", "opengl")
 cursorlog = Logger("gtk", "client", "cursor")
 framelog = Logger("gtk", "client", "frame")
+screenlog = Logger("gtk", "client", "screen")
 filelog = Logger("gtk", "client", "file")
 clipboardlog = Logger("gtk", "client", "clipboard")
 notifylog = Logger("gtk", "notify")
@@ -65,10 +56,17 @@ grablog = Logger("client", "grab")
 missing_cursor_names = set()
 
 METADATA_SUPPORTED = os.environ.get("XPRA_METADATA_SUPPORTED")
-USE_LOCAL_CURSORS = envbool("XPRA_USE_LOCAL_CURSORS", True)
+#on win32, the named cursors work, but they are hard to see
+#when using the Adwaita theme
+USE_LOCAL_CURSORS = envbool("XPRA_USE_LOCAL_CURSORS", not WIN32 and not is_Wayland())
 EXPORT_ICON_DATA = envbool("XPRA_EXPORT_ICON_DATA", True)
 SAVE_CURSORS = envbool("XPRA_SAVE_CURSORS", False)
 CLIPBOARD_NOTIFY = envbool("XPRA_CLIPBOARD_NOTIFY", True)
+OPENGL_MIN_SIZE = envint("XPRA_OPENGL_MIN_SIZE", 32)
+NO_OPENGL_WINDOW_TYPES = os.environ.get("XPRA_NO_OPENGL_WINDOW_TYPES",
+                                        "DOCK,TOOLBAR,MENU,UTILITY,SPLASH,DROPDOWN_MENU,POPUP_MENU,TOOLTIP,NOTIFICATION,COMBO,DND").split(",")
+
+inject_css_overrides()
 
 
 class GTKXpraClient(GObjectXpraClient, UIXpraClient):
@@ -98,6 +96,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         self.last_clipboard_notification = 0
         #opengl bits:
         self.client_supports_opengl = False
+        self.opengl_force = False
         self.opengl_enabled = False
         self.opengl_props = {}
         self.gl_max_viewport_dims = 0, 0
@@ -126,13 +125,13 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         #query the window manager to get the frame size:
         from xpra.gtk_common.error import xsync
         from xpra.x11.gtk_x11.send_wm import send_wm_request_frame_extents
-        self.frame_request_window = gtk.Window(type=WINDOW_TOPLEVEL)
+        self.frame_request_window = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
         self.frame_request_window.set_title("Xpra-FRAME_EXTENTS")
         root = self.get_root_window()
         self.frame_request_window.realize()
         with xsync:
             win = self.frame_request_window.get_window()
-            framelog("setup_frame_request_windows() window=%#x", get_xwindow(win))
+            framelog("setup_frame_request_windows() window=%#x", win.get_xid())
             send_wm_request_frame_extents(root, win)
 
     def run(self):
@@ -140,14 +139,13 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         if HAS_X11_BINDINGS:
             self.setup_frame_request_windows()
         UIXpraClient.run(self)
-        gtk_main_quit_on_fatal_exceptions_enable()
         self.gtk_main()
         log("GTKXpraClient.run_main_loop() main loop ended, returning exit_code=%s", self.exit_code)
         return  self.exit_code
 
     def gtk_main(self):
-        log("GTKXpraClient.gtk_main() calling %s", gtk_main)
-        gtk_main()
+        log("GTKXpraClient.gtk_main() calling %s", Gtk.main)
+        Gtk.main()
         log("GTKXpraClient.gtk_main() ended")
 
 
@@ -155,7 +153,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         log("GTKXpraClient.quit(%s) current exit_code=%s", exit_code, self.exit_code)
         if self.exit_code is None:
             self.exit_code = exit_code
-        if gtk.main_level()>0:
+        if Gtk.main_level()>0:
             #if for some reason cleanup() hangs, maybe this will fire...
             self.timeout_add(4*1000, self.exit)
             #try harder!:
@@ -166,7 +164,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         log("GTKXpraClient.quit(%s) cleanup done, main_level=%s", exit_code, gtk.main_level())
         if gtk.main_level()>0:
             log("GTKXpraClient.quit(%s) main loop at level %s, calling gtk quit via timeout",
-                exit_code, gtk.main_level())
+                exit_code, Gtk.main_level())
             self.timeout_add(500, self.exit)
 
     def force_quit(self):
@@ -175,8 +173,8 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         force_quit()
 
     def exit(self):
-        log("GTKXpraClient.exit() calling %s", gtk_main_quit_really)
-        gtk_main_quit_really()
+        log("GTKXpraClient.exit() calling %s", Gtk.main_quit)
+        Gtk.main_quit()
 
     def cleanup(self):
         log("GTKXpraClient.cleanup()")
@@ -204,7 +202,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
 
     def start_UI_watcher(self, _client):
         from xpra.platform.ui_thread_watcher import get_UI_watcher
-        self.UI_watcher = get_UI_watcher(self.timeout_add)
+        self.UI_watcher = get_UI_watcher(self.timeout_add, self.source_remove)
         self.UI_watcher.start()
         #if server supports it, enable UI thread monitoring workaround when needed:
         def UI_resumed():
@@ -236,27 +234,30 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
 
     def _process_startup_complete(self, packet):
         UIXpraClient._process_startup_complete(self, packet)
-        gdk.notify_startup_complete()
+        Gdk.notify_startup_complete()
 
 
     def do_process_challenge_prompt(self, packet, prompt="password"):
-        dialog = gtk.Dialog("Server Authentication",
+        self.show_progress(100, "authentication")
+        dialog = Gtk.Dialog("Server Authentication",
                None,
-               DIALOG_MODAL | DESTROY_WITH_PARENT)
-        dialog.add_button(gtk.STOCK_CANCEL, RESPONSE_REJECT)
-        dialog.add_button(gtk.STOCK_OK,     RESPONSE_ACCEPT)
+               Gtk.DialogFlags.MODAL | Gtk.DialogFlags.DESTROY_WITH_PARENT)
+        dialog.add_button(Gtk.STOCK_CANCEL, Gtk.ResponseType.REJECT)
+        dialog.add_button(Gtk.STOCK_OK,     Gtk.ResponseType.ACCEPT)
         def add(widget, padding=0):
-            a = gtk.Alignment()
+            a = Gtk.Alignment()
             a.set(0.5, 0.5, 1, 1)
             a.add(widget)
             a.set_padding(padding, padding, padding, padding)
             dialog.vbox.pack_start(a)
-        pango = import_pango()
-        title = gtk.Label("Server Authentication")
-        title.modify_font(pango.FontDescription("sans 14"))
+        import gi
+        gi.require_version("Pango", "1.0")
+        from gi.repository import Pango
+        title = Gtk.Label("Server Authentication")
+        title.modify_font(Pango.FontDescription("sans 14"))
         add(title, 16)
-        add(gtk.Label(self.get_challenge_prompt(prompt)), 10)
-        password_input = gtk.Entry()
+        add(Gtk.Label(self.get_challenge_prompt(prompt)), 10)
+        password_input = Gtk.Entry()
         password_input.set_max_length(255)
         password_input.set_width_chars(32)
         password_input.set_visibility(False)
@@ -277,12 +278,12 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             password = dialog.password_input.get_text() + dialog.otp_input.get_text()
             dialog.hide()
             dialog.destroy()
-            if response!=RESPONSE_ACCEPT or not password:
+            if response!=Gtk.ResponseType.ACCEPT or not password:
                 self.quit(EXIT_PASSWORD_REQUIRED)
                 return
             self.send_challenge_reply(packet, password)
         def password_activate(*_args):
-            handle_response(dialog, RESPONSE_ACCEPT)
+            handle_response(dialog, Gtk.ResponseType.ACCEPT)
         password_input.connect("activate", password_activate)
         otp_input.connect("activate", password_activate)
         dialog.connect("response", handle_response)
@@ -293,38 +294,53 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         return True
 
 
-    def parse_border(self, border_str, extra_args):
-        enabled = not border_str.endswith(":off")
-        parts = [x.strip() for x in border_str.replace(":off", "").split(",")]
+    def setup_connection(self, conn):
+        conn = super().setup_connection(conn)
+        #now that we have display_desc, parse the border again:
+        self.parse_border(False)
+        return conn
+
+
+    def show_border_help(self):
+        if not first_time("border-help"):
+            return
+        log.info(" border format: color[,size][:off]")
+        log.info("  eg: red,10")
+        log.info("  eg: ,5")
+        log.info("  eg: auto,5")
+        log.info("  eg: blue")
+
+    def parse_border(self, warn=True):
+        enabled = not self.border_str.endswith(":off")
+        parts = [x.strip() for x in self.border_str.replace(":off", "").split(",")]
         color_str = parts[0]
-        def border_help():
-            log.info(" border format: color[,size][:off]")
-            log.info("  eg: red,10")
-            log.info("  eg: ,5")
-            log.info("  eg: auto,5")
-            log.info("  eg: blue")
         if color_str.lower() in ("none", "no", "off", "0"):
             return
         if color_str.lower()=="help":
-            border_help()
+            self.show_border_help()
             return
         color_str = color_str.replace(":off", "")
         if color_str in ("auto", ""):
             from hashlib import md5
             try:
                 m = md5()
-            except ValueError:
                 from hashlib import sha1
+            except ValueError:
                 m = sha1()
-            for x in extra_args:
-                m.update(strtobytes(x))
+            endpoint = self.display_desc.get("display_name")
+            if endpoint:
+                m.update(strtobytes(endpoint))
             color_str = "#%s" % m.hexdigest()[:6]
-            log("border color derived from %s: %s", extra_args, color_str)
+            log("border color derived from %s: %s", endpoint, color_str)
         try:
             color = color_parse(color_str)
+            assert color is not None
         except Exception as e:
-            log.warn("invalid border color specified: '%s' (%s)", color_str, e)
-            border_help()
+            if warn:
+                log.warn("Warning: invalid border color specified '%s'", color_str)
+                if str(e):
+                    log.warn(" %s", e)
+                self.show_border_help()
             color = color_parse("red")
         alpha = 0.6
         size = 4
@@ -333,16 +349,19 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             try:
                 size = int(size_str)
             except Exception as e:
-                log.warn("Warning: invalid size specified: %s (%s)", size_str, e)
+                if warn:
+                    log.warn("Warning: invalid border size specified '%s'", size_str)
+                    log.warn(" %s", e)
+                    self.show_border_help()
             if size<=0:
                 log("border size is %s, disabling it", size)
                 return
             if size>=45:
-                log.warn("border size is too high: %s, clipping it", size)
+                log.warn("Warning: border size is too large: %s, clipping it", size)
                 size = 45
         from xpra.client.window_border import WindowBorder
         self.border = WindowBorder(enabled, color.red/65536.0, color.green/65536.0, color.blue/65536.0, alpha, size)
-        log("parse_border(%s)=%s", border_str, self.border)
+        log("parse_border(%s)=%s", self.border_str, self.border)
 
 
     def show_server_commands(self, *_args):
@@ -367,7 +386,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             def run_command_cb(command, sharing=True):
                 self.send_start_command(command, command, False, sharing)
             self.start_new_command = getStartNewCommand(run_command_cb,
-                                                        self.server_sharing and self.server_window_filters,
+                                                        self.server_sharing,
                                                         self.server_xdg_menu)
         self.start_new_command.show()
 
@@ -380,12 +399,12 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
     def do_ask_data_request(self, cb_answer, send_id, dtype, url, filesize, printit, openit):
         from xpra.client.gtk_base.open_requests import getOpenRequestsWindow
         timeout = self.remote_file_ask_timeout
-        def rec_answer(accept):
+        def rec_answer(accept, newopenit=openit):
             if int(accept)==1:
                 #record our response, so we will accept the file
-                self.data_send_requests[send_id] = (dtype, url, printit, openit)
+                self.data_send_requests[send_id] = (dtype, url, printit, newopenit)
             cb_answer(accept)
-        self.file_ask_dialog = getOpenRequestsWindow()
+        self.file_ask_dialog = getOpenRequestsWindow(self.show_file_upload, self.cancel_download)
         self.file_ask_dialog.add_request(rec_answer, send_id, dtype, url, filesize, printit, openit, timeout)
         self.file_ask_dialog.show()
 
@@ -397,23 +416,32 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
 
     def show_ask_data_dialog(self, *_args):
         from xpra.client.gtk_base.open_requests import getOpenRequestsWindow
-        self.file_ask_dialog = getOpenRequestsWindow(self.show_file_upload)
+        self.file_ask_dialog = getOpenRequestsWindow(self.show_file_upload, self.cancel_download)
         self.file_ask_dialog.show()
+
+    def transfer_progress_update(self, send=True, transfer_id=0, elapsed=0, position=0, total=0, error=None):
+        fad = self.file_ask_dialog
+        if fad:
+            self.idle_add(fad.transfer_progress_update, send, transfer_id, elapsed, position, total, error)
 
 
     def accept_data(self, send_id, dtype, url, printit, openit):
         #check if we have accepted this file via the GUI:
-        r = self.data_send_requests.get(send_id)
+        r = self.data_send_requests.pop(send_id, None)
         if r:
-            del self.data_send_requests[send_id]
-            if r!=(dtype, url, printit, openit):
+            edtype = r[0]
+            eurl = r[1]
+            if edtype!=dtype or eurl!=url:
                 filelog.warn("Warning: the file attributes are different")
                 filelog.warn(" from the ones that were used to accept the transfer")
-                filelog.warn(" expected data type=%s, url=%s, print=%s, open=%s", *r)
-                filelog.warn(" received data type=%s, url=%s, print=%s, open=%s",
-                             dtype, url, printit, openit)
-                return False
-            return True
+                s = bytestostr
+                if edtype!=dtype:
+                    filelog.warn(" expected data type '%s' but got '%s'", s(edtype), s(dtype))
+                if eurl!=url:
+                    filelog.warn(" expected data type '%s' but got '%s'", s(eurl), s(url))
+                return None
+            #return the printit and openit flag we got from the UI:
+            return (r[2], r[3])
         from xpra.net.file_transfer import FileTransferHandler
         return FileTransferHandler.accept_data(self, send_id, dtype, url, printit, openit)
 
@@ -425,13 +453,13 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         parent = None
         msgs = (
                 "Warning: cannot %s the file '%s'" % (action, basefilename),
-                "this file is too large: %sB" % std_unit(filesize, unit=1024),
-                "the %s file size limit is %iMB" % (location, limit),
+                "this file is too large: %sB" % std_unit(filesize),
+                "the %s file size limit is %iB" % (location, std_unit(limit)),
                 )
-        self.file_size_dialog = gtk.MessageDialog(parent, DESTROY_WITH_PARENT, MESSAGE_INFO,
-                                                  BUTTONS_CLOSE, "\n".join(msgs))
+        self.file_size_dialog = Gtk.MessageDialog(parent, Gtk.DialogFlags.DESTROY_WITH_PARENT, Gtk.MessageType.INFO,
+                                                  Gtk.ButtonsType.CLOSE, "\n".join(msgs))
         try:
-            image = image_new_from_stock(gtk.STOCK_DIALOG_WARNING, ICON_SIZE_BUTTON)
+            image = Gtk.Image.new_from_stock(Gtk.STOCK_DIALOG_WARNING, Gtk.IconSize.BUTTON)
             self.file_size_dialog.set_image(image)
         except Exception as e:
             log.warn("Warning: failed to set dialog image: %s", e)
@@ -444,21 +472,28 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             self.file_size_dialog = None
             fsd.destroy()
 
+    def download_server_log(self, *_args):
+        self.send_request_file("${XPRA_SERVER_LOG}", self.open_files)
+
+    def send_download_request(self, *_args):
+        command = ["xpra", "send-file"]
+        self.send_start_command("Client-Download-File", command, True)
+
     def show_file_upload(self, *args):
         if self.file_dialog:
             self.file_dialog.present()
             return
         filelog("show_file_upload%s can open=%s", args, self.remote_open_files)
-        buttons = [gtk.STOCK_CANCEL,    RESPONSE_CANCEL]
+        buttons = [Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL]
         if self.remote_open_files:
-            buttons += [gtk.STOCK_OPEN,      RESPONSE_ACCEPT]
-        buttons += [gtk.STOCK_OK,        RESPONSE_OK]
-        self.file_dialog = gtk.FileChooserDialog(
+            buttons += [Gtk.STOCK_OPEN,      Gtk.ResponseType.ACCEPT]
+        buttons += [Gtk.STOCK_OK,        Gtk.ResponseType.OK]
+        self.file_dialog = Gtk.FileChooserDialog(
             "File to upload",
             parent=None,
-            action=FILE_CHOOSER_ACTION_OPEN,
+            action=Gtk.FileChooserAction.OPEN,
             buttons=tuple(buttons))
-        self.file_dialog.set_default_response(RESPONSE_OK)
+        self.file_dialog.set_default_response(Gtk.ResponseType.OK)
         self.file_dialog.connect("response", self.file_upload_dialog_response)
         self.file_dialog.show()
 
@@ -469,7 +504,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             self.file_dialog = None
 
     def file_upload_dialog_response(self, dialog, v):
-        if v not in (RESPONSE_OK, RESPONSE_ACCEPT):
+        if v not in (Gtk.ResponseType.OK, Gtk.ResponseType.ACCEPT):
             filelog("dialog response code %s", v)
             self.close_file_upload_dialog()
             return
@@ -477,7 +512,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         filelog("file_upload_dialog_response: filename=%s", filename)
         try:
             filesize = os.stat(filename).st_size
-        except (OSError, IOError):
+        except OSError:
             pass
         else:
             if not self.check_file_size("upload", filename, filesize):
@@ -486,12 +521,15 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         gfile = dialog.get_file()
         self.close_file_upload_dialog()
         filelog("load_contents: filename=%s, response=%s", filename, v)
-        load_contents_async(gfile, self.file_upload_ready, user_data=(filename, v==RESPONSE_ACCEPT))
+        cancellable = None
+        user_data = (filename, v==Gtk.ResponseType.ACCEPT)
+        gfile.load_contents_async(cancellable, self.file_upload_ready, user_data)
 
     def file_upload_ready(self, gfile, result, user_data):
         filelog("file_upload_ready%s", (gfile, result, user_data))
         filename, openit = user_data
-        data, filesize, entity = load_contents_finish(gfile, result)
+        _, data, entity = gfile.load_contents_finish(result)
+        filesize = len(data)
         filelog("load_contents_finish(%s)=%s", result, (type(data), filesize, entity))
         if not data:
             log.warn("Warning: failed to load file '%s'", filename)
@@ -554,7 +592,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             icon_filename = get_icon_filename(icon_name)
             log("get_pixbuf(%s) icon_filename=%s", icon_name, icon_filename)
             if icon_filename:
-                return pixbuf_new_from_file(icon_filename)
+                return GdkPixbuf.Pixbuf.new_from_file(icon_filename)
         except Exception:
             log.error("get_pixbuf(%s)", icon_name, exc_info=True)
         return None
@@ -578,7 +616,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         root = self.get_root_window()
         with xsync:
             win = window.get_window()
-            framelog("request_frame_extents(%s) xid=%#x", window, get_xwindow(win))
+            framelog("request_frame_extents(%s) xid=%#x", window, win.get_xid())
             send_wm_request_frame_extents(root, win)
 
     def get_frame_extents(self, window):
@@ -629,7 +667,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
 
 
     def _add_statusicon_tray(self, tray_list):
-        #add gtk.StatusIcon tray:
+        #add Gtk.StatusIcon tray:
         try:
             from xpra.client.gtk_base.statusicon_tray import GTKStatusIconTray
             tray_list.append(GTKStatusIconTray)
@@ -645,8 +683,8 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         return self._add_statusicon_tray(WindowClient.get_system_tray_classes(self))
 
 
-    def supports_system_tray(self):
-        #always True: we can always use gtk.StatusIcon as fallback
+    def supports_system_tray(self) -> bool:
+        #always True: we can always use Gtk.StatusIcon as fallback
         return True
 
 
@@ -669,15 +707,15 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         return self.mask_to_names(modifiers_mask)
 
 
-    def make_hello(self):
+    def make_hello(self) -> dict:
         capabilities = UIXpraClient.make_hello(self)
         capabilities["named_cursors"] = len(cursor_types)>0
-        capabilities["transparency"] = self.has_transparency()
+        capabilities["encoding.transparency"] = self.has_transparency()
         capabilities.update(flatten_dict(get_gtk_version_info()))
         if EXPORT_ICON_DATA:
             #tell the server which icons GTK can use
             #so it knows when it should supply one as fallback
-            it = icon_theme_get_default()
+            it = Gtk.IconTheme.get_default()
             if it:
                 #this would add our bundled icon directory
                 #to the search path, but I don't think we have
@@ -708,7 +746,9 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             ms = list(DEFAULT_METADATA_SUPPORTED)
             #added in 0.15:
             ms += ["command", "workspace", "above", "below", "sticky",
-                   "set-initial-position"]  #0.17
+                   "set-initial-position",  #0.17
+                   "content-type",
+                   ]
         if POSIX:
             #this is only really supported on X11, but posix is easier to check for..
             #"strut" and maybe even "fullscreen-monitors" could also be supported on other platforms I guess
@@ -717,13 +757,6 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             ms += ["x11-property"]
             if XSHAPE:
                 ms += ["shape"]
-        #figure out if we can handle the "global menu" stuff:
-        if POSIX and not OSX:
-            try:
-                from xpra.dbus.helper import DBusHelper
-                assert DBusHelper
-            except ImportError:
-                pass
         log("metadata.supported: %s", ms)
         capabilities["metadata.supported"] = ms
         updict(capabilities, "pointer", {
@@ -731,8 +764,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             "relative" : True,
             })
         updict(capabilities, "window", {
-               "initiate-moveresize"    : True,
-               "configure.pointer"      : True,
+               "initiate-moveresize"    : True,     #v4 servers assume this is available
                "frame_sizes"            : self.get_window_frame_sizes()
                })
         updict(capabilities, "encoding", {
@@ -740,19 +772,12 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
                     "icons.size"        : (64, 64),     #size we want
                     "icons.max_size"    : (128, 128),   #limit
                     })
-        from xpra.client import window_backing_base
-        if self._protocol._conn.socktype=="udp":
-            #lossy protocol means we can't use delta regions:
-            log("no delta buckets with udp, since we can drop paint packets")
-            window_backing_base.DELTA_BUCKETS = 0
-        updict(capabilities, "encoding", {
-                    "delta_buckets"     : window_backing_base.DELTA_BUCKETS,
-                    })
+        capabilities["opengl"] = self.opengl_props
         return capabilities
 
 
-    def has_transparency(self):
-        screen = screen_get_default()
+    def has_transparency(self) -> bool:
+        screen = Gdk.Screen.get_default()
         if screen is None:
             return is_Wayland()
         return screen.get_rgba_visual() is not None
@@ -790,39 +815,55 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
 
     def make_cursor(self, cursor_data):
         #if present, try cursor ny name:
-        display = display_get_default()
+        display = Gdk.Display.get_default()
         cursorlog("make_cursor: has-name=%s, has-cursor-types=%s, xscale=%s, yscale=%s, USE_LOCAL_CURSORS=%s",
                   len(cursor_data)>=10, bool(cursor_types), self.xscale, self.yscale, USE_LOCAL_CURSORS)
-        #named cursors cannot be scaled
-        #(round to 10 to compare so 0.95 and 1.05 are considered the same as 1.0, no scaling):
-        if len(cursor_data)>=10 and cursor_types and iround(self.xscale*10)==10 and iround(self.yscale*10)==10:
+        pixbuf = None
+        if len(cursor_data)>=10 and cursor_types:
             cursor_name = bytestostr(cursor_data[9])
             if cursor_name and USE_LOCAL_CURSORS:
-                gdk_cursor = cursor_types.get(cursor_name.upper())
-                if gdk_cursor is not None:
-                    cursorlog("setting new cursor by name: %s=%s", cursor_name, gdk_cursor)
-                    try:
-                        return new_Cursor_for_display(display, gdk_cursor)
-                    except TypeError as e:
-                        log("new_Cursor_for_display(%s, %s)", display, gdk_cursor, exc_info=True)
-                        if first_time("cursor:%s" % cursor_name.upper()):
-                            log.error("Error creating cursor %s: %s", cursor_name.upper(), e)
+                try:
+                    cursor = Gdk.Cursor.new_from_name(display, cursor_name)
+                except TypeError:
+                    cursorlog("Gdk.Cursor.new_from_name%s", (display, cursor_name), exc_info=True)
+                    cursor = None
+                if cursor:
+                    cursorlog("Gdk.Cursor.new_from_name(%s, %s)=%s", display, cursor_name, cursor)
+                else:
+                    gdk_cursor = cursor_types.get(cursor_name.upper())
+                    cursorlog("gdk_cursor(%s)=%s", cursor_name, gdk_cursor)
+                    if gdk_cursor:
+                        try:
+                            cursor = Gdk.Cursor.new_for_display(display, gdk_cursor)
+                            cursorlog("Cursor.new_for_display(%s, %s)=%s", display, gdk_cursor, cursor)
+                        except TypeError as e:
+                            log("new_Cursor_for_display(%s, %s)", display, gdk_cursor, exc_info=True)
+                            if first_time("cursor:%s" % cursor_name.upper()):
+                                log.error("Error creating cursor %s: %s", cursor_name.upper(), e)
                 global missing_cursor_names
-                if cursor_name not in missing_cursor_names:
+                if cursor:
+                    pixbuf = cursor.get_image()
+                    cursorlog("image=%s", pixbuf)
+                elif cursor_name not in missing_cursor_names:
                     cursorlog("cursor name '%s' not found", cursor_name)
                     missing_cursor_names.add(cursor_name)
         #create cursor from the pixel data:
         encoding, _, _, w, h, xhot, yhot, serial, pixels = cursor_data[0:9]
-        encoding = strtobytes(encoding)
-        if encoding!=b"raw":
+        encoding = bytestostr(encoding)
+        if encoding!="raw":
             cursorlog.warn("Warning: invalid cursor encoding: %s", encoding)
             return None
-        if len(pixels)<w*h*4:
-            cursorlog.warn("Warning: not enough pixels provided in cursor data")
-            cursorlog.warn(" %s needed and only %s bytes found:", w*h*4, len(pixels))
-            cursorlog.warn(" '%s')", repr_ellipsized(hexstr(pixels)))
-            return None
-        pixbuf = get_pixbuf_from_data(pixels, True, w, h, w*4)
+        if not pixbuf:
+            if len(pixels)<w*h*4:
+                cursorlog.warn("Warning: not enough pixels provided in cursor data")
+                cursorlog.warn(" %s needed and only %s bytes found:", w*h*4, len(pixels))
+                cursorlog.warn(" '%s')", repr_ellipsized(hexstr(pixels)))
+                return None
+            pixbuf = get_pixbuf_from_data(pixels, True, w, h, w*4)
+        else:
+            w = pixbuf.get_width()
+            h = pixbuf.get_height()
+            pixels = pixbuf.get_pixels()
         x = max(0, min(xhot, w-1))
         y = max(0, min(yhot, h-1))
         csize = display.get_default_cursor_size()
@@ -838,6 +879,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         if fw>0 and fh>0 and (w!=fw or h!=fh):
             #OS wants a fixed cursor size! (win32 does, and GTK doesn't do this for us)
             if w<=fw and h<=fh:
+                cursorlog("pasting %ix%i cursor to fixed OS size %ix%i", w, h, fw, fh)
                 from PIL import Image
                 img = Image.frombytes("RGBA", (w, h), pixels, "raw", "BGRA", w*4, 1)
                 target = Image.new("RGBA", (fw, fh))
@@ -846,8 +888,8 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
                 cursor_pixbuf = get_pixbuf_from_data(pixels, True, w, h, w*4)
             else:
                 cursorlog("scaling cursor from %ix%i to fixed OS size %ix%i", w, h, fw, fh)
-                cursor_pixbuf = pixbuf.scale_simple(fw, fh, INTERP_BILINEAR)
-                xratio, yratio = float(w)/fw, float(h)/fh
+                cursor_pixbuf = pixbuf.scale_simple(fw, fh, GdkPixbuf.InterpType.BILINEAR)
+                xratio, yratio = w/fw, h/fh
                 x, y = iround(x/xratio), iround(y/yratio)
         else:
             sx, sy, sw, sh = x, y, w, h
@@ -860,28 +902,28 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             if 0<cmaxw<sw or 0<cmaxh<sh:
                 ratio = 1.0
                 if cmaxw>0:
-                    ratio = max(ratio, float(w)/cmaxw)
+                    ratio = max(ratio, w/cmaxw)
                 if cmaxh>0:
-                    ratio = max(ratio, float(h)/cmaxh)
+                    ratio = max(ratio, h/cmaxh)
                 cursorlog("clamping cursor size to %ix%i using ratio=%s", cmaxw, cmaxh, ratio)
                 sx, sy = iround(x/ratio), iround(y/ratio)
                 sw, sh = min(cmaxw, iround(w/ratio)), min(cmaxh, iround(h/ratio))
             if sw!=w or sh!=h:
                 cursorlog("scaling cursor from %ix%i hotspot at %ix%i to %ix%i hotspot at %ix%i",
                           w, h, x, y, sw, sh, sx, sy)
-                cursor_pixbuf = pixbuf.scale_simple(sw, sh, INTERP_BILINEAR)
+                cursor_pixbuf = pixbuf.scale_simple(sw, sh, GdkPixbuf.InterpType.BILINEAR)
                 x, y = sx, sy
             else:
                 cursor_pixbuf = pixbuf
         if SAVE_CURSORS:
-            cursor_pixbuf.save("cursor-%#x.png" % serial, "png")
+            cursor_pixbuf.savev("cursor-%#x.png" % serial, "png", [], [])
         #clamp to pixbuf size:
         w = cursor_pixbuf.get_width()
         h = cursor_pixbuf.get_height()
         x = max(0, min(x, w-1))
         y = max(0, min(y, h-1))
         try:
-            c = new_Cursor_from_pixbuf(display, cursor_pixbuf, x, y)
+            c = Gdk.Cursor.new_from_pixbuf(display, cursor_pixbuf, x, y)
         except RuntimeError as e:
             log.error("Error: failed to create cursor:")
             log.error(" %s", e)
@@ -890,43 +932,36 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         return c
 
 
-    def process_ui_capabilities(self):
-        UIXpraClient.process_ui_capabilities(self)
+    def process_ui_capabilities(self, caps : typedict):
+        UIXpraClient.process_ui_capabilities(self, caps)
         #this requires the "DisplayClient" mixin:
         if not hasattr(self, "screen_size_changed"):
             return
-        display = display_get_default()
-        if is_gtk3():
-            #always one screen per display:
-            screen = gdk.Screen.get_default()
-            screen.connect("size-changed", self.screen_size_changed)
-        else:
-            i=0
-            while i<display.get_n_screens():
-                screen = display.get_screen(i)
-                screen.connect("size-changed", self.screen_size_changed)
-                i += 1
+        #always one screen per display:
+        screen = Gdk.Screen.get_default()
+        screen.connect("size-changed", self.screen_size_changed)
 
 
     def window_grab(self, window):
-        event_mask = (BUTTON_PRESS_MASK |
-                      BUTTON_RELEASE_MASK |
-                      POINTER_MOTION_MASK  |
-                      POINTER_MOTION_HINT_MASK |
-                      ENTER_NOTIFY_MASK |
-                      LEAVE_NOTIFY_MASK)
+        em = Gdk.EventMask
+        event_mask = (em.BUTTON_PRESS_MASK |
+                      em.BUTTON_RELEASE_MASK |
+                      em.POINTER_MOTION_MASK  |
+                      em.POINTER_MOTION_HINT_MASK |
+                      em.ENTER_NOTIFY_MASK |
+                      em.LEAVE_NOTIFY_MASK)
         confine_to = None
         cursor = None
-        r = gdk.pointer_grab(window.get_window(), True, event_mask, confine_to, cursor, 0)
+        r = Gdk.pointer_grab(window.get_window(), True, event_mask, confine_to, cursor, 0)
         grablog("pointer_grab(..)=%s", GRAB_STATUS_STRING.get(r, r))
         #also grab the keyboard so the user won't Alt-Tab away:
-        r = gdk.keyboard_grab(window.get_window(), False, 0)
+        r = Gdk.keyboard_grab(window.get_window(), False, 0)
         grablog("keyboard_grab(..)=%s", GRAB_STATUS_STRING.get(r, r))
 
     def window_ungrab(self):
         grablog("window_ungrab()")
-        gdk.pointer_ungrab(0)
-        gdk.keyboard_ungrab(0)
+        Gdk.pointer_ungrab(0)
+        Gdk.keyboard_ungrab(0)
 
 
     def window_bell(self, window, device, percent, pitch, duration, bell_class, bell_id, bell_name):
@@ -938,7 +973,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         log("window_bell(..) gdkwindow=%s", gdkwindow)
         if not system_bell(gdkwindow, device, percent, pitch, duration, bell_class, bell_id, bell_name):
             #fallback to simple beep:
-            gdk.beep()
+            Gdk.beep()
 
 
     def _process_raise_window(self, packet):
@@ -962,7 +997,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
     #OpenGL bits:
     def init_opengl(self, enable_opengl):
         opengllog("init_opengl(%s)", enable_opengl)
-        #enable_opengl can be True, False, probe-failed, probe-success, or None (auto-detect)
+        #enable_opengl can be True, False, force, probe-failed, probe-success, or None (auto-detect)
         #ie: "on:native,gtk", "auto", "no"
         #ie: "probe-failed:SIGSEGV"
         #ie: "probe-success"
@@ -982,7 +1017,9 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             return
         warnings = []
         self.opengl_props["info"] = ""
-        if enable_option!="probe-success":
+        if enable_option=="force":
+            self.opengl_force = True
+        elif enable_option!="probe-success":
             from xpra.scripts.config import OpenGL_safety_check
             from xpra.platform.gui import gl_check as platform_gl_check
             for check in (OpenGL_safety_check, platform_gl_check):
@@ -1000,6 +1037,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             for x in str(e).split("\n"):
                 opengllog.error(" %s", x)
             self.opengl_props["info"] = str(e)
+            self.opengl_props["enabled"] = False
             self.opengl_setup_failure(body=str(e))
 
         if warnings:
@@ -1020,18 +1058,15 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             opengllog("init_opengl: going to import xpra.client.gl")
             __import__("xpra.client.gl", {}, {}, [])
             from xpra.client.gl.window_backend import (
-                get_opengl_backends,
                 get_gl_client_window_module,
                 test_gl_client_window,
                 )
-            backends = get_opengl_backends(enable_opengl)
-            opengllog("init_opengl: backend options: %s", backends)
-            force_enable = enable_option in TRUE_OPTIONS
-            self.opengl_props, gl_client_window_module = get_gl_client_window_module(backends, force_enable)
+            force_enable = self.opengl_force or (enable_option in TRUE_OPTIONS)
+            self.opengl_props, gl_client_window_module = get_gl_client_window_module(force_enable)
             if not gl_client_window_module:
-                opengllog.warn("Warning: no OpenGL backends found")
+                opengllog.warn("Warning: no OpenGL backend module found")
                 self.client_supports_opengl = False
-                self.opengl_props["info"] = "disabled: no supported backends - tried: %s" % csv(backends)
+                self.opengl_props["info"] = "disabled: no module found"
                 return
             opengllog("init_opengl: found props %s", self.opengl_props)
             self.GLClientWindowClass = gl_client_window_module.GLClientWindow
@@ -1041,6 +1076,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             self.gl_texture_size_limit = self.opengl_props.get("texture-size-limit", 16*1024)
             self.gl_max_viewport_dims = self.opengl_props.get("max-viewport-dims",
                                                               (self.gl_texture_size_limit, self.gl_texture_size_limit))
+            driver_info = self.opengl_props.get("renderer") or self.opengl_props.get("vendor") or "unknown card"
             if min(self.gl_max_viewport_dims)<4*1024:
                 opengllog.warn("Warning: OpenGL is disabled:")
                 opengllog.warn(" the maximum viewport size is too low: %s", self.gl_max_viewport_dims)
@@ -1048,6 +1084,10 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             elif self.gl_texture_size_limit<4*1024:
                 opengllog.warn("Warning: OpenGL is disabled:")
                 opengllog.warn(" the texture size limit is too low: %s", self.gl_texture_size_limit)
+                self.opengl_enabled = False
+            elif driver_info.startswith("SVGA3D") and os.environ.get("WAYLAND_DISPLAY"):
+                opengllog.warn("Warning: OpenGL is disabled:")
+                opengllog.warn(" SVGA3D driver is buggy under Wayland")
                 self.opengl_enabled = False
             self.GLClientWindowClass.MAX_VIEWPORT_DIMS = self.gl_max_viewport_dims
             self.GLClientWindowClass.MAX_BACKING_DIMS = self.gl_texture_size_limit, self.gl_texture_size_limit
@@ -1066,13 +1106,12 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
                 l("Warning: OpenGL windows will be clamped to the maximum texture size %ix%i",
                   self.gl_texture_size_limit, self.gl_texture_size_limit)
                 l(" for OpenGL %s renderer '%s'", pver(self.opengl_props.get("opengl", "")), self.opengl_props.get("renderer", "unknown"))
-            if self.opengl_enabled and enable_opengl!="probe-success":
+            if self.opengl_enabled and enable_opengl!="probe-success" and not self.opengl_force:
                 draw_result = test_gl_client_window(self.GLClientWindowClass, max_window_size=self.max_window_size, pixel_depth=self.pixel_depth)
                 if not draw_result.get("success", False):
                     err("OpenGL test rendering failed:", draw_result.get("message", "unknown error"))
                     return
                 log("OpenGL test rendering succeeded")
-            driver_info = self.opengl_props.get("renderer") or self.opengl_props.get("vendor") or "unknown card"
             if self.opengl_enabled:
                 opengllog.info("OpenGL enabled with %s", driver_info)
                 #don't try to handle video dimensions bigger than this:
@@ -1080,6 +1119,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
                 self.video_max_size = (mvs, mvs)
             elif self.client_supports_opengl:
                 opengllog("OpenGL supported with %s, but not enabled", driver_info)
+            self.opengl_props["enabled"] = self.opengl_enabled
         except ImportError as e:
             err("OpenGL accelerated rendering is not available:", e)
         except RuntimeError as e:
@@ -1088,33 +1128,58 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             err("Error loading OpenGL support:", e)
             opengllog("init_opengl(%s)", enable_opengl, exc_info=True)
 
-    def get_client_window_classes(self, w, h, metadata, override_redirect):
-        log("get_client_window_class%s GLClientWindowClass=%s, opengl_enabled=%s, mmap_enabled=%s, encoding=%s",
+    def get_client_window_classes(self, w : int, h : int, metadata : typedict, override_redirect : bool):
+        log("get_client_window_class%s ClientWindowClass=%s, GLClientWindowClass=%s, opengl_enabled=%s, mmap_enabled=%s, encoding=%s",
             (w, h, metadata, override_redirect),
-            self.GLClientWindowClass,self.opengl_enabled, self.mmap_enabled, self.encoding)
+            self.ClientWindowClass, self.GLClientWindowClass,
+            self.opengl_enabled, self.mmap_enabled, self.encoding)
+        if self.can_use_opengl(w, h, metadata, override_redirect):
+            return (self.GLClientWindowClass, self.ClientWindowClass)
+        return (self.ClientWindowClass,)
+
+    def can_use_opengl(self, w : int, h : int, metadata : typedict, override_redirect : bool):
         if self.GLClientWindowClass is None or not self.opengl_enabled:
-            return (self.ClientWindowClass,)
-        #verify texture limits:
-        ms = min(self.sx(self.gl_texture_size_limit), *self.gl_max_viewport_dims)
-        if w>ms or h>ms:
-            return (self.ClientWindowClass,)
+            return False
+        if not self.opengl_force:
+            #verify texture limits:
+            ms = min(self.sx(self.gl_texture_size_limit), *self.gl_max_viewport_dims)
+            if w>ms or h>ms:
+                return False
+            #avoid opengl for small windows:
+            if w<=OPENGL_MIN_SIZE or h<=OPENGL_MIN_SIZE:
+                log("not using opengl for small window: %ix%i", w, h)
+                return False
+            #avoid opengl for tooltips:
+            window_types = metadata.strtupleget("window-type")
+            if any(x in (NO_OPENGL_WINDOW_TYPES) for x in window_types):
+                log("not using opengl for %s window-type", csv(window_types))
+                return False
+            if metadata.intget("transient-for", 0)>0:
+                log("not using opengl for transient-for window")
+                return False
+            if metadata.strget("content-type")=="text":
+                return False
         if WIN32:
-            #win32 opengl doesn't do alpha (not sure why):
+            #these checks can't be forced ('opengl_force')
+            #win32 opengl just doesn't do alpha or undecorated windows properly:
             if override_redirect:
-                return (self.ClientWindowClass,)
+                return False
             if metadata.boolget("has-alpha", False):
-                return (self.ClientWindowClass,)
-        if OSX and not PYTHON3:
-            #GTK2 on OSX doesn't do alpha:
-            if metadata.boolget("has-alpha", False):
-                return (self.ClientWindowClass,)
-        return (self.GLClientWindowClass, self.ClientWindowClass)
+                return False
+            if not metadata.boolget("decorations", True):
+                return False
+            hbl = (self.headerbar or "").lower().strip()
+            if hbl not in FALSE_OPTIONS:
+                #any risk that we may end up using headerbar,
+                #means we can't enable opengl
+                return False
+        return True
 
     def toggle_opengl(self, *_args):
         self.opengl_enabled = not self.opengl_enabled
         opengllog("opengl_toggled: %s", self.opengl_enabled)
         #now replace all the windows with new ones:
-        for wid, window in self._id_to_window.items():
+        for wid, window in tuple(self._id_to_window.items()):
             self.reinit_window(wid, window)
         opengllog("replaced all the windows with opengl=%s: %s", self.opengl_enabled, self._id_to_window)
         self.reinit_window_icons()
@@ -1144,7 +1209,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             reftype = "leader-wid"
             ref = leader_wid
         if ref<0:
-            ci = metadata.strlistget("class-instance")
+            ci = metadata.strtupleget("class-instance")
             if ci:
                 reftype = "class"
                 ref = "|".join(ci)
@@ -1165,10 +1230,10 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
             log("found existing group leader window %s using ref=%s", group_leader_window, refkey)
             return group_leader_window
         #we need to create one:
-        title = u"%s group leader for %s" % (self.session_name or u"Xpra", pid)
-        #group_leader_window = gdk.Window(None, 1, 1, gdk.WINDOW_TOPLEVEL, 0, gdk.INPUT_ONLY, title)
+        title = "%s group leader for %s" % (self.session_name or "Xpra", pid)
+        #group_leader_window = Gdk.Window(None, 1, 1, Gtk.WindowType.TOPLEVEL, 0, Gdk.INPUT_ONLY, title)
         #static new(parent, attributes, attributes_mask)
-        group_leader_window = GDKWindow(wclass=CLASS_INPUT_ONLY, title=title)
+        group_leader_window = GDKWindow(wclass=Gdk.WindowWindowClass.INPUT_ONLY, title=title)
         self._ref_to_group_leader[refkey] = group_leader_window
         #avoid warning on win32...
         if not WIN32:

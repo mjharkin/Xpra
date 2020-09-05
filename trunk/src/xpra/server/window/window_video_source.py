@@ -9,7 +9,7 @@ import time
 import operator
 import threading
 from math import sqrt
-from collections import OrderedDict
+from functools import reduce
 
 from xpra.net.compression import Compressed, LargeStructure
 from xpra.codecs.codec_constants import TransientCodecException, RGB_FORMATS, PIXEL_SUBSAMPLING
@@ -21,12 +21,11 @@ from xpra.rectangle import rectangle, merge_all          #@UnresolvedImport
 from xpra.server.window.motion import ScrollData                    #@UnresolvedImport
 from xpra.server.window.video_subregion import VideoSubregion, VIDEO_SUBREGION
 from xpra.server.window.video_scoring import get_pipeline_score
-from xpra.codecs.codec_constants import PREFERED_ENCODING_ORDER, EDGE_ENCODING_ORDER
-from xpra.util import parse_scaling_value, engs, envint, envbool, csv, roundup, print_nested_dict, first_time
-from xpra.os_util import monotonic_time, bytestostr, PYTHON3
+from xpra.codecs.codec_constants import PREFERRED_ENCODING_ORDER, EDGE_ENCODING_ORDER
+from xpra.codecs.loader import has_codec
+from xpra.util import parse_scaling_value, engs, envint, envbool, csv, roundup, print_nested_dict, first_time, typedict
+from xpra.os_util import monotonic_time, bytestostr
 from xpra.log import Logger
-if PYTHON3:
-    from functools import reduce
 
 log = Logger("encoding")
 csclog = Logger("csc")
@@ -45,6 +44,7 @@ TEXT_USE_VIDEO = envbool("XPRA_TEXT_USE_VIDEO", False)
 MAX_NONVIDEO_PIXELS = envint("XPRA_MAX_NONVIDEO_PIXELS", 1024*4)
 MIN_VIDEO_FPS = envint("XPRA_MIN_VIDEO_FPS", 10)
 MIN_VIDEO_EVENTS = envint("XPRA_MIN_VIDEO_EVENTS", 20)
+ENCODE_QUEUE_MIN_GAP = envint("XPRA_ENCODE_QUEUE_MIN_GAP", 5)
 
 VIDEO_TIMEOUT = envint("XPRA_VIDEO_TIMEOUT", 10)
 VIDEO_NODETECT_TIMEOUT = envint("XPRA_VIDEO_NODETECT_TIMEOUT", 10*60)
@@ -66,10 +66,16 @@ def parse_scaling_options_str(scaling_options_str):
     #or even: 1:10, 1:5, ...
     vs_options = []
     for option in scaling_options_str.split(","):
-        parts = option.strip().split("/")
         try:
-            num, den = parts
-            vs_options.append((int(num), int(den)))
+            if option.find("%")>0:
+                v = float(option[:option.find("%")])*100
+                vs_options.append(v.as_integer_ratio())
+            elif option.find("/")<0:
+                v = float(option)
+                vs_options.append(v.as_integer_ratio())
+            else:
+                num, den = option.strip().split("/")
+                vs_options.append((int(num), int(den)))
         except ValueError:
             scalinglog.warn("Warning: invalid scaling string '%s'", option.strip())
     if vs_options:
@@ -84,10 +90,10 @@ DEBUG_VIDEO_CLEAN = envbool("XPRA_DEBUG_VIDEO_CLEAN", False)
 FORCE_AV_DELAY = envint("XPRA_FORCE_AV_DELAY", 0)
 B_FRAMES = envbool("XPRA_B_FRAMES", True)
 VIDEO_SKIP_EDGE = envbool("XPRA_VIDEO_SKIP_EDGE", False)
-SCROLL_ENCODING = envbool("XPRA_SCROLL_ENCODING", True)
 SCROLL_MIN_PERCENT = max(1, min(100, envint("XPRA_SCROLL_MIN_PERCENT", 50)))
-MIN_SCROLL_IMAGE_SIZE = envint("XPRA_MIN_SCROLL_IMAGE_SIZE", 384)
+MIN_SCROLL_IMAGE_SIZE = envint("XPRA_MIN_SCROLL_IMAGE_SIZE", 128)
 
+SAVE_VIDEO_PATH = os.environ.get("XPRA_SAVE_VIDEO_PATH", "")
 SAVE_VIDEO_STREAMS = envbool("XPRA_SAVE_VIDEO_STREAMS", False)
 SAVE_VIDEO_FRAMES = os.environ.get("XPRA_SAVE_VIDEO_FRAMES")
 if SAVE_VIDEO_FRAMES not in ("png", "jpeg", None):
@@ -95,7 +101,7 @@ if SAVE_VIDEO_FRAMES not in ("png", "jpeg", None):
     log.warn(" only 'png' or 'jpeg' are allowed")
     SAVE_VIDEO_FRAMES = None
 
-FAST_ORDER = tuple(["jpeg", "rgb32", "rgb24", "webp", "png"] + list(PREFERED_ENCODING_ORDER))
+FAST_ORDER = tuple(["jpeg", "rgb32", "rgb24", "webp", "png"] + list(PREFERRED_ENCODING_ORDER))
 
 
 class WindowVideoSource(WindowSource):
@@ -107,14 +113,14 @@ class WindowVideoSource(WindowSource):
         #this will call init_vars():
         self.supports_scrolling = False
         self.video_subregion = None
-        WindowSource.__init__(self, *args)
+        super().__init__(*args)
         self.supports_eos = self.encoding_options.boolget("eos")
-        self.scroll_encoding = SCROLL_ENCODING
-        self.supports_scrolling = self.scroll_encoding and self.encoding_options.boolget("scrolling") and not STRICT_MODE
+        self.supports_scrolling = "scroll" in self.common_encodings or (
+            #for older clients, we check an encoding option:
+            "scroll" in self.server_core_encodings and self.encoding_options.boolget("scrolling") and not STRICT_MODE)
         self.scroll_min_percent = self.encoding_options.intget("scrolling.min-percent", SCROLL_MIN_PERCENT)
-        self.supports_video_scaling = self.encoding_options.boolget("video_scaling", False)
-        self.supports_video_b_frames = self.encoding_options.strlistget("video_b_frames", [])
-        self.video_max_size = self.encoding_options.intlistget("video_max_size", (8192, 8192), 2, 2)
+        self.supports_video_b_frames = self.encoding_options.strtupleget("video_b_frames", ())
+        self.video_max_size = self.encoding_options.inttupleget("video_max_size", (8192, 8192), 2, 2)
         self.video_subregion = VideoSubregion(self.timeout_add, self.source_remove, self.refresh_subregion, self.auto_refresh_delay)
         self.video_stream_file = None
 
@@ -125,15 +131,21 @@ class WindowVideoSource(WindowSource):
         self.video_encodings = self.video_helper.get_encodings()
         for x in self.video_encodings:
             if x in self.server_core_encodings:
-                self._encoders[x] = self.video_encode
-        self._encoders["auto"] = self.video_encode
+                self.add_encoder(x, self.video_encode)
+        self.add_encoder("auto", self.video_encode)
+        if has_codec("csc_libyuv"):
+            #need libyuv to be able to handle 'grayscale' video:
+            #(to convert ARGB to grayscale)
+            self.add_encoder("grayscale", self.video_encode)
         #these are used for non-video areas, ensure "jpeg" is used if available
         #as we may be dealing with large areas still, and we want speed:
         nv_common = (set(self.server_core_encodings) & set(self.core_encodings)) - set(self.video_encodings)
-        self.non_video_encodings = tuple(x for x in PREFERED_ENCODING_ORDER
+        self.non_video_encodings = tuple(x for x in PREFERRED_ENCODING_ORDER
                                          if x in nv_common)
-        self.common_video_encodings = tuple(x for x in PREFERED_ENCODING_ORDER
+        self.common_video_encodings = tuple(x for x in PREFERRED_ENCODING_ORDER
                                             if x in self.video_encodings and x in self.core_encodings)
+        if "scroll" in self.server_core_encodings:
+            self.add_encoder("scroll", self.scroll_encode)
         #those two instances should only ever be modified or accessed from the encode thread:
         self._csc_encoder = None
         self._video_encoder = None
@@ -158,8 +170,6 @@ class WindowVideoSource(WindowSource):
         self.last_pipeline_scores = ()
         self.last_pipeline_time = 0
 
-        self.supports_video_scaling = False
-
         self.video_encodings = ()
         self.common_video_encodings = ()
         self.non_video_encodings = ()
@@ -174,7 +184,7 @@ class WindowVideoSource(WindowSource):
         self.last_scroll_time = 0
 
     def do_set_auto_refresh_delay(self, min_delay, delay):
-        WindowSource.do_set_auto_refresh_delay(self, min_delay, delay)
+        super().do_set_auto_refresh_delay(min_delay, delay)
         r = self.video_subregion
         if r:
             r.set_auto_refresh_delay(self.base_auto_refresh_delay)
@@ -183,14 +193,18 @@ class WindowVideoSource(WindowSource):
         self.av_sync_frame_delay = 0
         ve = self._video_encoder
         if ve:
+            #how many frames are buffered in the encoder, if any:
             d = ve.get_info().get("delayed", 0)
-            self.av_sync_frame_delay += 40 * d
+            if d>0:
+                #clamp the batch delay to a reasonable range:
+                frame_delay = min(100, max(10, self.batch_config.delay))
+                self.av_sync_frame_delay += frame_delay * d
             avsynclog("update_av_sync_frame_delay() video encoder=%s, delayed frames=%i, frame delay=%i",
                       ve, d, self.av_sync_frame_delay)
         self.may_update_av_sync_delay()
 
 
-    def get_property_info(self):
+    def get_property_info(self) -> dict:
         i = WindowSource.get_property_info(self)
         if self.scaling_control is None:
             i["scaling.control"] = "auto"
@@ -199,7 +213,7 @@ class WindowVideoSource(WindowSource):
         i["scaling"] = self.scaling or (1, 1)
         return i
 
-    def get_info(self):
+    def get_info(self) -> dict:
         info = WindowSource.get_info(self)
         sr = self.video_subregion
         if sr:
@@ -207,7 +221,6 @@ class WindowVideoSource(WindowSource):
             sri["video-mode"] = self.subregion_is_video()
             info["video_subregion"] = sri
         info["scaling"] = self.actual_scaling
-        info["supports_video_scaling"] = self.supports_video_scaling
         info["video-max-size"] = self.video_max_size
         def addcinfo(prefix, x):
             if not x:
@@ -243,7 +256,7 @@ class WindowVideoSource(WindowSource):
         info.setdefault("encoding", {}).update(einfo)
         return info
 
-    def get_pipeline_info(self):
+    def get_pipeline_info(self) -> dict:
         lp = self.last_pipeline_params
         if not lp:
             return {}
@@ -343,7 +356,7 @@ class WindowVideoSource(WindowSource):
             self.video_stream_file = None
             try:
                 vsf.close()
-            except (OSError, IOError):
+            except OSError:
                 log.error("Error closing video stream file", exc_info=True)
 
     def ui_cleanup(self):
@@ -355,7 +368,7 @@ class WindowVideoSource(WindowSource):
         if self.encoding!=encoding:
             #ensure we re-init the codecs asap:
             self.cleanup_codecs()
-        WindowSource.set_new_encoding(self, encoding, strict)
+        super().set_new_encoding(encoding, strict)
 
     def update_encoding_selection(self, encoding=None, exclude=None, init=False):
         #override so we don't use encodings that don't have valid csc modes:
@@ -366,7 +379,7 @@ class WindowVideoSource(WindowSource):
             if x not in self.core_encodings:
                 exclude.append(x)
                 continue
-            csc_modes = self.full_csc_modes.strlistget(x)
+            csc_modes = self.full_csc_modes.strtupleget(x)
             if not csc_modes or x not in self.core_encodings:
                 exclude.append(x)
                 if not init:
@@ -374,34 +387,36 @@ class WindowVideoSource(WindowSource):
                 else:
                     l = log
                 l("client does not support any csc modes with %s", x)
-        self.common_video_encodings = [x for x in PREFERED_ENCODING_ORDER if x in self.video_encodings and x in self.core_encodings]
+        self.common_video_encodings = [x for x in PREFERRED_ENCODING_ORDER if x in self.video_encodings and x in self.core_encodings]
         log("update_encoding_options: common_video_encodings=%s, csc_encoder=%s, video_encoder=%s",
             self.common_video_encodings, self._csc_encoder, self._video_encoder)
-        WindowSource.update_encoding_selection(self, encoding, exclude, init)
+        super().update_encoding_selection(encoding, exclude, init)
 
     def do_set_client_properties(self, properties):
         #client may restrict csc modes for specific windows
-        self.supports_scrolling = self.scroll_encoding and properties.boolget("encoding.scrolling", self.supports_scrolling) and not STRICT_MODE
+        self.supports_scrolling = "scroll" in self.common_encodings or (
+            #for older clients, we check an encoding option:
+            "scroll" in self.server_core_encodings and properties.boolget("scrolling", self.supports_scrolling) and not STRICT_MODE)
         self.scroll_min_percent = properties.intget("scrolling.min-percent", self.scroll_min_percent)
-        self.supports_video_scaling = properties.boolget("encoding.video_scaling", self.supports_video_scaling)
         self.video_subregion.supported = properties.boolget("encoding.video_subregion", VIDEO_SUBREGION) and VIDEO_SUBREGION
         if properties.get("scaling.control") is not None:
             self.scaling_control = max(0, min(100, properties.intget("scaling.control", 0)))
-        WindowSource.do_set_client_properties(self, properties)
+        super().do_set_client_properties(properties)
         #encodings may have changed, so redo this:
         nv_common = (set(self.server_core_encodings) & set(self.core_encodings)) - set(self.video_encodings)
-        self.non_video_encodings = [x for x in PREFERED_ENCODING_ORDER if x in nv_common]
+        self.non_video_encodings = [x for x in PREFERRED_ENCODING_ORDER if x in nv_common]
         try:
             self.edge_encoding = [x for x in EDGE_ENCODING_ORDER if x in self.non_video_encodings][0]
         except IndexError:
             self.edge_encoding = None
-        log("do_set_client_properties(%s) full_csc_modes=%s, video_scaling=%s, video_subregion=%s, non_video_encodings=%s, edge_encoding=%s, scaling_control=%s",
-            properties, self.full_csc_modes, self.supports_video_scaling, self.video_subregion.supported, self.non_video_encodings, self.edge_encoding, self.scaling_control)
+        log("do_set_client_properties(%s) full_csc_modes=%s, video_subregion=%s, non_video_encodings=%s, edge_encoding=%s, scaling_control=%s",
+            properties, self.full_csc_modes, self.video_subregion.supported, self.non_video_encodings, self.edge_encoding, self.scaling_control)
 
     def get_best_encoding_impl_default(self):
-        if self.common_video_encodings or self.supports_scrolling:
-            return self.get_best_encoding_video
-        return WindowSource.get_best_encoding_impl_default(self)
+        if self.encoding!="grayscale" or has_codec("csc_libyuv"):
+            if self.common_video_encodings or self.supports_scrolling:
+                return self.get_best_encoding_video
+        return super().get_best_encoding_impl_default()
 
 
     def get_best_encoding_video(self, ww, wh, speed, quality, current_encoding):
@@ -432,14 +447,14 @@ class WindowVideoSource(WindowSource):
             return nonvideo(info="no common video encodings")
         if self.is_tray:
             return nonvideo(100, "system tray")
+        text_hint = self.content_type=="text"
+        if text_hint and not TEXT_USE_VIDEO:
+            return nonvideo(info="text content-type")
 
         #ensure the dimensions we use for decision making are the ones actually used:
         cww = ww & self.width_mask
         cwh = wh & self.height_mask
         video_hint = self.content_type=="video"
-        text_hint = self.content_type=="text"
-        if text_hint and not TEXT_USE_VIDEO:
-            return nonvideo(info="text content-type")
 
         rgbmax = self._rgb_auto_threshold
         videomin = cww*cwh // (1+video_hint*2)
@@ -452,16 +467,18 @@ class WindowVideoSource(WindowSource):
         if pixel_count<=rgbmax or cww<8 or cwh<8:
             return lossless("low pixel count")
 
-        if current_encoding!="auto" and current_encoding not in self.common_video_encodings:
+        if current_encoding not in ("auto", "grayscale") and current_encoding not in self.common_video_encodings:
             return nonvideo(info="%s not a supported video encoding" % current_encoding)
 
-        if cww*cwh<=MAX_NONVIDEO_PIXELS:
+        if cww*cwh<=MAX_NONVIDEO_PIXELS or cww<16 or cwh<16:
             return nonvideo(quality+30, "window is too small")
 
         if cww<self.min_w or cww>self.max_w or cwh<self.min_h or cwh>self.max_h:
             return nonvideo(info="size out of range for video encoder")
 
         now = monotonic_time()
+        if now-self.statistics.last_packet_time>1:
+            return nonvideo(quality+30, "no recent updates")
         if now-self.statistics.last_resized<0.350:
             return nonvideo(quality-30, "resized recently")
 
@@ -499,6 +516,8 @@ class WindowVideoSource(WindowSource):
         return current_encoding
 
     def get_best_nonvideo_encoding(self, ww, wh, speed, quality, current_encoding=None, options=()):
+        if self.encoding=="grayscale":
+            return self.encoding_is_grayscale(ww, wh, speed, quality, current_encoding)
         #if we're here, then the window has no alpha (or the client cannot handle alpha)
         #and we can ignore the current encoding
         options = options or self.non_video_encodings
@@ -546,7 +565,7 @@ class WindowVideoSource(WindowSource):
             if r and r.intersects(x, y, w, h):
                 #the damage will take care of scheduling it again
                 vs.cancel_refresh_timer()
-        WindowSource.do_damage(self, ww, wh, x, y, w, h, options)
+        super().do_damage(ww, wh, x, y, w, h, options)
 
 
     def cancel_damage(self):
@@ -555,7 +574,7 @@ class WindowVideoSource(WindowSource):
         vsr = self.video_subregion
         if vsr:
             vsr.cancel_refresh_timer()
-        self.scroll_data = None
+        self.free_scroll_data()
         self.last_scroll_time = 0
         WindowSource.cancel_damage(self)
         #we must clean the video encoder to ensure
@@ -572,21 +591,21 @@ class WindowVideoSource(WindowSource):
             else:
                 #keep the region, but cancel the refresh:
                 vs.cancel_refresh_timer()
-        self.scroll_data = None
+        self.free_scroll_data()
         self.last_scroll_time = 0
         if self.non_video_encodings:
             #refresh the whole window in one go:
             damage_options["novideo"] = True
-        WindowSource.full_quality_refresh(self, damage_options)
+        super().full_quality_refresh(damage_options)
 
 
     def quality_changed(self, window, *args):
-        WindowSource.quality_changed(self, window, args)
+        super().quality_changed(window, args)
         self.video_context_clean()
         return True
 
     def speed_changed(self, window, *args):
-        WindowSource.speed_changed(self, window, args)
+        super().speed_changed(window, args)
         self.video_context_clean()
         return True
 
@@ -594,18 +613,18 @@ class WindowVideoSource(WindowSource):
     def must_batch(self, delay):
         #force batching when using video region
         #because the video region code is in the send_delayed path
-        return self.video_subregion.rectangle is not None or WindowSource.must_batch(self, delay)
+        return self.video_subregion.rectangle is not None or super().must_batch(delay)
 
 
     def get_speed(self, encoding):
-        s = WindowSource.get_speed(self, encoding)
+        s = super().get_speed(encoding)
         #give a boost if we have a video region and this is not video:
         if self.video_subregion.rectangle and encoding not in self.video_encodings:
             s += 25
         return min(100, s)
 
     def get_quality(self, encoding):
-        q = WindowSource.get_quality(self, encoding)
+        q = super().get_quality(encoding)
         #give a boost if we have a video region and this is not video:
         if self.video_subregion.rectangle and encoding not in self.video_encodings:
             q += 40
@@ -615,7 +634,7 @@ class WindowVideoSource(WindowSource):
     def client_decode_error(self, error, message):
         #maybe the stream is now corrupted..
         self.cleanup_codecs()
-        WindowSource.client_decode_error(self, error, message)
+        super().client_decode_error(error, message)
 
 
     def get_refresh_exclude(self):
@@ -633,7 +652,7 @@ class WindowVideoSource(WindowSource):
         self.flush_video_encoder_now()
         encoding = self.auto_refresh_encodings[0]
         options = self.get_refresh_options()
-        WindowSource.do_send_delayed_regions(self, now, regions, encoding, options, get_best_encoding=self.get_refresh_subregion_encoding)
+        super().do_send_delayed_regions(now, regions, encoding, options, get_best_encoding=self.get_refresh_subregion_encoding)
         return True
 
     def get_refresh_subregion_encoding(self, *_args):
@@ -647,7 +666,7 @@ class WindowVideoSource(WindowSource):
 
     def remove_refresh_region(self, region):
         #override so we can update the subregion timers / regions tracking:
-        WindowSource.remove_refresh_region(self, region)
+        super().remove_refresh_region(region)
         self.video_subregion.remove_refresh_region(region)
 
     def add_refresh_region(self, region):
@@ -655,10 +674,11 @@ class WindowVideoSource(WindowSource):
         #returns the number of pixels in the region update
         #don't refresh the video region as part of normal refresh,
         #use subregion refresh for that
+        sarr = super().add_refresh_region
         vr = self.video_subregion.rectangle
         if vr is None:
             #no video region, normal code path:
-            return WindowSource.add_refresh_region(self, region)
+            return sarr(region)
         if vr.contains_rect(region):
             #all of it is in the video region:
             self.video_subregion.add_video_refresh(region)
@@ -666,12 +686,12 @@ class WindowVideoSource(WindowSource):
         ir = vr.intersection_rect(region)
         if ir is None:
             #region is outside video region, normal code path:
-            return WindowSource.add_refresh_region(self, region)
+            return sarr(region)
         #add intersection (rectangle in video region) to video refresh:
         self.video_subregion.add_video_refresh(ir)
         #add any rectangles not in the video region
         #(if any: keep track if we actually added anything)
-        return sum(WindowSource.add_refresh_region(self, r) for r in region.substract_rect(vr))
+        return sum(sarr(r) for r in region.substract_rect(vr))
 
     def matches_video_subregion(self, width, height):
         vr = self.video_subregion.rectangle
@@ -721,7 +741,7 @@ class WindowVideoSource(WindowSource):
             send_nonvideo(encoding=None)
             return
 
-        if coding!="auto" and coding not in self.video_encodings:
+        if coding not in ("auto", "grayscale") and coding not in self.video_encodings:
             sublog("not a video encoding: %s" % coding)
             #keep current encoding selection function
             send_nonvideo(get_best_encoding=self.get_best_encoding)
@@ -734,7 +754,7 @@ class WindowVideoSource(WindowSource):
 
         if not vr:
             sublog("no video region, we may use the video encoder for something else")
-            WindowSource.do_send_delayed_regions(self, damage_time, regions, coding, options)
+            super().do_send_delayed_regions(damage_time, regions, coding, options)
             return
         assert not self.full_frames_only
 
@@ -839,22 +859,24 @@ class WindowVideoSource(WindowSource):
         assert self.ui_thread == threading.current_thread()
         assert coding is not None
         if w==0 or h==0:
+            log("process_damage_region: dropped, zero dimensions")
             return
         if not self.window.is_managed():
-            log("the window %s is not composited!?", self.window)
+            log("process_damage_region: the window %s is not managed", self.window)
             return
         self._sequence += 1
         sequence = self._sequence
         if self.is_cancelled(sequence):
-            log("get_window_pixmap: dropping damage request with sequence=%s", sequence)
+            log("process_damage_region: dropping damage request with sequence=%s", sequence)
             return
 
         rgb_request_time = monotonic_time()
         image = self.window.get_image(x, y, w, h)
         if image is None:
-            log("get_window_pixmap: no pixel data for window %s, wid=%s", self.window, self.wid)
+            log("process_damage_region: no pixel data for window %s, wid=%s", self.window, self.wid)
             return
         if self.is_cancelled(sequence):
+            log("process_damage_region: dropping damage request with sequence=%s", sequence)
             image.free()
             return
         self.pixel_format = image.get_pixel_format()
@@ -874,13 +896,15 @@ class WindowVideoSource(WindowSource):
         # * the video encoder needs a thread safe image
         #   (the xshm backing may change from underneath us if we don't freeze it)
         must_freeze = av_delay>0 or ((coding in self.video_encodings or coding=="auto") and not image.is_thread_safe())
+        log("process_damage_region: av_delay=%s, must_freeze=%s, size=%s, encoding=%s",
+            av_delay, must_freeze, (w, h), coding)
         if must_freeze:
             image.freeze()
         def call_encode(ew, eh, eimage, encoding, eflush):
             self._sequence += 1
             sequence = self._sequence
             if self.is_cancelled(sequence):
-                log("get_window_pixmap: dropping damage request with sequence=%s", sequence)
+                log("call_encode: dropping damage request with sequence=%s", sequence)
                 return
             now = monotonic_time()
             log("process_damage_region: wid=%i, adding pixel data to encode queue (%4ix%-4i - %5s), elapsed time: %.1f ms, request time: %.1f ms, frame delay=%ims",
@@ -911,7 +935,9 @@ class WindowVideoSource(WindowSource):
         if FORCE_AV_DELAY>0:
             return FORCE_AV_DELAY
         if options.get("av-sync", False):
-            return -1
+            return 0
+        if self.content_type in ("text", "picture"):
+            return 0
         l = len(self.encode_queue)
         if l>=self.encode_queue_max_size:
             #we must free some space!
@@ -920,6 +946,7 @@ class WindowVideoSource(WindowSource):
 
     def cancel_encode_from_queue(self):
         #free all items in the encode queue:
+        self.encode_from_queue_due = 0
         eqt = self.encode_from_queue_timer
         avsynclog("cancel_encode_from_queue() timer=%s for wid=%i", eqt, self.wid)
         if eqt:
@@ -942,10 +969,10 @@ class WindowVideoSource(WindowSource):
         #must be called from the UI thread for synchronization
         #we ensure that the timer will fire no later than av_delay
         #re-scheduling it if it was due later than that
-        due = monotonic_time()+av_delay
+        due = monotonic_time()+av_delay/1000.0
         if self.encode_from_queue_due==0 or due<self.encode_from_queue_due:
-            self.encode_from_queue_due = due
             self.cancel_encode_from_queue()
+            self.encode_from_queue_due = due
             self.encode_from_queue_timer = self.timeout_add(av_delay, self.timer_encode_from_queue)
 
     def timer_encode_from_queue(self):
@@ -1010,7 +1037,7 @@ class WindowVideoSource(WindowSource):
         if not still_due:
             avsynclog("encode_from_queue: nothing due")
             return
-        first_due = max(0, min(still_due))
+        first_due = max(ENCODE_QUEUE_MIN_GAP, min(still_due))
         avsynclog("encode_from_queue: first due in %ims, due list=%s (av-sync delay=%i, actual=%i, for wid=%i)",
                   first_due, still_due, self.av_sync_delay, av_delay, self.wid)
         self.idle_add(self.schedule_encode_from_queue, first_due)
@@ -1030,10 +1057,10 @@ class WindowVideoSource(WindowSource):
 
             Can be called from any thread.
         """
-        WindowSource.update_encoding_options(self, force_reload)
+        super().update_encoding_options(force_reload)
         vs = self.video_subregion
         if vs:
-            if (self.encoding!="auto" and self.encoding not in self.common_video_encodings) or \
+            if (self.encoding not in ("auto", "grayscale") and self.encoding not in self.common_video_encodings) or \
                 self.full_frames_only or STRICT_MODE or not self.non_video_encodings or not self.common_video_encodings or \
                 self.content_type=="text" or \
                 (self._mmap and self._mmap_size>0):
@@ -1071,8 +1098,8 @@ class WindowVideoSource(WindowSource):
                             #we don't bother substracting new and old (too complicated)
                             refreshlog("scheduling refresh of old region: %s", old)
                             #this may also schedule a refresh:
-                            WindowSource.add_refresh_region(self, old)
-                        WindowSource.remove_refresh_region(self, newrect)
+                            super().add_refresh_region(old)
+                        super().remove_refresh_region(newrect)
                         if not self.refresh_regions:
                             self.cancel_refresh_timer()
                         if subregion_needs_refresh:
@@ -1099,8 +1126,8 @@ class WindowVideoSource(WindowSource):
         if self._mmap and self._mmap_size>0:
             scorelog("cannot score: mmap enabled")
             return
-        if self.content_type=="text":
-            scorelog("no pipelines for text content-type")
+        if self.content_type=="text" and self.non_video_encodings:
+            scorelog("no pipelines for 'text' content-type")
             return
         elapsed = monotonic_time()-self._last_pipeline_check
         max_elapsed = 0.75
@@ -1125,7 +1152,7 @@ class WindowVideoSource(WindowSource):
             #too early, or too late!
             return checknovideo("sequence=%s (cancelled=%s)", self._sequence, self._damage_cancelled)
         #which video encodings to evaluate:
-        if self.encoding=="auto":
+        if self.encoding in ("auto", "grayscale"):
             eval_encodings = self.common_video_encodings
         else:
             if self.encoding not in self.common_video_encodings:
@@ -1252,7 +1279,7 @@ class WindowVideoSource(WindowSource):
         for encoding in encodings:
             #these are the CSC modes the client can handle for this encoding:
             #we must check that the output csc mode for each encoder is one of those
-            supported_csc_modes = self.full_csc_modes.strlistget(encoding)
+            supported_csc_modes = self.full_csc_modes.strtupleget(encoding)
             if not supported_csc_modes:
                 scorelog(" no supported csc modes for %s", encoding)
                 continue
@@ -1260,12 +1287,19 @@ class WindowVideoSource(WindowSource):
             if not encoder_specs:
                 scorelog(" no encoder specs for %s", encoding)
                 continue
-            encoding_score_delta = self.encoding_options.get("%s.score-delta" % encoding, 0)
+            #if not specified as an encoding option,
+            #discount encodings further down the list of preferred encodings:
+            #(ie: prefer h264 to vp9)
+            try:
+                encoding_score_delta = len(PREFERRED_ENCODING_ORDER)//2-PREFERRED_ENCODING_ORDER.index(encoding)
+            except ValueError:
+                encoding_score_delta = 0
+            encoding_score_delta = self.encoding_options.get("%s.score-delta" % encoding, encoding_score_delta)
             def add_scores(info, csc_spec, enc_in_format):
                 #find encoders that take 'enc_in_format' as input:
                 colorspace_specs = encoder_specs.get(enc_in_format)
                 if not colorspace_specs:
-                    #scorelog(" no matching colorspace specs for %s - %s", enc_in_format, info)
+                    scorelog(" no matching colorspace specs for %s - %s", enc_in_format, info)
                     return
                 #log("%s encoding from %s: %s", info, pixel_format, colorspace_specs)
                 for encoder_spec in colorspace_specs:
@@ -1277,9 +1311,12 @@ class WindowVideoSource(WindowSource):
                         continue
                     max_w = min(encoder_spec.max_w, vmw)
                     max_h = min(encoder_spec.max_h, vmh)
-                    scaling = self.calculate_scaling(width, height, max_w, max_h)
+                    if (csc_spec and csc_spec.can_scale) or encoder_spec.can_scale:
+                        scaling = self.calculate_scaling(width, height, max_w, max_h)
+                    else:
+                        scaling = (1, 1)
                     score_delta = encoding_score_delta
-                    if self.is_shadow and enc_in_format in ("YUV420P", "YUV422P") and scaling==(1, 1):
+                    if self.is_shadow and enc_in_format in ("NV12", "YUV420P", "YUV422P") and scaling==(1, 1):
                         #avoid subsampling with shadow servers:
                         score_delta -= 40
                     vs = self.video_subregion
@@ -1290,6 +1327,9 @@ class WindowVideoSource(WindowSource):
                                                     score_delta, ffps, detection)
                     if score_data:
                         scores.append(score_data)
+                    else:
+                        scorelog(" no score data for %s",
+                                 (enc_in_format, csc_spec, encoder_spec, width, height, scaling, ".."))
             if not FORCE_CSC or src_format==FORCE_CSC_MODE:
                 add_scores("direct (no csc)", None, src_format)
 
@@ -1300,10 +1340,9 @@ class WindowVideoSource(WindowSource):
                 #    pixel_format, [x[0] for x in csc_specs], set(x[1] for x in csc_specs))
                 #we have csc module(s) that can get us from pixel_format to out_csc:
                 for out_csc, l in csc_specs.items():
-                    actual_csc = self.csc_equiv(out_csc)
                     if not bool(FORCE_CSC_MODE) or FORCE_CSC_MODE==out_csc:
                         for csc_spec in l:
-                            add_scores("via %s (%s)" % (out_csc, actual_csc), csc_spec, out_csc)
+                            add_scores("via %s" % out_csc, csc_spec, out_csc)
         s = sorted(scores, key=lambda x : -x[0])
         scorelog("get_video_pipeline_options%s scores=%s", (encodings, width, height, src_format), s)
         if self.is_cancelled():
@@ -1314,13 +1353,6 @@ class WindowVideoSource(WindowSource):
             self.last_pipeline_scores = s
         self.last_pipeline_time = monotonic_time()
         return s
-
-    def csc_equiv(self, csc_mode):
-        #in some places, we want to check against the subsampling used
-        #and not the colorspace itself.
-        #and NV12 uses the same subsampling as YUV420P...
-        return {"NV12" : "YUV420P",
-                "BGRX" : "YUV444P"}.get(csc_mode, csc_mode)
 
 
     def get_video_fps(self, width, height):
@@ -1342,7 +1374,7 @@ class WindowVideoSource(WindowSource):
             otime = lde[0][0]
             if now>otime:
                 pixels = sum(w*h for _,w,h in lde)
-                return int(float(pixels)/(width*height)/(now - otime))
+                return int(pixels/(width*height)/(now - otime))
         return 0
 
     def calculate_scaling(self, width, height, max_w=4096, max_h=4096):
@@ -1351,23 +1383,33 @@ class WindowVideoSource(WindowSource):
         q = self._current_quality
         s = self._current_speed
         now = monotonic_time()
+        crs = self.client_render_size
         def get_min_required_scaling(default_value=(1, 1)):
-            if width<=max_w and height<=max_h:
+            mw = max_w
+            mh = max_h
+            if crs:
+                #if the client is going to downscale things anyway,
+                #then there is no need to send at a higher resolution than that:
+                crsw, crsh = crs
+                if crsw<max_w:
+                    mw = crsw
+                if crsh<max_h:
+                    mh = crsh
+            if width<=mw and height<=mh:
                 return default_value    #no problem
             #most encoders can't deal with that!
             #sort them from smallest scaling to highest:
             sopts = {}
             for num, den in SCALING_OPTIONS:
-                sopts[float(num)/den] = (num, den)
+                sopts[num/den] = (num, den)
             for ratio in reversed(sorted(sopts.keys())):
                 num, den = sopts[ratio]
                 if num==1 and den==1:
                     continue
-                if width*num/den<=max_w and height*num/den<=max_h:
+                if width*num/den<=mw and height*num/den<=mh:
                     return (num, den)
             raise Exception("BUG: failed to find a scaling value for window size %sx%s" % (width, height))
-        if not SCALING or not self.supports_video_scaling:
-            #not supported by client or disabled by env
+        if not SCALING:
             if (width>max_w or height>max_h) and first_time("scaling-required"):
                 if not SCALING:
                     scalinglog.warn("Warning: video scaling is disabled")
@@ -1420,15 +1462,20 @@ class WindowVideoSource(WindowSource):
                     elif not video:
                         #downscale non-video content less:
                         target *= 2
+                    if self.image_depth==30:
+                        #high bit depth is normally used for high quality
+                        target *= 10
                     #high quality means less scaling:
                     target = target * (10+q)**2 // 50**2
                     #high speed means more scaling:
                     target = target * 60**2 // (q+20)**2
-                    sscaling = OrderedDict()
+                    sscaling = {}
+                    mrs = get_min_required_scaling()
+                    min_ratio = mrs[0]/mrs[1]
                     for num, denom in SCALING_OPTIONS:
                         #scaled pixels per second value:
                         spps = pps*(num**2)/(denom**2)
-                        ratio = float(target)/spps
+                        ratio = target/spps
                         #ideal ratio is 1, measure distance from 1:
                         score = int(abs(1-ratio)*100)
                         if self.actual_scaling and self.actual_scaling==(num, denom) and (num!=1 or denom!=1):
@@ -1436,6 +1483,9 @@ class WindowVideoSource(WindowSource):
                             #try to stick to the same value longer:
                             #give it a score boost (lowest score wins):
                             score = int(score/1.5)
+                        if num/denom>min_ratio:
+                            #higher than minimum, should not be used unless we have no choice:
+                            score = int(score*100)
                         sscaling[score] = (num, denom)
                     scalinglog("calculate_scaling%s wid=%i, pps=%s, target=%s, scores=%s",
                                (width, height, max_w, max_h), self.wid, pps, target, sscaling)
@@ -1486,10 +1536,10 @@ class WindowVideoSource(WindowSource):
         if scaling is None:
             scaling = 1, 1
         v, u = scaling
-        if float(v)/u>1.0:
+        if v/u>1.0:
             #never upscale before encoding!
             scaling = 1, 1
-        elif float(v)/float(u)<0.1:
+        elif v/u<0.1:
             #don't downscale more than 10 times! (for each dimension - that's 100 times!)
             scaling = 1, 10
         scalinglog("calculate_scaling%s=%s (q=%s, s=%s, scaling_control=%s)",
@@ -1504,7 +1554,7 @@ class WindowVideoSource(WindowSource):
 
             Runs in the 'encode' thread.
         """
-        if encoding=="auto":
+        if encoding in ("auto", "grayscale"):
             encodings = self.common_video_encodings
         else:
             encodings = [encoding]
@@ -1602,8 +1652,8 @@ class WindowVideoSource(WindowSource):
         start = monotonic_time()
         if not scores:
             if not self.is_cancelled():
-                videolog.error("Error: no video pipeline options found for %s at %ix%i",
-                               src_format, width, height)
+                videolog.error("Error: no video pipeline options found for %s %i-bit at %ix%i",
+                               src_format, self.image_depth, width, height)
             return False
         videolog("setup_pipeline%s", (scores, width, height, src_format))
         for option in scores:
@@ -1680,9 +1730,9 @@ class WindowVideoSource(WindowSource):
         self._csc_encoder = csce
         enc_start = monotonic_time()
         #FIXME: filter dst_formats to only contain formats the encoder knows about?
-        dst_formats = tuple(bytestostr(x) for x in self.full_csc_modes.strlistget(encoder_spec.encoding))
+        dst_formats = tuple(bytestostr(x) for x in self.full_csc_modes.strtupleget(encoder_spec.encoding))
         ve = encoder_spec.make_instance()
-        options = self.encoding_options.copy()
+        options = typedict(self.encoding_options)
         options.update(self.get_video_encoder_options(encoder_spec.encoding, width, height))
         ve.init_context(enc_width, enc_height, enc_in_format,
                         dst_formats, encoder_spec.encoding,
@@ -1728,34 +1778,39 @@ class WindowVideoSource(WindowSource):
         coding = packet[6]
         if coding in self.common_video_encodings:
             return None
-        return WindowSource.get_fail_cb(self, packet)
+        return super().get_fail_cb(packet)
 
 
     def make_draw_packet(self, x, y, w, h, coding, data, outstride, client_options, options):
         #overriden so we can invalidate the scroll data:
         #log.error("make_draw_packet%s", (x, y, w, h, coding, "..", outstride, client_options)
-        packet = WindowSource.make_draw_packet(self, x, y, w, h, coding, data, outstride, client_options, options)
+        packet = super().make_draw_packet(x, y, w, h, coding, data, outstride, client_options, options)
         sd = self.scroll_data
         if sd and not options.get("scroll"):
             if client_options.get("scaled_size") or client_options.get("quality", 100)<20:
                 #don't scroll very low quality content, better to refresh it
                 scrolllog("low quality %s update, invalidating all scroll data (scaled_size=%s, quality=%s)",
                           coding, client_options.get("scaled_size"), client_options.get("quality", 100))
-                sd.free()
+                self.do_free_scroll_data()
             else:
                 sd.invalidate(x, y, w, h)
         return packet
 
+
+    def free_scroll_data(self):
+        self.call_in_encode_thread(False, self.do_free_scroll_data)
+
+    def do_free_scroll_data(self):
+        sd = self.scroll_data
+        if sd:
+            self.scroll_data = None
+            sd.free()
 
     def may_use_scrolling(self, image, options):
         scrolllog("may_use_scrolling(%s, %s) supports_scrolling=%s, has_pixels=%s, content_type=%s, non-video encodings=%s",
                   image, options, self.supports_scrolling, image.has_pixels, self.content_type, self.non_video_encodings)
         if not self.supports_scrolling:
             scrolllog("no scrolling: not supported")
-            return False
-        if options.get("scroll") is True:
-            scrolllog("no scrolling: detection has already been used on this image")
-            #we've already checked
             return False
         #don't download the pixels if we have a GPU buffer,
         #since that means we're likely to be able to compress on the GPU too with NVENC:
@@ -1764,8 +1819,6 @@ class WindowVideoSource(WindowSource):
         if self.content_type=="video" or not self.non_video_encodings:
             scrolllog("no scrolling: content is video")
             return False
-        x = image.get_target_x()
-        y = image.get_target_y()
         w = image.get_width()
         h = image.get_height()
         if w<MIN_SCROLL_IMAGE_SIZE or h<MIN_SCROLL_IMAGE_SIZE:
@@ -1775,7 +1828,24 @@ class WindowVideoSource(WindowSource):
         scroll_data = self.scroll_data
         if self.b_frame_flush_timer and scroll_data:
             scrolllog("no scrolling: b_frame_flush_timer=%s", self.b_frame_flush_timer)
-            self.scroll_data = None
+            self.do_free_scroll_data()
+            return False
+        return self.do_scroll_encode("scroll", image, options, self.scroll_min_percent)
+
+    def scroll_encode(self, coding, image, options):
+        self.do_scroll_encode(coding, image, options, 0)
+        #do_scroll_encode() sends the packets
+        #so there is nothing to return:
+        return None
+
+    def do_scroll_encode(self, coding, image, options, min_percent=0):
+        x = image.get_target_x()
+        y = image.get_target_y()
+        w = image.get_width()
+        h = image.get_height()
+        scroll_data = self.scroll_data
+        if options.get("scroll") is True:
+            scrolllog("no scrolling: detection has already been used on this image")
             return False
         try:
             start = monotonic_time()
@@ -1799,30 +1869,36 @@ class WindowVideoSource(WindowSource):
                 return False
             stride = image.get_rowstride()
             scroll_data.update(pixels, x, y, w, h, stride, bpp)
-            max_distance = min(1000, (100-self.scroll_min_percent)*h//100)
+            max_distance = min(1000, (100-min_percent)*h//100)
             scroll_data.calculate(max_distance)
             #marker telling us not to invalidate the scroll data from here on:
             options["scroll"] = True
-            scroll, count = scroll_data.get_best_match()
-            end = monotonic_time()
-            match_pct = int(100*count/h)
-            scrolllog("best scroll guess took %ims, matches %i%% of %i lines: %s",
-                      (end-start)*1000, match_pct, h, scroll)
+            if min_percent>0:
+                max_zones = 20
+                scroll, count = scroll_data.get_best_match()
+                end = monotonic_time()
+                match_pct = int(100*count/h)
+                scrolllog("best scroll guess took %ims, matches %i%% of %i lines: %s",
+                          (end-start)*1000, match_pct, h, scroll)
+            else:
+                max_zones = 50
+                match_pct = min_percent
             #if enough scrolling is detected, use scroll encoding for this frame:
-            if match_pct>=self.scroll_min_percent:
-                self.encode_scrolling(scroll_data, image, options, match_pct)
+            if match_pct>=min_percent:
+                self.encode_scrolling(scroll_data, image, options, match_pct, max_zones)
                 return True
         except Exception:
-            scrolllog("may_use_scrolling(%s, %s) detection", image, options, exc_info=True)
+            scrolllog("do_scroll_encode(%s, %s)", image, options, exc_info=True)
             if not self.is_cancelled():
                 scrolllog.error("Error during scrolling detection")
                 scrolllog.error(" with image=%s, options=%s", image, options, exc_info=True)
             #make sure we start again from scratch next time:
-            scroll_data.free()
-            self.scroll_data = None
-            return False
+            self.do_free_scroll_data()
+        return False
 
-    def encode_scrolling(self, scroll_data, image, options, match_pct):
+    def encode_scrolling(self, scroll_data, image, options, match_pct, max_zones=20):
+        #generate all the packets for this screen update
+        #using 'scroll' encoding and picture encodings for the other regions
         start = monotonic_time()
         try:
             del options["av-sync"]
@@ -1830,7 +1906,8 @@ class WindowVideoSource(WindowSource):
             pass
         #tells make_data_packet not to invalidate the scroll data:
         ww, wh = self.window_dimensions
-        scrolllog("encode_scrolling([], %s, %s, %i) window-dimensions=%s", image, options, match_pct, (ww, wh))
+        scrolllog("encode_scrolling([], %s, %s, %i, %i) window-dimensions=%s",
+                  image, options, match_pct, max_zones, (ww, wh))
         x = image.get_target_x()
         y = image.get_target_y()
         w = image.get_width()
@@ -1843,13 +1920,13 @@ class WindowVideoSource(WindowSource):
             v = scroll_data.get_scroll_values()
             if v:
                 raw_scroll, non_scroll = v
-        if len(raw_scroll)>=20 or len(non_scroll)>=20:
-            #avoid fragmentation, which is too costly
-            #(too many packets, too many loops through the encoder code)
-            scrolllog("too many items: %i scrolls, %i non-scrolls - sending just one image instead",
-                      len(raw_scroll), len(non_scroll))
-            raw_scroll = {}
-            non_scroll = {0 : h}
+                if len(raw_scroll)>=max_zones or len(non_scroll)>=max_zones:
+                    #avoid fragmentation, which is too costly
+                    #(too many packets, too many loops through the encoder code)
+                    scrolllog("too many items: %i scrolls, %i non-scrolls - sending just one image instead",
+                              len(raw_scroll), len(non_scroll))
+                    raw_scroll = {}
+                    non_scroll = {0 : h}
         scrolllog(" will send scroll data=%s, non-scroll=%s", raw_scroll, non_scroll)
         flush = len(non_scroll)
         #convert to a screen rectangle list for the client:
@@ -1861,6 +1938,7 @@ class WindowVideoSource(WindowSource):
                 assert y+line+scroll>=0, "cannot scroll rectangle by %i lines from %i+%i" % (scroll, y, line)
                 assert y+line+scroll<=wh, "cannot scroll rectangle %i high by %i lines from %i+%i (window height is %i)" % (count, scroll, y, line, wh)
                 scrolls.append((x, y+line, w, count, 0, scroll))
+        del raw_scroll
         #send the scrolls if we have any
         #(zero change scrolls have been removed - so maybe there are none)
         if scrolls:
@@ -1869,14 +1947,16 @@ class WindowVideoSource(WindowSource):
                 del client_options["scroll"]
             except KeyError:
                 pass
-            if flush>0 and self.supports_flush:
+            if flush>0:
                 client_options["flush"] = flush
             coding = "scroll"
             end = monotonic_time()
-            packet = self.make_draw_packet(x, y, w, h, coding, LargeStructure(coding, scrolls), 0, client_options, options)
+            packet = self.make_draw_packet(x, y, w, h,
+                                           coding, LargeStructure(coding, scrolls), 0, client_options, options)
             self.queue_damage_packet(packet, 0, 0, options)
             compresslog("compress: %5.1fms for %4ix%-4i pixels at %4i,%-4i for wid=%-5i using %9s as %3i rectangles  (%5iKB)           , sequence %5i, client_options=%s",
                  (end-start)*1000.0, w, h, x, y, self.wid, coding, len(scrolls), w*h*4/1024, self._damage_packet_sequence, client_options)
+        del scrolls
         #send the rest as rectangles:
         if non_scroll:
             speed, quality = self._current_speed, self._current_quality
@@ -1898,7 +1978,7 @@ class WindowVideoSource(WindowSource):
                 coding, data, client_options, outw, outh, outstride, _ = ret
                 assert data
                 flush -= 1
-                if self.supports_flush and flush>0:
+                if flush>0:
                     client_options["flush"] = flush
                 #if SAVE_TO_FILE:
                 #    #hard-coded for BGRA!
@@ -1908,7 +1988,8 @@ class WindowVideoSource(WindowSource):
                 #    filename = "./scroll-%i-%i.png" % (self._sequence, len(non_scroll)-flush)
                 #    im.save(filename, "png")
                 #    log.info("saved scroll y=%i h=%i to %s", sy, sh, filename)
-                packet = self.make_draw_packet(sub.get_target_x(), sub.get_target_y(), outw, outh, coding, data, outstride, client_options, options)
+                packet = self.make_draw_packet(sub.get_target_x(), sub.get_target_y(), outw, outh,
+                                               coding, data, outstride, client_options, options)
                 self.queue_damage_packet(packet, 0, 0, options)
                 psize = w*sh*4
                 csize = len(data)
@@ -1922,6 +2003,7 @@ class WindowVideoSource(WindowSource):
         assert flush==0
         self.last_scroll_time = monotonic_time()
         scrolllog("scroll encoding total time: %ims", (self.last_scroll_time-start)*1000)
+
 
     def do_schedule_auto_refresh(self, encoding, data, region, client_options, options):
         #for scroll encoding, data is a LargeStructure wrapper:
@@ -1952,7 +2034,7 @@ class WindowVideoSource(WindowSource):
             #if there are non-scroll packets following this one, they will
             #and if not then we're OK anyway
             return
-        WindowSource.do_schedule_auto_refresh(self, encoding, data, region, client_options, options)
+        super().do_schedule_auto_refresh(encoding, data, region, client_options, options)
 
 
     def get_fallback_encoding(self, encodings, order):
@@ -1960,7 +2042,7 @@ class WindowVideoSource(WindowSource):
             if self._current_speed>=50:
                 order = FAST_ORDER
             else:
-                order = PREFERED_ENCODING_ORDER
+                order = PREFERRED_ENCODING_ORDER
         #don't choose mmap!
         fallback_encodings = tuple(x for x in order if
                                    (x in encodings and x in self._encoders and x!="mmap"))
@@ -1985,7 +2067,10 @@ class WindowVideoSource(WindowSource):
         if warn:
             videolog.warn("using non-video fallback encoding")
         if self.image_depth==8:
-            encoding = "png/P"
+            if self.encoding=="grayscale":
+                encoding = "png/L"
+            else:
+                encoding = "png/P"
         else:
             encoding = self.get_video_fallback_encoding(order)
             if not encoding:
@@ -2037,7 +2122,9 @@ class WindowVideoSource(WindowSource):
                           }
             t = monotonic_time()
             tstr = time.strftime("%H-%M-%S", time.localtime(t))
-            filename = "./W%i-VDO-%s.%03i.%s" % (self.wid, tstr, (t*1000)%1000, SAVE_VIDEO_FRAMES)
+            filename = "W%i-VDO-%s.%03i.%s" % (self.wid, tstr, (t*1000)%1000, SAVE_VIDEO_FRAMES)
+            if SAVE_VIDEO_PATH:
+                filename = os.path.join(SAVE_VIDEO_PATH, filename)
             videolog("do_video_encode: saving %4ix%-4i pixels, %7i bytes to %s", w, h, (stride*h), filename)
             img.save(filename, SAVE_VIDEO_FRAMES, **kwargs)
 
@@ -2045,9 +2132,16 @@ class WindowVideoSource(WindowSource):
             #scroll encoding has dealt with this image
             return None
 
-        if not self.common_video_encodings or self.image_depth not in (24, 32):
+        if not self.common_video_encodings:
             #we have to send using a non-video encoding as that's all we have!
             return self.video_fallback(image, options)
+        if self.image_depth not in (24, 30, 32):
+            #this image depth is not supported for video
+            return self.video_fallback(image, options)
+
+        if self.encoding=="grayscale":
+            from xpra.codecs.csc_libyuv.colorspace_converter import argb_to_gray    #@UnresolvedImport
+            image = argb_to_gray(image)
 
         vh = self.video_helper
         if vh is None:
@@ -2056,7 +2150,7 @@ class WindowVideoSource(WindowSource):
             if self.is_cancelled():
                 return None
             #just for diagnostics:
-            supported_csc_modes = self.full_csc_modes.strlistget(encoding)
+            supported_csc_modes = self.full_csc_modes.strtupleget(encoding)
             encoder_specs = vh.get_encoder_specs(encoding)
             encoder_types = []
             ecsc = []
@@ -2140,15 +2234,14 @@ class WindowVideoSource(WindowSource):
             self.close_video_stream_file()
             elapsed = monotonic_time()-self.start_time
             stream_filename = "window-%i-%.1f-%s.%s" % (self.wid, elapsed, ve.get_type(), ve.get_encoding())
+            if SAVE_VIDEO_PATH:
+                stream_filename = os.path.join(SAVE_VIDEO_PATH, stream_filename)
             self.video_stream_file = open(stream_filename, "wb")
             log.info("saving new %s stream for window %i to %s", ve.get_encoding(), self.wid, stream_filename)
         if self.video_stream_file:
             self.video_stream_file.write(data)
             self.video_stream_file.flush()
 
-        #tell the client which colour subsampling we used:
-        #(note: see csc_equiv!)
-        client_options["csc"] = self.csc_equiv(csc)
         #tell the client about scaling (the size of the encoded picture):
         #(unless the video encoder has already done so):
         scaled_size = None
@@ -2239,7 +2332,6 @@ class WindowVideoSource(WindowSource):
         if self.video_stream_file:
             self.video_stream_file.write(data)
             self.video_stream_file.flush()
-        client_options["csc"] = self.csc_equiv(csc)
         if frame<self.start_video_frame:
             client_options["paint"] = False
         if scaled_size:

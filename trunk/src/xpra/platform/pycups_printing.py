@@ -13,7 +13,7 @@ import shlex
 from threading import Lock
 import cups
 
-from xpra.os_util import OSX, PYTHON3, bytestostr
+from xpra.os_util import OSX, bytestostr
 from xpra.util import engs, envint, envbool, parse_simple_dict
 from xpra.log import Logger
 
@@ -109,11 +109,9 @@ def get_lpinfo_drv(make_and_model):
         log.error("Error: lpinfo command is not defined")
         return None
     command = shlex.split(LPINFO)+["--make-and-model", make_and_model, "-m"]
-    def preexec():
-        os.setsid()
     log("get_lpinfo_drv(%s) command=%s", make_and_model, command)
     try:
-        proc = Popen(command, stdout=PIPE, stderr=PIPE, close_fds=True, preexec_fn=preexec)
+        proc = Popen(command, stdout=PIPE, stderr=PIPE, start_new_session=True)
     except Exception as e:
         log("get_lp_info_drv(%s) lpinfo command %s failed", make_and_model, command, exc_info=True)
         log.error("Error: lpinfo command failed to run")
@@ -148,11 +146,10 @@ def get_lpinfo_drv(make_and_model):
         log.warn("Warning: lpinfo command failed and returned %s", proc.returncode)
         log.warn(" command used: '%s'", " ".join(command))
         return None
-    if PYTHON3:
-        try:
-            out = out.decode()
-        except:
-            out = str(out)
+    try:
+        out = out.decode()
+    except Exception:
+        out = str(out)
     log("lpinfo out=%s", nonl(out))
     log("lpinfo err=%s", nonl(err))
     if err:
@@ -242,10 +239,8 @@ def validate_setup():
 
 def exec_lpadmin(args, success_cb=None):
     command = shlex.split(LPADMIN)+args
-    def preexec():
-        os.setsid()
     log("exec_lpadmin(%s) command=%s", args, command)
-    proc = Popen(command, close_fds=True, preexec_fn=preexec)
+    proc = Popen(command, start_new_session=True)
     #use the global child reaper to make sure this doesn't end up as a zombie
     from xpra.child_reaper import getChildReaper
     cr = getChildReaper()
@@ -257,7 +252,7 @@ def exec_lpadmin(args, success_cb=None):
             from xpra.platform import get_username
             log.warn(" verify that user '%s' has all the required permissions", get_username())
             log.warn(" for running: '%s'", LPADMIN)
-            log.warn(" full command: %s", b" ".join("'%s'" % x for x in command))
+            log.warn(" full command: %s", " ".join("'%s'" % x for x in command))
         elif success_cb:
             success_cb()
     cr.add_process(proc, "lpadmin", command, ignore=True, forget=True, callback=check_returncode)
@@ -273,7 +268,7 @@ def sanitize_name(name):
 
 def add_printer(name, options, info, location, attributes, success_cb=None):
     log("add_printer%s", (name, options, info, location, attributes, success_cb))
-    mimetypes = options.get("mimetypes", [DEFAULT_MIMETYPE])
+    mimetypes = options.strtupleget("mimetypes", (DEFAULT_MIMETYPE,))
     if not mimetypes:
         log.error("Error: no mimetypes specified for printer '%s'", name)
         return
@@ -296,10 +291,7 @@ def add_printer(name, options, info, location, attributes, success_cb=None):
         log.error("Error: cannot add printer '%s':", name)
         log.error(" the printing system does not support %s", " or ".join(mimetypes))
         return
-    try:
-        from urllib.parse import urlencode      #@UnresolvedImport @UnusedImport
-    except ImportError:
-        from urllib import urlencode            #@UnresolvedImport @Reimport
+    from urllib.parse import urlencode      #@UnresolvedImport @UnusedImport
     command = [
                "-p", xpra_printer_name,
                "-v", FORWARDER_BACKEND+":"+FORWARDER_TMPDIR+"?"+urlencode(attributes),

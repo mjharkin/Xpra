@@ -2111,14 +2111,20 @@ if gtk_x11_ENABLED:
                     ))
     else:
         #below uses gtk/gdk:
+        gtk2_pkgconfig = pkgconfig(*PYGTK_PACKAGES)
+        if not WIN32:
+            add_to_keywords(gtk2_pkgconfig, 'extra_compile_args', "-Wno-error=deprecated-declarations")
         cython_add(Extension("xpra.x11.gtk2.gdk_display_source",
                     ["xpra/x11/gtk2/gdk_display_source.pyx"],
-                    **pkgconfig(*PYGTK_PACKAGES)
+                    **gtk2_pkgconfig
                     ))
         GDK_BINDINGS_PACKAGES = PYGTK_PACKAGES + ["x11", "xext", "xfixes", "xdamage"]
+        if not WIN32:
+            gdk2_pkgconfig = pkgconfig(*GDK_BINDINGS_PACKAGES)
+        add_to_keywords(gdk2_pkgconfig, 'extra_compile_args', "-Wno-error=deprecated-declarations")
         cython_add(Extension("xpra.x11.gtk2.gdk_bindings",
                     ["xpra/x11/gtk2/gdk_bindings.pyx"],
-                    **pkgconfig(*GDK_BINDINGS_PACKAGES)
+                    **gdk2_pkgconfig
                     ))
 
 if client_ENABLED and gtk3_ENABLED:
@@ -2194,9 +2200,12 @@ toggle_modules(sound_ENABLED and not (OSX or WIN32), "xpra.sound.pulseaudio")
 
 toggle_packages(clipboard_ENABLED, "xpra.clipboard")
 if clipboard_ENABLED:
+    pygtk_pkgconfig = pkgconfig(*PYGTK_PACKAGES)
+    if not WIN32:
+        add_to_keywords(pygtk_pkgconfig, 'extra_compile_args', "-Wno-error=deprecated-declarations")
     cython_add(Extension("xpra.gtk_common.gdk_atoms",
                 ["xpra/gtk_common/gdk_atoms.pyx"],
-                **pkgconfig(*PYGTK_PACKAGES)
+                **pygtk_pkgconfig
                 ))
 
 toggle_packages(client_ENABLED or server_ENABLED, "xpra.codecs.xor")
@@ -2247,10 +2256,12 @@ if nvenc7_ENABLED:
                          "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v9.1\\bin",
                          "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v9.2\\bin",
                          "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v10.0\\bin",
+                         "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v10.1\\bin",
+                         "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v10.2\\bin",
                          ] + path_options
     else:
         nvcc_exe = "nvcc"
-        for v in ("", "-10.1", "-10.0", "-9.0", "-8.0", "-7.5", "-7.0", "-6.5", "-6.0", "-5.5"):
+        for v in ("", "-10.2", "-10.1", "-10.0", "-9.0", "-8.0", "-7.5", "-7.0", "-6.5", "-6.0", "-5.5"):
             path_options += ["/usr/local/cuda%s/bin" % v, "/opt/cuda%s/bin" % v]
     options = [os.path.join(x, nvcc_exe) for x in path_options]
     if not WIN32:
@@ -2269,7 +2280,7 @@ if nvenc7_ENABLED:
         if code==0:
             vpos = out.rfind(", V")
             if vpos>0:
-                version = out[vpos+3:].strip("\n")
+                version = out[vpos+3:].split("\n")[0]
                 version_str = " version %s" % version
             else:
                 version = "0"
@@ -2320,7 +2331,10 @@ if nvenc7_ENABLED:
             cmd += ["--machine", "32"]
         if WIN32:
             cmd += ["-I%s" % os.path.abspath("win32")]
-        comp_code_options = [(30, 30), (35, 35)]
+        comp_code_options = []
+        if version<(11,):
+            comp_code_options.append((30, 30))
+        comp_code_options.append((35, 35))
         #see: http://docs.nvidia.com/cuda/maxwell-compatibility-guide/#building-maxwell-compatible-apps-using-cuda-6-0
         if version!=(0,) and version<(7, 5):
             print("CUDA version %s is very unlikely to work")
@@ -2483,6 +2497,7 @@ if vpx_ENABLED:
 toggle_packages(enc_ffmpeg_ENABLED, "xpra.codecs.enc_ffmpeg")
 if enc_ffmpeg_ENABLED:
     ffmpeg_pkgconfig = pkgconfig("libavcodec", "libavformat")
+    add_to_keywords(ffmpeg_pkgconfig, 'extra_compile_args', "-Wno-error=deprecated-declarations")
     cython_add(Extension("xpra.codecs.enc_ffmpeg.encoder",
                 ["xpra/codecs/enc_ffmpeg/encoder.pyx"]+membuffers_c,
                 **ffmpeg_pkgconfig))

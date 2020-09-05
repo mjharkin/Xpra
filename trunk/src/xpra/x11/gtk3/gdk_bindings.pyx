@@ -6,8 +6,6 @@
 
 #cython: language_level=3
 
-from __future__ import absolute_import
-
 import os
 import traceback
 
@@ -16,10 +14,10 @@ gi.require_version('GdkX11', '3.0')
 from gi.repository import GObject           #@UnresolvedImport
 from gi.repository import GdkX11            #@UnresolvedImport @UnusedImport
 from gi.repository import Gdk               #@UnresolvedImport
+from gi.repository import Gtk               #@UnresolvedImport
 
 
 from xpra.os_util import strtobytes, bytestostr
-from xpra.gtk_common.quit import gtk_main_quit_really
 from xpra.gtk_common.error import trap, XError
 from xpra.x11.common import X11Event
 from xpra.monotonic_time cimport monotonic_time     #pylint: disable=syntax-error
@@ -1035,7 +1033,7 @@ cdef object _gw(display, Window xwin):
             error = gdk_x11_display_error_trap_pop(disp)
             if error:
                 verbose("ignoring XError %s in unwind", get_error_text(error))
-            raise XError(e)
+            raise XError(e) from None
         else:
             raise
     if error:
@@ -1075,7 +1073,7 @@ cdef GdkFilterReturn x_event_filter(GdkXEvent * e_gdk,
         log("x_event_filter event=%s/%s took %.1fms", event_args, x_event_type_names.get(etype, etype), 1000.0*(monotonic_time()-start))
     except (KeyboardInterrupt, SystemExit):
         verbose("exiting on KeyboardInterrupt/SystemExit")
-        gtk_main_quit_really()
+        Gtk.main_quit()
     except:
         log.warn("Unhandled exception in x_event_filter:", exc_info=True)
     return GDK_FILTER_CONTINUE

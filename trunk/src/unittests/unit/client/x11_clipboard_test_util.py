@@ -17,13 +17,13 @@ log = Logger("clipboard")
 SANITY_CHECKS = envbool("XPRA_CLIPBOARD_SANITY_CHECKS", True)
 
 def has_xclip():
-	return which("xclip")
+	return bool(which("xclip"))
 
 
 class X11ClipboardTestUtil(X11ClientTestUtil):
 
 	def get_clipboard_value(self, display, selection="clipboard"):
-		out = self.get_command_output("xclip -d %s -selection %s -o" % (display, selection), shell=True)
+		out = X11ClientTestUtil.get_command_output("xclip -d %s -selection %s -o" % (display, selection), shell=True)
 		return out.decode()
 
 	def set_clipboard_value(self, display, value, selection="clipboard"):
@@ -40,9 +40,9 @@ class X11ClipboardTestUtil(X11ClientTestUtil):
 		time.sleep(wait)
 		new_value = self.get_clipboard_value(display2)
 		if synced:
-			assert new_value==value, "clipboard contents do not match, expected '%s' but got '%s'" % (value, new_value)
+			assert new_value==value, "clipboard contents for %s do not match, expected '%s' but got '%s'" % (selection, value, new_value)
 		else:
-			assert new_value!=value, "clipboard contents match but synchronization was not expected: value='%s'" % value
+			assert new_value!=value, "clipboard contents for %s match but synchronization was not expected: value='%s'" % (selection, value)
 		if SANITY_CHECKS and display2!=display1:
 			#verify that the value has not changed on the original display:
 			new_value = self.get_clipboard_value(display1)
@@ -57,6 +57,14 @@ class X11ClipboardTestUtil(X11ClientTestUtil):
 									"--clipboard-direction=%s" % direction, "--remote-logging=no")
 		assert pollwait(client, 2) is None, "client has exited with return code %s" % client.poll()
 		client_display = xvfb.display
+
+		#wait for client to own the clipboard:
+		cmd = self.get_xpra_cmd()+["info", server_display]
+		for _ in range(10):
+			out = X11ClientTestUtil.get_command_output(cmd)
+			if out.find(b"clipboard.client=")>0:
+				break
+			time.sleep(1)
 
 		if SANITY_CHECKS:
 			log("sanity checks")

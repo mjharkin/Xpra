@@ -1,18 +1,18 @@
 #!/usr/bin/env python
 # This file is part of Xpra.
-# Copyright (C) 2011-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2011-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import sys
 import os
 import socket
+import platform
 
 #tricky: use xpra.scripts.config to get to the python "platform" module
 import xpra
-from xpra.scripts.config import python_platform
-from xpra.util import updict, envbool, get_util_logger
-from xpra.os_util import get_linux_distribution, PYTHON3, BITS, POSIX, WIN32
+from xpra.util import updict, envbool, obsc, get_util_logger
+from xpra.os_util import get_linux_distribution, BITS, POSIX, WIN32
 
 XPRA_VERSION = xpra.__version__     #@UndefinedVariable
 
@@ -20,10 +20,10 @@ CHECK_SSL = envbool("XPRA_VERSION_CHECK_SSL", True)
 SSL_CAFILE = None
 if WIN32:
     try:
-        import certifi
+        import certifi  #@UnresolvedImport
         SSL_CAFILE = certifi.where()
-    except ImportError:
-        pass
+    except (ImportError, AttributeError):
+        get_util_logger().error("failed to locate SSL ca file", exc_info=True)
 SSL_CAFILE = os.environ.get("XPRA_SSL_CAFILE", SSL_CAFILE)
 
 
@@ -33,20 +33,20 @@ def warn(msg, *args, **kwargs):
     get_util_logger().warn(msg, *args, **kwargs)
 
 
-def full_version_str():
+def full_version_str() -> str:
     s = XPRA_VERSION
     try:
         from xpra.src_info import REVISION, LOCAL_MODIFICATIONS
         s += "-r%s%s" % (REVISION, "M" if LOCAL_MODIFICATIONS>0 else "")
-    except ImportError:
+    except (ImportError, TypeError):
         pass
     return s
 
 
-def version_as_numbers(version):
+def version_as_numbers(version : str):
     return [int(x) for x in version.split(".")]
 
-def version_compat_check(remote_version):
+def version_compat_check(remote_version : str):
     if remote_version is None:
         msg = "remote version not available!"
         log(msg)
@@ -68,7 +68,7 @@ def version_compat_check(remote_version):
     return None
 
 
-def get_host_info():
+def get_host_info(obfuscate=False) -> dict:
     #this function is for non UI thread info
     info = {
         "pid"                   : os.getpid(),
@@ -80,8 +80,16 @@ def get_host_info():
             },
         }
     try:
-        info["hostname"] = socket.gethostname()
-    except (OSError, IOError):
+        hostname = socket.gethostname()
+        if obfuscate and hostname.find(".")>0:
+            parts = hostname.split(".")
+            for i, part in enumerate(parts):
+                if i>0:
+                    parts[i] = obsc(part)
+            hostname = ".".join(parts)
+        if hostname:
+            info["hostname"] = hostname
+    except OSError:
         pass
     if POSIX:
         info.update({
@@ -90,7 +98,7 @@ def get_host_info():
             })
     return info
 
-def get_version_info():
+def get_version_info() -> dict:
     props = {
              "version"  : XPRA_VERSION
              }
@@ -102,7 +110,7 @@ def get_version_info():
         warn("missing some source information: %s", e)
     return props
 
-def get_version_info_full():
+def get_version_info_full() -> dict:
     props = get_version_info()
     try:
         from xpra import build_info
@@ -129,9 +137,9 @@ def get_version_info_full():
     log("get_version_info_full()=%s", props)
     return props
 
-def do_get_platform_info():
+def do_get_platform_info() -> dict:
     from xpra.os_util import platform_name, platform_release
-    pp = sys.modules.get("platform", python_platform)
+    pp = sys.modules.get("platform", platform)
     def get_processor_name():
         if pp.system() == "Windows":
             return pp.processor()
@@ -152,7 +160,11 @@ def do_get_platform_info():
     ld = get_linux_distribution()
     if ld:
         info["linux_distribution"] = ld
-    release = platform_release(pp.release())
+    try:
+        release = platform_release(pp.release())
+    except OSError:
+        log("do_get_platform_info()", exc_info=True)
+        release = "unknown"
     info.update({
             ""          : sys.platform,
             "name"      : platform_name(sys.platform, info.get("linux_distribution") or release),
@@ -176,10 +188,7 @@ def get_platform_info():
 def get_version_from_url(url):
     e = None
     try:
-        if PYTHON3:
-            from urllib.request import urlopen
-        else:
-            from urllib2 import urlopen
+        from urllib.request import urlopen
     except ImportError:
         log("get_version_from_url(%s) urllib2 not found: %s", url, e)
         return None

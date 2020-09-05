@@ -4,6 +4,7 @@
 # later version. See the file COPYING for details.
 
 import os
+import sys
 import subprocess
 
 from xpra.platform.win32 import constants as win32con
@@ -19,6 +20,8 @@ SKIPPED_PRINTERS = os.environ.get("XPRA_SKIPPED_PRINTERS", "Microsoft XPS Docume
 PRINTER_LEVEL = envint("XPRA_WIN32_PRINTER_LEVEL", 1)
 DEFAULT_PRINTER_FLAGS = "LOCAL,SHARED+NETWORK+CONNECTIONS"
 PRINTER_FLAGS = [x.strip() for x in os.environ.get("XPRA_WIN32_PRINTER_FLAGS", DEFAULT_PRINTER_FLAGS).split(",")]
+
+DEFAULT_MIMETYPES = ["application/pdf", ]
 
 
 PRINTER_ENUM_VALUES = {
@@ -45,16 +48,19 @@ log("PRINTER_ENUM_VALUES: %s", PRINTER_ENUM_VALUES)
 
 log("PRINTER_FLAGS=%s", csv(PRINTER_FLAGS))
 VALID_PRINTER_FLAGS = ("LOCAL", "SHARED", "CONNECTIONS", "NETWORK", "REMOTE")
-PRINTER_ENUMS = []
-for v in PRINTER_FLAGS:                     #ie: "SHARED+NETWORK+CONNECTIONS"
-    flags = v.replace('|','+').split("+")   #ie: ["SHARED", "NETWORK", "CONNECTIONS"]
-    values = []
-    for flag in flags:                      #ie: "SHARED"
-        if flag not in VALID_PRINTER_FLAGS:
-            log.warn("Warning: the following printer flag is invalid and will be ignored: %s", flag)
-        else:
-            values.append(flag)             #ie: "SHARED"
-    PRINTER_ENUMS.append(values)
+def get_printer_enums():
+    printer_enums = []
+    for v in PRINTER_FLAGS:                     #ie: "SHARED+NETWORK+CONNECTIONS"
+        flags = v.replace('|','+').split("+")   #ie: ["SHARED", "NETWORK", "CONNECTIONS"]
+        values = []
+        for flag in flags:                      #ie: "SHARED"
+            if flag not in VALID_PRINTER_FLAGS:
+                log.warn("Warning: the following printer flag is invalid and will be ignored: %s", flag)
+            else:
+                values.append(flag)             #ie: "SHARED"
+        printer_enums.append(values)
+    return tuple(printer_enums)
+PRINTER_ENUMS = get_printer_enums()
 log("PRINTER_ENUMS=%s", PRINTER_ENUMS)
 
 
@@ -165,7 +171,9 @@ def get_printers():
                 log("found printer: %#x, %s, %s, %s", flags, desc, name, comment)
                 #strip duplicated and empty strings from the description:
                 desc_els = []
-                [desc_els.append(x) for x in desc.split(",") if (x and not desc_els.count(x))]
+                for x in desc.split(","):
+                    if x and not desc_els.count(x):
+                        desc_els.append(x)
                 info = {"printer-info"            : bytestostr(",".join(desc_els)),
                         "type"                    : penum}
                 if comment:
@@ -192,7 +200,7 @@ def print_files(printer, filenames, title, options):
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         startupinfo.wShowWindow = 0     #aka win32.con.SW_HIDE
-        process = subprocess.Popen(command, stdin=None, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd, startupinfo=startupinfo)
+        process = subprocess.Popen(command, stdout=sys.stdout, stderr=sys.stderr, cwd=cwd, startupinfo=startupinfo)
         process.print_filename = filename
         #we just let it run, no need for reaping the process on win32
         processes.append(process)

@@ -6,13 +6,12 @@
 
 import sys
 import os
-import time
 import errno
 import socket
 
 from xpra.net.common import ConnectionClosedException
 from xpra.util import envint, envbool, csv
-from xpra.os_util import WIN32, PYTHON2, POSIX, LINUX
+from xpra.os_util import POSIX, LINUX
 from xpra.platform.features import TCP_OPTIONS, IP_OPTIONS, SOCKET_OPTIONS
 from xpra.log import Logger
 
@@ -21,7 +20,7 @@ log = Logger("network", "protocol")
 SOCKET_CORK = envbool("XPRA_SOCKET_CORK", LINUX)
 if SOCKET_CORK:
     try:
-        assert socket.TCP_CORK>0
+        assert socket.TCP_CORK>0  #@UndefinedVariable
     except (AttributeError, AssertionError) as cork_e:
         log.warn("Warning: unable to use TCP_CORK on %s", sys.platform)
         log.warn(" %s", cork_e)
@@ -29,41 +28,15 @@ if SOCKET_CORK:
 SOCKET_NODELAY = envbool("XPRA_SOCKET_NODELAY", None)
 VSOCK_TIMEOUT = envint("XPRA_VSOCK_TIMEOUT", 5)
 SOCKET_TIMEOUT = envint("XPRA_SOCKET_TIMEOUT", 20)
-SSL_PEEK = envbool("XPRA_SSL_PEEK", True)
 #this is more proper but would break the proxy server:
 SOCKET_SHUTDOWN = envbool("XPRA_SOCKET_SHUTDOWN", False)
+LOG_TIMEOUTS = envint("XPRA_LOG_TIMEOUTS", 1)
 
-#on some platforms (ie: OpenBSD), reading and writing from sockets
-#raises an IOError but we should continue if the error code is EINTR
-#this wrapper takes care of it.
-#EWOULDBLOCK can also be hit with the proxy server when we handover the socket
-CONTINUE_ERRNO = {
-            errno.EINTR         : "EINTR",
-            errno.EWOULDBLOCK   : "EWOULDBLOCK"
-            }
 ABORT = {
          errno.ENXIO            : "ENXIO",
          errno.ECONNRESET       : "ECONNRESET",
          errno.EPIPE            : "EPIPE",
          }
-continue_wait = 0
-
-#default to using os.read and os.write for both tty devices and regular streams
-#(but overriden for win32 below for tty devices to workaround an OS "feature")
-OS_READ = os.read
-OS_WRITE = os.write
-TTY_READ = os.read
-TTY_WRITE = os.write
-if WIN32 and PYTHON2:
-    #win32 has problems writing more than 32767 characters to stdout!
-    #see: http://bugs.python.org/issue11395
-    #(this is fixed in python 3.2 and we don't care about 3.0 or 3.1)
-    def win32ttywrite(fd, buf):
-        #this awful limitation only applies to tty devices:
-        if len(buf)>32767:
-            buf = buf[:32767]
-        return os.write(fd, buf)
-    TTY_WRITE = win32ttywrite
 
 
 PROTOCOL_STR = {}
@@ -75,56 +48,40 @@ for x in dir(socket):
         FAMILY_STR[getattr(socket, x)] = x
 
 
-def set_continue_wait(v):
-    global continue_wait
-    continue_wait = v
-
 CAN_RETRY_EXCEPTIONS = ()
 CLOSED_EXCEPTIONS = ()
 
 def can_retry(e):
     if isinstance(e, socket.timeout):
         return "socket.timeout"
-    if isinstance(e, (IOError, OSError)):
-        global CONTINUE_ERRNO
-        code = e.args[0]
-        can_continue = CONTINUE_ERRNO.get(code)
-        if can_continue:
-            return can_continue
-
-        #SSL pollution - see ticket #1927
-        if code=="The read operation timed out":
-            return str(code)
-
+    if isinstance(e, BrokenPipeError):
+        raise ConnectionClosedException(e) from None
+    if isinstance(e, OSError):
         if isinstance(e, CAN_RETRY_EXCEPTIONS):
             return str(e)
 
+        code = e.args[0]
         abort = ABORT.get(code, code)
         if abort is not None:
             err = getattr(e, "errno", None)
             log("can_retry: %s, args=%s, errno=%s, code=%s, abort=%s", type(e), e.args, err, code, abort)
-            raise ConnectionClosedException(e)
+            raise ConnectionClosedException(e) from None
     if isinstance(e, CLOSED_EXCEPTIONS):
-        raise ConnectionClosedException(e)
+        raise ConnectionClosedException(e) from None
     return False
 
 def untilConcludes(is_active_cb, can_retry_cb, f, *a, **kw):
-    global continue_wait
-    wait = 0
     while is_active_cb():
         try:
             return f(*a, **kw)
         except Exception as e:
             retry = can_retry_cb(e)
-            log("untilConcludes(%s, %s, %s, %s, %s) %s, retry=%s",
-                is_active_cb, can_retry_cb, f, a, kw, e, retry, exc_info=True)
+            if LOG_TIMEOUTS>0:
+                log("untilConcludes(%s, %s, %s, %s, %s) %s, retry=%s",
+                    is_active_cb, can_retry_cb, f, a, kw, e, retry, exc_info=LOG_TIMEOUTS>=2)
             e = None
             if not retry:
                 raise
-            if wait>0:
-                time.sleep(wait/1000.0)     #wait is in milliseconds, sleep takes seconds
-            if wait<continue_wait:
-                wait += 1
 
 
 def pretty_socket(s):
@@ -140,9 +97,9 @@ def pretty_socket(s):
     return str(s)
 
 
-class Connection(object):
-    def __init__(self, endpoint, socktype, info=None):
-        log("Connection%s", (endpoint, socktype, info))
+class Connection:
+    def __init__(self, endpoint, socktype, info=None, options=None):
+        log("Connection%s", (endpoint, socktype, info, options))
         self.endpoint = endpoint
         try:
             assert isinstance(endpoint, (tuple, list))
@@ -152,6 +109,7 @@ class Connection(object):
         self.socktype_wrapped = socktype
         self.socktype = socktype
         self.info = info or {}
+        self.options = options or {}
         self.input_bytecount = 0
         self.input_readcount = 0
         self.output_bytecount = 0
@@ -160,28 +118,28 @@ class Connection(object):
         self.active = True
         self.timeout = 0
 
-    def set_nodelay(self, nodelay):
+    def set_nodelay(self, nodelay : bool):
         pass
 
-    def set_cork(self, cork):
+    def set_cork(self, cork : bool):
         pass
 
-    def is_active(self):
+    def is_active(self) -> bool:
         return self.active
 
-    def set_active(self, active):
+    def set_active(self, active : bool):
         self.active = active
 
     def close(self):
         self.set_active(False)
 
-    def can_retry(self, e):
+    def can_retry(self, e) -> bool:
         return can_retry(e)
 
     def untilConcludes(self, *args):
         return untilConcludes(self.is_active, self.can_retry, *args)
 
-    def peek(self, _n):
+    def peek(self, _n : int):
         #not implemented
         return None
 
@@ -199,7 +157,7 @@ class Connection(object):
         self.input_readcount += 1
         return r
 
-    def get_info(self):
+    def get_info(self) -> dict:
         info = self.info.copy()
         if self.socktype_wrapped!=self.socktype:
             info["wrapped"] = self.socktype_wrapped
@@ -225,19 +183,11 @@ class Connection(object):
 # socket (if it exists)
 class TwoFileConnection(Connection):
     def __init__(self, writeable, readable, abort_test=None, target=None, socktype="", close_cb=None, info=None):
-        Connection.__init__(self, target, socktype, info)
+        super().__init__(target, socktype, info)
         self._writeable = writeable
         self._readable = readable
         self._read_fd = self._readable.fileno()
         self._write_fd = self._writeable.fileno()
-        if os.isatty(self._read_fd):
-            self._osread = TTY_READ
-        else:
-            self._osread = OS_READ
-        if os.isatty(self._write_fd):
-            self._oswrite = TTY_WRITE
-        else:
-            self._oswrite = OS_WRITE
         self._abort_test = abort_test
         self._close_cb = close_cb
 
@@ -248,11 +198,11 @@ class TwoFileConnection(Connection):
 
     def read(self, n):
         self.may_abort("read")
-        return self._read(self._osread, self._read_fd, n)
+        return self._read(os.read, self._read_fd, n)
 
     def write(self, buf):
         self.may_abort("write")
-        return self._write(self._oswrite, self._write_fd, buf)
+        return self._write(os.write, self._write_fd, buf)
 
     def close(self):
         log("%s.close() close callback=%s, readable=%s, writeable=%s",
@@ -276,7 +226,7 @@ class TwoFileConnection(Connection):
     def __repr__(self):
         return "Pipe(%s)" % str(self.target)
 
-    def get_info(self):
+    def get_info(self) -> dict:
         d = Connection.get_info(self)
         d.update({
             "type"  : "pipe",
@@ -291,39 +241,54 @@ class TwoFileConnection(Connection):
 TCP_SOCKTYPES = ("tcp", "ssl", "ws", "wss")
 
 class SocketConnection(Connection):
-    def __init__(self, sock, local, remote, target, socktype, info=None):
-        log("SocketConnection%s", (sock, local, remote, target, socktype, info))
-        Connection.__init__(self, target, socktype, info)
+    def __init__(self, sock, local, remote, target, socktype, info=None, socket_options=None):
+        log("SocketConnection%s", (sock, local, remote, target, socktype, info, socket_options))
+        super().__init__(target, socktype, info, socket_options)
         self._socket = sock
         self.local = local
         self.remote = remote
         self.protocol_type = "socket"
-        self.nodelay = None
-        self.cork = None
+        if self.socktype_wrapped in TCP_SOCKTYPES:
+            def boolget(k, default_value):
+                v = self.options.get(k)
+                if v is None:
+                    return default_value
+                try:
+                    return bool(int(v))
+                except ValueError:
+                    return default_value
+            self.cork = boolget("cork", SOCKET_CORK)
+            self.nodelay = boolget("nodelay", SOCKET_NODELAY)
+            log("%s options: cork=%s, nodelay=%s", self.socktype_wrapped, self.cork, self.nodelay)
+            if self.nodelay:
+                self.do_set_nodelay(self.nodelay)
+        else:
+            self.cork = False
+            self.nodelay = False
+        self.nodelay_value = None
+        self.cork_value = None
         if isinstance(remote, str):
             self.filename = remote
-        if SOCKET_NODELAY is not None and self.socktype in TCP_SOCKTYPES:
-            self.do_set_nodelay(SOCKET_NODELAY)
 
-    def set_nodelay(self, nodelay):
-        if SOCKET_NODELAY is None and self.socktype_wrapped in TCP_SOCKTYPES and self.nodelay!=nodelay:
+    def set_nodelay(self, nodelay : bool):
+        if self.nodelay is None and self.nodelay_value!=nodelay:
             self.do_set_nodelay(nodelay)
 
-    def do_set_nodelay(self, nodelay):
+    def do_set_nodelay(self, nodelay : bool):
         self._socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, nodelay)
-        self.nodelay = nodelay
+        self.nodelay_value = nodelay
         log("changed %s socket to nodelay=%s", self.socktype, nodelay)
 
-    def set_cork(self, cork):
-        if SOCKET_CORK and self.socktype_wrapped in TCP_SOCKTYPES and self.cork!=cork:
-            self._socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_CORK, cork)
-            self.cork = cork
+    def set_cork(self, cork : bool):
+        if self.cork and self.cork_value!=cork:
+            self._socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_CORK, cork)  #@UndefinedVariable
+            self.cork_value = cork
             log("changed %s socket to cork=%s", self.socktype, cork)
 
-    def peek(self, n):
+    def peek(self, n : int):
         return self._socket.recv(n, socket.MSG_PEEK)
 
-    def read(self, n):
+    def read(self, n : int):
         return self._read(self._socket.recv, n)
 
     def write(self, buf):
@@ -358,7 +323,7 @@ class SocketConnection(Connection):
                 raise
         log("%s.close() done", self)
 
-    def error_is_closed(self, e):
+    def error_is_closed(self, e) -> bool:
         return isinstance(e, CLOSED_EXCEPTIONS)
 
     def __repr__(self):
@@ -369,7 +334,7 @@ class SocketConnection(Connection):
                 )
         return "%s %s:%s" % (self.socktype, self.protocol_type, pretty_socket(self.local))
 
-    def get_info(self):
+    def get_info(self) -> dict:
         d = Connection.get_info(self)
         try:
             d["remote"] = self.remote or ""
@@ -381,10 +346,10 @@ class SocketConnection(Connection):
             log.error("Error accessing socket information", exc_info=True)
         return d
 
-    def get_socket_info(self):
+    def get_socket_info(self) -> dict:
         return self.do_get_socket_info(self._socket)
 
-    def do_get_socket_info(self, s):
+    def do_get_socket_info(self, s) -> dict:
         if not s:
             return None
         info = {}
@@ -409,17 +374,21 @@ class SocketConnection(Connection):
                 fd = 0
             if fd:
                 info["fileno"] = fd
-            from xpra.platform.netdev_query import get_interface_info
             #ie: self.local = ("192.168.1.7", "14500")
             if self.local and len(self.local)==2:
                 from xpra.net.net_util import get_interface
                 iface = get_interface(self.local[0])
                 #ie: iface = "eth0"
                 if iface and iface!="lo":
-                    i = get_interface_info(fd, iface)
-                    if i:
-                        info["device"] = i
-        except OSError as e:
+                    try:
+                        from xpra.platform.netdev_query import get_interface_info
+                    except ImportError as e:
+                        log("do_get_socket_info() no netdev_query: %s", e)
+                    else:
+                        i = get_interface_info(fd, iface)
+                        if i:
+                            info["device"] = i
+        except (OSError, ValueError) as e:
             log("do_get_socket_info() error querying socket speed", exc_info=True)
             log.error("Error querying socket speed:")
             log.error(" %s", e)
@@ -440,7 +409,7 @@ class SocketConnection(Connection):
         return info
 
 
-def get_socket_options(sock, level, options):
+def get_socket_options(sock, level, options) -> dict:
     opts = {}
     errs = []
     for k in options:
@@ -460,7 +429,7 @@ def get_socket_options(sock, level, options):
     return opts
 
 
-class SSLPeekFile(object):
+class SocketPeekFile:
     def __init__(self, fileobj, peeked, update_peek):
         self.fileobj = fileobj
         self.peeked = peeked
@@ -497,7 +466,8 @@ class SSLPeekFile(object):
             return peeked[:read]
         return self.fileobj.readline(limit)
 
-class SSLSocketWrapper(object):
+
+class SocketPeekWrapper:
     def __init__(self, sock):
         self.socket = sock
         self.peeked = b""
@@ -512,7 +482,7 @@ class SSLSocketWrapper(object):
     def makefile(self, mode, bufsize=None):
         fileobj = self.socket.makefile(mode, bufsize)
         if self.peeked and mode and mode.startswith("r"):
-            return SSLPeekFile(fileobj, self.peeked, self._update_peek)
+            return SocketPeekFile(fileobj, self.peeked, self._update_peek)
         return fileobj
 
     def _update_peek(self, peeked):
@@ -537,10 +507,17 @@ class SSLSocketWrapper(object):
         return self.socket.recv(bufsize, flags)
 
 
-class SSLSocketConnection(SocketConnection):
+class PeekableSocketConnection(SocketConnection):
+
+    def enable_peek(self):
+        assert not isinstance(self._socket, SocketPeekWrapper)
+        self._socket = SocketPeekWrapper(self._socket)
+
+
+class SSLSocketConnection(PeekableSocketConnection):
     SSL_TIMEOUT_MESSAGES = ("The read operation timed out", "The write operation timed out")
 
-    def can_retry(self, e):
+    def can_retry(self, e) -> bool:
         if getattr(e, "library", None)=="SSL":
             reason = getattr(e, "reason", None)
             if reason in ("WRONG_VERSION_NUMBER", "UNEXPECTED_RECORD"):
@@ -551,13 +528,9 @@ class SSLSocketConnection(SocketConnection):
         code = getattr(e, "code", None)
         if code in SSLSocketConnection.SSL_TIMEOUT_MESSAGES:
             return True
-        return SocketConnection.can_retry(self, e)
+        return super().can_retry(e)
 
-    def enable_peek(self):
-        assert not isinstance(self._socket, SSLSocketWrapper)
-        self._socket = SSLSocketWrapper(self._socket)
-
-    def get_info(self):
+    def get_info(self) -> dict:
         i = SocketConnection.get_info(self)
         i["ssl"] = True
         for k,fn in {
@@ -598,7 +571,7 @@ def log_new_connection(conn, socket_info=""):
     try:
         peername = sock.getpeername()
     except socket.error:
-        peername = str(address)
+        peername = address
     try:
         sockname = sock.getsockname()
     except AttributeError:
@@ -608,14 +581,15 @@ def log_new_connection(conn, socket_info=""):
         conn, socket_info, type(conn), sock, sockname, address, peername)
     if peername:
         frominfo = pretty_socket(peername)
-        info_msg = "New %s connection received from %s" % (socktype, frominfo)
+        log.info("New %s connection received", socktype)
+        log.info(" from '%s'", pretty_socket(frominfo))
         if socket_info:
-            info_msg += " on %s" % (pretty_socket(socket_info),)
+            log.info(" on '%s'", pretty_socket(socket_info))
     elif socktype=="unix-domain":
         frominfo = sockname
-        info_msg = "New %s connection received on %s" % (socktype, frominfo)
+        log.info("New %s connection received", socktype)
+        log.info(" on '%s'", frominfo)
     else:
-        info_msg = "New %s connection received"
+        log.info("New %s connection received")
         if socket_info:
-            info_msg += " on %s" % (pretty_socket(socket_info),)
-    log.info(info_msg)
+            log.info(" on %s", pretty_socket(socket_info))

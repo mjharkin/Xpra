@@ -34,6 +34,9 @@ XPRA_CLIPBOARD_NOTIFICATION_ID  = XPRA_NOTIFICATIONS_OFFSET+8
 XPRA_FAILURE_NOTIFICATION_ID    = XPRA_NOTIFICATIONS_OFFSET+9
 XPRA_DPI_NOTIFICATION_ID        = XPRA_NOTIFICATIONS_OFFSET+10
 XPRA_DISCONNECT_NOTIFICATION_ID = XPRA_NOTIFICATIONS_OFFSET+11
+XPRA_DISPLAY_NOTIFICATION_ID    = XPRA_NOTIFICATIONS_OFFSET+12
+XPRA_STARTUP_NOTIFICATION_ID    = XPRA_NOTIFICATIONS_OFFSET+13
+XPRA_FILETRANSFER_NOTIFICATION_ID = XPRA_NOTIFICATIONS_OFFSET+14
 
 
 #constants shared between client and server:
@@ -145,17 +148,20 @@ def disconnect_is_an_error(reason):
     return reason.find("error")>=0 or (reason.find("timeout")>=0 and reason!=IDLE_TIMEOUT)
 
 
-if sys.version > '3':
-    unicode = str           #@ReservedAssignment
-
-
 def dump_exc():
     """Call this from a except: clause to print a nice traceback."""
     print("".join(traceback.format_exception(*sys.exc_info())))
 
+def noerr(fn, *args):
+    try:
+        fn(*args)
+    except Exception:
+        pass
+
+
 # A simple little class whose instances we can stick random bags of attributes
 # on.
-class AdHocStruct(object):
+class AdHocStruct:
     def __repr__(self):
         return ("<%s object, contents: %r>"
                 % (type(self).__name__, self.__dict__))
@@ -177,7 +183,8 @@ def merge_dicts(a, b, path=None):
             elif a[key] == b[key]:
                 pass # same leaf value
             else:
-                raise Exception('Conflict at %s' % '.'.join(path + [str(key)]))
+                raise Exception('Conflict at %s: existing value is %s, new value is %s' % (
+                    '.'.join(path + [str(key)]), a[key], b[key]))
         else:
             a[key] = b[key]
     return a
@@ -204,7 +211,7 @@ def roundup(n, m):
     return (n + m - 1) & ~(m - 1)
 
 
-class AtomicInteger(object):
+class AtomicInteger:
     def __init__(self, integer = 0):
         self.counter = integer
         self.lock = threading.RLock()
@@ -292,29 +299,30 @@ class typedict(dict):
         get_util_logger().warn(msg, *args, **kwargs)
 
     def rawget(self, key, default=None):
-        v = self.get(key)
+        if key in self:
+            return self[key]
         #py3k and bytes as keys...
-        if v is None and isinstance(key, str):
+        if isinstance(key, str):
             from xpra.os_util import strtobytes
-            v = self.get(strtobytes(key), default)
-        return v
-
-    def capsget(self, key, default=None):
-        v = self.rawget(key, default)
-        if sys.version >= '3' and isinstance(v, bytes):
-            from xpra.os_util import bytestostr
-            v = bytestostr(v)
-        return v
+            return self.get(strtobytes(key), default)
+        return default
 
     def strget(self, k, default=None):
-        v = self.capsget(k, default)
+        v = self.rawget(k, default)
         if v is None:
             return default
         from xpra.os_util import bytestostr
         return bytestostr(v)
 
-    def intget(self, k, d=0):
-        v = self.capsget(k)
+    def bytesget(self, k : str, default=None):
+        v = self.rawget(k, default)
+        if v is None:
+            return default
+        from xpra.os_util import strtobytes
+        return strtobytes(v)
+
+    def intget(self, k : str, d=0):
+        v = self.rawget(k)
         if v is None:
             return d
         try:
@@ -325,11 +333,14 @@ class typedict(dict):
             self._warn(" %s", e)
             return d
 
-    def boolget(self, k, default_value=False):
-        return bool(self.capsget(k, default_value))
+    def boolget(self, k : str, default_value=False):
+        v = self.rawget(k)
+        if v is None:
+            return default_value
+        return bool(v)
 
-    def dictget(self, k, default_value=None):
-        v = self.capsget(k, default_value)
+    def dictget(self, k : str, default_value=None):
+        v = self.rawget(k, default_value)
         if v is None:
             return default_value
         if not isinstance(v, dict):
@@ -338,8 +349,8 @@ class typedict(dict):
             return default_value
         return v
 
-    def intpair(self, k, default_value=None):
-        v = self.intlistget(k, default_value)
+    def intpair(self, k : str, default_value=None):
+        v = self.inttupleget(k, default_value)
         if v is None:
             return default_value
         if len(v)!=2:
@@ -350,14 +361,20 @@ class typedict(dict):
         except ValueError:
             return default_value
 
-    def strlistget(self, k, default_value=[], min_items=None, max_items=None):
-        return self.listget(k, default_value, str, min_items, max_items)
+    def strtupleget(self, k : str, default_value=(), min_items=None, max_items=None):
+        return self.tupleget(k, default_value, str, min_items, max_items)
 
-    def intlistget(self, k, default_value=[], min_items=None, max_items=None):
-        return self.listget(k, default_value, int, min_items, max_items)
+    def inttupleget(self, k : str, default_value=(), min_items=None, max_items=None):
+        return self.tupleget(k, default_value, int, min_items, max_items)
 
-    def listget(self, k, default_value=[], item_type=None, min_items=None, max_items=None):
-        v = self.capsget(k)
+    def tupleget(self, k : str, default_value=(), item_type=None, min_items=None, max_items=None):
+        v = self._listget(k, default_value, item_type, min_items, max_items)
+        if isinstance(v, list):
+            v = tuple(v)
+        return v
+
+    def _listget(self, k : str, default_value, item_type=None, min_items=None, max_items=None):
+        v = self.rawget(k)
         if v is None:
             return default_value
         if not isinstance(v, (list, tuple)):
@@ -375,11 +392,11 @@ class typedict(dict):
         aslist = list(v)
         if item_type:
             for i, x in enumerate(aslist):
-                if sys.version_info[0]>=3 and isinstance(x, bytes) and item_type==str:
+                if isinstance(x, bytes) and item_type==str:
                     from xpra.os_util import bytestostr
                     x = bytestostr(x)
                     aslist[i] = x
-                elif isinstance(x, unicode) and item_type==str:
+                elif isinstance(x, str) and item_type==str:
                     x = str(x)
                     aslist[i] = x
                 if not isinstance(x, item_type):
@@ -391,6 +408,8 @@ class typedict(dict):
 def parse_scaling_value(v):
     if not v:
         return None
+    if v.endswith("%"):
+        return float(v[:1]).as_integer_ratio()
     values = v.replace("/", ":").replace(",", ":").split(":", 1)
     values = [int(x) for x in values]
     for x in values:
@@ -431,6 +450,8 @@ def prettify_plug_name(s, default=""):
     s = re.sub(r"[0-9\.]*\\", "-", s).lstrip("-")
     if s.startswith("WinSta-"):
         s = s[len("WinSta-"):]
+    if s.startswith("(Standard monitor types) "):
+        s = s[len("(Standard monitor types) "):]
     if s=="0":
         s = default
     return s
@@ -446,6 +467,11 @@ def do_log_screen_sizes(root_w, root_h, sizes):
         if size_mm==0:
             return 0
         return int(size_pixels * 254 / size_mm / 10)
+    def add_workarea(info, wx, wy, ww, wh):
+        info.append("workarea: %ix%i" % (ww, wh))
+        if wx!=0 or wy!=0:
+            #log position if not (0, 0)
+            info.append("at %ix%i" % (wx, wy))
     for s in sizes:
         if len(s)<10:
             log.info(" %s", s)
@@ -459,14 +485,9 @@ def do_log_screen_sizes(root_w, root_h, sizes):
             #log plug dimensions if not the same as display (root):
             info.append("%ix%i" % (width, height))
         info.append("(%ix%i mm - DPI: %ix%i)" % (width_mm, height_mm, dpi(width, width_mm), dpi(height, height_mm)))
-        def add_workarea(wx, wy, ww, wh):
-            info.append("workarea: %ix%i" % (ww, wh))
-            if wx!=0 or wy!=0:
-                #log position if not (0, 0)
-                info.append("at %ix%i" % (wx, wy))
 
         if work_width!=width or work_height!=height or work_x!=0 or work_y!=0:
-            add_workarea(work_x, work_y, work_width, work_height)
+            add_workarea(info, work_x, work_y, work_width, work_height)
         log.info("  "+" ".join(info))
         for i, m in enumerate(monitors, start=1):
             if len(m)<7:
@@ -486,7 +507,7 @@ def do_log_screen_sizes(root_w, root_h, sizes):
                 dwork_x, dwork_y, dwork_width, dwork_height = m[7:11]
                 #only show it again if different from the screen workarea
                 if dwork_x!=work_x or dwork_y!=work_y or dwork_width!=work_width or dwork_height!=work_height:
-                    add_workarea(dwork_x, dwork_y, dwork_width, dwork_height)
+                    add_workarea(info, dwork_x, dwork_y, dwork_width, dwork_height)
             log.info("    "+" ".join(info))
 
 def get_screen_info(screen_sizes):
@@ -522,7 +543,7 @@ def get_screen_info(screen_sizes):
 
 def dump_all_frames(logger=None):
     try:
-        frames = sys._current_frames()
+        frames = sys._current_frames()      #pylint: disable=protected-access
     except AttributeError:
         return
     else:
@@ -554,76 +575,24 @@ def dump_frames(frames, logger=None):
                 logger("%s", l)
 
 
-def dump_references(log, instances, exclude=[]):
-    import gc
-    import inspect
-    frame = inspect.currentframe()
-    exclude.append(instances)
-    exclude.append([frame])
-    exclude = [[frame],]
-    rexclude = exclude
-    np = sys.modules.get("numpy")
-    if np:
-        rexclude = []
-        skip_types = (np.ndarray, np.generic)
-        for v in exclude:
-            rexclude.append(tuple(x for x in v if not isinstance(x, skip_types)))
-    del exclude
-    gc.collect()
-    try:
-        log.info("dump references for %i instances:", len(instances))
-        for j, instance in enumerate(instances):
-            referrers = tuple(x for x in gc.get_referrers(instance) if not any(y for y in rexclude if x in y))
-            log.info("* %i : %s, type=%s, with %i referers",
-                     j, repr_ellipsized(str(instance)), type(instance), len(referrers))
-            j += 1
-            for i, r in enumerate(referrers):
-                log.info("  [%s] in %s", i, type(r))
-                if inspect.isframe(r):
-                    log.info("    frame info: %s", str(inspect.getframeinfo(r))[:1024])
-                elif isinstance(r, (list, tuple)):
-                    listref = gc.get_referrers(r)
-                    lr = len(r)
-                    if lr<=128:
-                        log.info("    %i %s items: %s", lr, type(r), csv(repr_ellipsized(str(x)) for x in r))
-                    elif lr<512:
-                        log.info("    %i %s items: %s..", lr, type(r), repr_ellipsized(csv(r)))
-                    else:
-                        log.info("    %i %s items", lr, type(r))
-                    ll = len(listref)
-                    if ll<128:
-                        log.info("    %i referrers: %s", ll, csv(repr_ellipsized(str(x)) for x in listref))
-                    elif ll<512:
-                        log.info("    %i referrers: %s", ll, repr_ellipsized(csv(listref)))
-                    else:
-                        log.info("    %i referrers", ll)
-                elif isinstance(r, dict):
-                    if len(r)>64:
-                        log.info("    %s items: %s", len(r), repr_ellipsized(str(r)))
-                        continue
-                    for k,v in r.items():
-                        if k is instance:
-                            log.info("    key with value=%s", repr_ellipsized(str(v)))
-                        elif v is instance:
-                            log.info("    for key=%s", repr_ellipsized(str(k)))
-                else:
-                    log.info("     %s", repr_ellipsized(str(r)))
-    finally:
-        del frame
-
 def detect_leaks():
-    try:
-        from pympler import tracker
-    except ImportError as e:
-        get_util_logger().warn("Warning: cannot enable memory leak detection:")
-        get_util_logger().warn(" %s", e)
-        return None
-    import gc
-    gc.enable()
-    gc.set_debug(gc.DEBUG_LEAK)
-    tr = tracker.SummaryTracker()
+    import tracemalloc
+    tracemalloc.start()
+    last_snapshot = [tracemalloc.take_snapshot()]
     def print_leaks():
-        tr.print_diff()
+        s1 = last_snapshot[0]
+        s2 = tracemalloc.take_snapshot()
+        last_snapshot[0] = s2
+        top_stats = s2.compare_to(s1, 'lineno')
+        print("[ Top 20 differences ]")
+        for stat in top_stats[:20]:
+            print(stat)
+        for i, stat in enumerate(top_stats[:20]):
+            print()
+            print("top %i:" % i)
+            print("%s memory blocks: %.1f KiB" % (stat.count, stat.size / 1024))
+            for line in stat.traceback.format():
+                print(line)
         return True
     return print_leaks
 
@@ -648,16 +617,33 @@ def log_mem_info(prefix="memory usage: ", pid=os.getpid()):
     print("%i %s%s" % (pid, prefix, mem))
 
 
+class ellipsizer:
+    def __init__(self, obj, limit=100):
+        self.obj = obj
+        self.limit = limit
+    def __str__(self):
+        if self.obj is None:
+            return "None"
+        return repr_ellipsized(self.obj, self.limit)
+    def __repr__(self):
+        if self.obj is None:
+            return "None"
+        return repr_ellipsized(self.obj, self.limit)
+
 def repr_ellipsized(obj, limit=100):
-    if isinstance(obj, (str, unicode)) and len(obj) > limit:
+    if isinstance(obj, str):
+        if len(obj)>limit>6:
+            return obj[:limit//2-2]+" .. "+obj[2-limit//2:]
+        return obj
+    if isinstance(obj, bytes):
         try:
             s = repr(obj)
-        except ValueError:
-            s = binascii.hexlify(obj)
-        if len(s)<=limit or limit<=6:
-            return s
-        return s[:limit//2-2]+" .. "+s[2-limit//2:]
-    return repr(obj)
+        except Exception:
+            s = binascii.hexlify(obj).decode()
+        if len(s)>limit>6:
+            return s[:limit//2-2]+" .. "+s[2-limit//2:]
+        return s
+    return repr_ellipsized(repr(obj), limit)
 
 
 def rindex(alist, avalue):
@@ -701,7 +687,13 @@ def parse_simple_dict(s="", sep=","):
         if not el:
             continue
         try:
-            k,v = el.split("=", 1)
+            k, v = el.split("=", 1)
+            cur = d.get(k)
+            if cur:
+                if not isinstance(cur, list):
+                    cur = [cur]
+                cur.append(v)
+                v = cur
             d[k] = v
         except Exception as e:
             log = get_util_logger()
@@ -734,7 +726,7 @@ def pver(v, numsep=".", strsep=", "):
         types = list(set(type(x) for x in v))
         if len(types)==1 and types[0]==int:
             return numsep.join(str(x) for x in v)
-        if len(types)==1 and types[0] in (str, unicode):
+        if len(types)==1 and types[0]==str:
             return strsep.join(str(x) for x in v)
     from xpra.os_util import bytestostr
     return bytestostr(v)
@@ -833,14 +825,6 @@ def nonl(x):
         return None
     return str(x).replace("\n", "\\n").replace("\r", "\\r")
 
-def xor(s1,s2):
-    def _ord(v):
-        try:
-            return ord(v)
-        except TypeError:
-            return int(v)
-    return ''.join(chr(_ord(a) ^ _ord(b)) for a,b in zip(s1,s2))
-
 def engs(v):
     if isinstance(v, int):
         l = v
@@ -865,22 +849,34 @@ def csv(v):
     except Exception:
         return str(v)
 
-def envint(name, d=0):
+
+def unsetenv(*varnames):
+    for x in varnames:
+        try:
+            del os.environ[x]
+        except KeyError:
+            pass
+
+def envint(name : str, d=0):
     try:
         return int(os.environ.get(name, d))
     except ValueError:
         return d
 
-def envbool(name, d=False):
+def envbool(name : str, d=False):
     try:
-        v = os.environ.get(name)
+        v = os.environ.get(name, "").lower()
         if v is None:
             return d
+        if v in ("yes", "true", "on"):
+            return True
+        if v in ("no", "false", "off"):
+            return False
         return bool(int(v))
     except ValueError:
         return d
 
-def envfloat(name, d=0):
+def envfloat(name : str, d=0):
     try:
         return float(os.environ.get(name, d))
     except ValueError:

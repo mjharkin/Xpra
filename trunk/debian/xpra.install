@@ -4,6 +4,7 @@ usr/bin/xpra
 usr/bin/xpra_launcher
 usr/bin/xpra_signal_listener
 usr/bin/xpra_udev_product_version
+usr/bin/run_scaled
 usr/lib/cups/backend/xpraforwarder
 usr/lib/xpra/xdg-open
 usr/lib/xpra/gnome-open
@@ -15,6 +16,7 @@ usr/share/applications/xpra-launcher.desktop
 usr/share/applications/xpra-shadow.desktop
 usr/share/mime/packages/application-x-xpraconfig.xml
 usr/share/man/man1/xpra*
+usr/share/man/man1/run_scaled*
 usr/share/icons/*.png
 usr/share/xpra/icons/*.png
 usr/share/xpra/cuda/*
@@ -25,3 +27,4 @@ etc/xpra/conf.d/*conf
 etc/pam.d/xpra
 etc/default/xpra
 etc/dbus-1/system.d/xpra.conf
+usr/lib/python3*/*/xpra

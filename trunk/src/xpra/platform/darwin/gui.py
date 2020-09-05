@@ -9,6 +9,8 @@ import math
 import ctypes
 import struct
 import weakref
+
+from gi.repository import GLib
 import objc                         #@UnresolvedImport
 import Quartz                       #@UnresolvedImport
 import Quartz.CoreGraphics as CG    #@UnresolvedImport
@@ -32,9 +34,9 @@ from Foundation import (
     NSUserNotificationDefaultSoundName,             #@UnresolvedImport
     )
 
-from xpra.os_util import PYTHON2
 from xpra.util import envbool, envint, roundup
 from xpra.notifications.notifier_base import NotifierBase
+from xpra.platform.darwin import get_OSXApplication
 from xpra.log import Logger
 
 log = Logger("osx", "events")
@@ -46,6 +48,7 @@ OSX_FOCUS_WORKAROUND = envint("XPRA_OSX_FOCUS_WORKAROUND", 2000)
 SLEEP_HANDLER = envbool("XPRA_OSX_SLEEP_HANDLER", True)
 OSX_WHEEL_MULTIPLIER = envint("XPRA_OSX_WHEEL_MULTIPLIER", 100)
 OSX_WHEEL_PRECISE_MULTIPLIER = envint("XPRA_OSX_WHEEL_PRECISE_MULTIPLIER", 1)
+OSX_WHEEL_DIVISOR = envint("XPRA_OSX_WHEEL_DIVISOR", 10)
 WHEEL = envbool("XPRA_WHEEL", True)
 NATIVE_NOTIFIER = envbool("XPRA_OSX_NATIVE_NOTIFIER", False)
 SUBPROCESS_NOTIFIER = envbool("XPRA_OSX_SUBPROCESS_NOTIFIER", False)
@@ -63,34 +66,9 @@ ALPHA = {
 try:
     Carbon_ctypes = ctypes.CDLL("/System/Library/Frameworks/Carbon.framework/Carbon")
     GetDblTime = Carbon_ctypes.GetDblTime
-except:
+except Exception:
+    log("GetDblTime not found", exc_info=True)
     GetDblTime = None
-
-
-exit_cb = None
-def quit_handler(*_args):
-    global exit_cb
-    if exit_cb:
-        exit_cb()
-    else:
-        from xpra.gtk_common.quit import gtk_main_quit_really
-        gtk_main_quit_really()
-    return True
-
-def set_exit_cb(ecb):
-    global exit_cb
-    exit_cb = ecb
-
-
-macapp = None
-def get_OSXApplication():
-    global macapp
-    if macapp is None:
-        from xpra.gtk_common.gobject_compat import import_gtkosx_application
-        gtkosx_application = import_gtkosx_application()
-        macapp = gtkosx_application.Application()
-        macapp.connect("NSApplicationWillTerminate", quit_handler)
-    return macapp
 
 
 def do_init():
@@ -99,7 +77,9 @@ def do_init():
     if not osxapp:
         return  #not much else we can do here
     from xpra.platform.paths import get_icon
-    icon = get_icon("xpra.png")
+    from xpra.platform.gui import get_default_icon
+    filename = get_default_icon()
+    icon = get_icon(filename)
     log("do_init() icon=%s", icon)
     if icon:
         osxapp.set_dock_icon_pixbuf(icon)
@@ -107,7 +87,10 @@ def do_init():
     mh = getOSXMenuHelper(None)
     log("do_init() menu helper=%s", mh)
     osxapp.set_dock_menu(mh.build_dock_menu())
-    osxapp.set_menu_bar(mh.rebuild())
+    import warnings
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*invalid cast from 'GtkMenuBar'")
+        osxapp.set_menu_bar(mh.rebuild())
 
 
 def do_ready():
@@ -120,7 +103,7 @@ def do_ready():
 class OSX_Notifier(NotifierBase):
 
     def __init__(self, closed_cb=None, action_cb=None):
-        NotifierBase.__init__(self, closed_cb, action_cb)
+        super().__init__(closed_cb, action_cb)
         self.notifications = {}
         self.notification_center = NSUserNotificationCenter.defaultUserNotificationCenter()
         assert self.notification_center
@@ -224,7 +207,7 @@ def get_double_click_time():
         #(but still call it "Time" you see)
         MS_PER_TICK = 1000.0/60
         return int(GetDblTime() * MS_PER_TICK)
-    except:
+    except Exception:
         return -1
 
 
@@ -255,7 +238,7 @@ def get_window_frame_size(x, y, w, h):
                 "offset"    : (dx+dw//2, dy+dh),
                 "frame"     : (dx+dw//2, dx+dw//2, dy+dh, dy),
                 }
-    except:
+    except Exception:
         log("failed to query frame size using Quartz, using hardcoded value", exc_info=True)
         return {            #left, right, top, bottom:
                 "offset"    : (0, 22),
@@ -277,11 +260,7 @@ def get_workareas():
         frame = screen.frame()
         visibleFrame = screen.visibleFrame()
         log(" frame=%s, visibleFrame=%s", frame, visibleFrame)
-        try:
-            #10.7 onwards:
-            log(" backingScaleFactor=%s", screen.backingScaleFactor())
-        except:
-            pass
+        log(" backingScaleFactor=%s", screen.backingScaleFactor())
         x = int(visibleFrame.origin.x - frame.origin.x)
         y = int((frame.size.height - visibleFrame.size.height) - (visibleFrame.origin.y - frame.origin.y))
         w = int(visibleFrame.size.width)
@@ -461,24 +440,10 @@ def get_info():
 VIEW_TO_WINDOW = weakref.WeakValueDictionary()
 
 def add_window_hooks(window):
-    if WHEEL and PYTHON2:
-        global VIEW_TO_WINDOW
-        try:
-            gdkwin = window.get_window()
-            VIEW_TO_WINDOW[gdkwin.nsview] = window
-        except:
-            log("add_window_hooks(%s)", window, exc_info=True)
-            log.error("Error: failed to associate window %s with its nsview", window, exc_info=True)
+    pass
 
 def remove_window_hooks(window):
-    if WHEEL and PYTHON2:
-        global VIEW_TO_WINDOW
-        #this should be redundant as we use weak references:
-        try:
-            gdkwin = window.get_window()
-            del VIEW_TO_WINDOW[gdkwin.nsview]
-        except:
-            pass
+    pass
 
 
 def get_CG_imagewrapper(rect=None):
@@ -521,12 +486,9 @@ def take_screenshot():
     buf.close()
     return w, h, "png", image.get_rowstride(), data
 
-def show_with_focus_workaround(show_cb):
-    from xpra.gtk_common.gobject_compat import import_glib
-    glib = import_glib()
+def force_focus(duration=2000):
     enable_focus_workaround()
-    show_cb()
-    glib.timeout_add(500, disable_focus_workaround)
+    GLib.timeout_add(duration, disable_focus_workaround)
 
 
 __osx_open_signal = False
@@ -538,9 +500,7 @@ def add_open_handlers(open_file_cb, open_url_cb):
     assert open_file_cb and open_url_cb
 
     def idle_add(fn, *args):
-        from xpra.gtk_common.gobject_compat import import_glib
-        glib = import_glib()
-        glib.idle_add(fn, *args)
+        GLib.idle_add(fn, *args)
 
     def open_URL(url):
         global __osx_open_signal
@@ -560,16 +520,15 @@ def add_open_handlers(open_file_cb, open_url_cb):
 
 def wait_for_open_handlers(show_cb, open_file_cb, open_url_cb, delay=OPEN_SIGNAL_WAIT):
     assert show_cb and open_file_cb and open_url_cb
-    from xpra.gtk_common.gobject_compat import import_glib
-    glib = import_glib()
 
     add_open_handlers(open_file_cb, open_url_cb)
     def may_show():
         global __osx_open_signal
         log("may_show() osx open signal=%s", __osx_open_signal)
         if not __osx_open_signal:
-            show_with_focus_workaround(show_cb)
-    glib.timeout_add(delay, may_show)
+            force_focus()
+            show_cb()
+    GLib.timeout_add(delay, may_show)
 
 def register_file_handler(handler):
     log("register_file_handler(%s)", handler)
@@ -607,10 +566,6 @@ class Delegate(NSObject):
         log("applicationDidFinishLaunching_(%s)", notification)
         if SLEEP_HANDLER:
             self.register_sleep_handlers()
-        if WHEEL and PYTHON2:
-            from xpra.platform.darwin.gdk_bindings import init_quartz_filter, set_wheel_event_handler   #@UnresolvedImport
-            set_wheel_event_handler(self.wheel_event_handler)
-            init_quartz_filter()
 
     @objc.python_method
     def wheel_event_handler(self, nsview, deltax, deltay, precise):
@@ -626,7 +581,7 @@ class Delegate(NSObject):
                 m = OSX_WHEEL_PRECISE_MULTIPLIER
             else:
                 m = OSX_WHEEL_MULTIPLIER
-            v = abs(distance)/10.0*m
+            v = m*abs(distance)/OSX_WHEEL_DIVISOR
             if v>1:
                 #cancel out some of the crazy fast scroll acceleration from macos:
                 v = math.sqrt(v)
@@ -712,7 +667,21 @@ def enable_focus_workaround():
     NSApp.activateIgnoringOtherApps_(True)
 
 
-class ClientExtras(object):
+def can_access_display() -> bool:
+    #see: https://stackoverflow.com/a/11511419/428751
+    d = Quartz.CGSessionCopyCurrentDictionary()
+    if not d:
+        return False
+    if d.get("kCGSSessionOnConsoleKey", 0)==0:
+        #GUI session doesn't own the console, or the console's screens are asleep
+        return False
+    if d.get("CGSSessionScreenIsLocked", 0):
+        #screen is locked
+        return False
+    return True
+
+
+class ClientExtras:
     def __init__(self, client=None, opts=None):
         if OSX_FOCUS_WORKAROUND and client:
             def first_ui_received(*_args):
@@ -725,6 +694,7 @@ class ClientExtras(object):
         self.event_loop_started = False
         self.check_display_timer = 0
         self.display_is_asleep = False
+        self.shared_app = None
         if opts and client:
             log("setting swap_keys=%s using %s", swap_keys, client.keyboard_helper)
             if client.keyboard_helper and client.keyboard_helper.keyboard:
@@ -753,15 +723,11 @@ class ClientExtras(object):
     def ready(self):
         try:
             self.setup_event_listener()
-        except:
+        except Exception:
             log.error("Error setting up OSX event listener", exc_info=True)
 
     def setup_event_listener(self):
         log("setup_event_listener()")
-        if NSObject is object:
-            log.warn("NSObject is missing, not setting up OSX event listener")
-            return
-        self.shared_app = None
         self.delegate = None
         self.shared_app = NSApplication.sharedApplication()
 
@@ -788,17 +754,21 @@ class ClientExtras(object):
     def check_display(self):
         log("check_display()")
         try:
-            did = CG.CGMainDisplayID()
-            log("check_display() CGMainDisplayID()=%#x", did)
-            if did and self.client:
-                asleep = bool(CG.CGDisplayIsAsleep(did))
-                log("check_display() CGDisplayIsAsleep(%#x)=%s", did, asleep)
-                if self.display_is_asleep!=asleep:
-                    self.display_is_asleep = asleep
-                    if asleep:
-                        self.client.suspend()
-                    else:
-                        self.client.resume()
+            asleep = None
+            if not can_access_display():
+                asleep = True
+            else:
+                did = CG.CGMainDisplayID()
+                log("check_display() CGMainDisplayID()=%#x", did)
+                if did and self.client:
+                    asleep = bool(CG.CGDisplayIsAsleep(did))
+                    log("check_display() CGDisplayIsAsleep(%#x)=%s", did, asleep)
+            if asleep is not None and self.display_is_asleep!=asleep:
+                self.display_is_asleep = asleep
+                if asleep:
+                    self.client.suspend()
+                else:
+                    self.client.resume()
             return True
         except Exception:
             log.error("Error checking display sleep status", exc_info=True)

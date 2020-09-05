@@ -12,8 +12,7 @@ from xpra.notifications.common import parse_image_path
 from xpra.platform.gui import get_native_notifier_classes, get_wm_name
 from xpra.platform.paths import get_icon_dir
 from xpra.server import server_features
-from xpra.os_util import PYTHON3
-from xpra.util import envint, envbool, DONE
+from xpra.util import envint, envbool, DONE, XPRA_STARTUP_NOTIFICATION_ID, XPRA_NEW_USER_NOTIFICATION_ID
 from xpra.log import Logger
 
 log = Logger("shadow")
@@ -26,6 +25,7 @@ NATIVE_NOTIFIER = envbool("XPRA_NATIVE_NOTIFIER", True)
 POLL_POINTER = envint("XPRA_POLL_POINTER", 20)
 CURSORS = envbool("XPRA_CURSORS", True)
 SAVE_CURSORS = envbool("XPRA_SAVE_CURSORS", False)
+NOTIFY_STARTUP = envbool("XPRA_SHADOW_NOTIFY_STARTUP", True)
 
 
 SHADOWSERVER_BASE_CLASS = object
@@ -60,10 +60,17 @@ class ShadowServerBase(SHADOWSERVER_BASE_CLASS):
         self.notifications = bool(opts.notifications)
         if self.notifications:
             self.make_notifier()
+        log("init(..) session_name=%s", opts.session_name)
         if opts.session_name:
             self.session_name = opts.session_name
         else:
             self.guess_session_name()
+
+    def run(self):
+        if NOTIFY_STARTUP:
+            from gi.repository import GLib
+            GLib.timeout_add(1000, self.notify_startup_complete)
+        return super().run()
 
     def cleanup(self):
         for wid in self.mapped:
@@ -78,13 +85,13 @@ class ShadowServerBase(SHADOWSERVER_BASE_CLASS):
             capture.clean()
 
 
-    def guess_session_name(self, _procs=None):
+    def guess_session_name(self, procs=None):
+        log("guess_session_name(%s)", procs)
         self.session_name = get_wm_name()       # pylint: disable=assignment-from-none
+        log("get_wm_name()=%s", self.session_name)
 
     def get_server_mode(self):
-        if PYTHON3:
-            return "GTK3 shadow"
-        return "GTK2 shadow"
+        return "GTK3 shadow"
 
     def print_screen_info(self):
         if not server_features.display:
@@ -114,10 +121,11 @@ class ShadowServerBase(SHADOWSERVER_BASE_CLASS):
         return {"shadow" : True}
 
     def get_info(self, _proto=None):
-        info = {
-            "notifications" : self.notifications,
+        return {
+            "sharing"       : self.sharing,
+            "refresh-delay" : self.refresh_delay,
+            "pointer-last-position" : self.pointer_last_position,
             }
-        return info
 
 
     def get_window_position(self, _window):
@@ -173,7 +181,7 @@ class ShadowServerBase(SHADOWSERVER_BASE_CLASS):
         notifylog("notify_new_user(%s) notifier=%s", ss, self.notifier)
         if self.notifier:
             tray = self.get_notification_tray()     #pylint: disable=assignment-from-none
-            nid = 0
+            nid = XPRA_NEW_USER_NOTIFICATION_ID
             title = "User '%s' connected to the session" % (ss.name or ss.username or ss.uuid)
             body = "\n".join(ss.get_connect_info())
             actions = []
@@ -186,6 +194,25 @@ class ShadowServerBase(SHADOWSERVER_BASE_CLASS):
 
     def get_notification_tray(self):
         return None
+
+    def notify_startup_complete(self):
+        self.do_notify_startup("Xpra shadow server is ready", replaces_nid=XPRA_STARTUP_NOTIFICATION_ID)
+
+    def do_notify_startup(self, title, body="", replaces_nid=0):
+        #overriden here so we can show the notification
+        #directly on the screen we shadow
+        notifylog("do_notify_startup%s", (title, body, replaces_nid))
+        if self.notifier:
+            tray = self.get_notification_tray()     #pylint: disable=assignment-from-none
+            nid = XPRA_STARTUP_NOTIFICATION_ID
+            actions = []
+            hints = {}
+            icon = None
+            icon_filename = os.path.join(get_icon_dir(), "server-connected.png")
+            if os.path.exists(icon_filename):
+                icon = parse_image_path(icon_filename)
+            self.notifier.show_notify("", tray, nid, "Xpra", replaces_nid, "",
+                                      title, body, actions, hints, 10*1000, icon)
 
 
     ############################################################################
@@ -275,7 +302,9 @@ class ShadowServerBase(SHADOWSERVER_BASE_CLASS):
             if rwm:
                 mouselog("poll_pointer_position() wid=%i, position=%s, relative=%s", wid, (x, y), (rx, ry))
                 for ss in self._server_sources.values():
-                    ss.update_mouse(wid, x, y, rx, ry)
+                    um = getattr(ss, "update_mouse", None)
+                    if um:
+                        um(wid, x, y, rx, ry)
             else:
                 mouselog("poll_pointer_position() model not found for position=%s", (x, y))
         else:
@@ -392,7 +421,7 @@ class ShadowServerBase(SHADOWSERVER_BASE_CLASS):
 
     def _process_window_common(self, wid):
         window = self._id_to_window.get(wid)
-        assert window is not None
+        assert window is not None, "wid %s does not exist" % wid
         return window
 
     def _process_map_window(self, proto, packet):

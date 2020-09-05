@@ -7,8 +7,9 @@
 import os.path
 import sys
 import ctypes
+import platform
 
-from xpra.os_util import get_util_logger, PYTHON3
+from xpra.os_util import get_util_logger
 
 shell32 = ctypes.WinDLL("shell32", use_last_error=True)
 SHGetFolderPath = shell32.SHGetFolderPathW
@@ -20,9 +21,9 @@ CSIDL_COMMON_APPDATA = 35
 def sh_get_folder_path(v):
     try:
         buf = ctypes.create_unicode_buffer(ctypes.wintypes.MAX_PATH)
-        SHGetFolderPath(0, CSIDL_APPDATA, None, 0, buf)
+        SHGetFolderPath(0, v, None, 0, buf)
         return buf.value
-    except:
+    except Exception:
         return None
 
 def _get_data_dir(roaming=True):
@@ -34,7 +35,7 @@ def _get_data_dir(roaming=True):
         #on win32 we must send stdout to a logfile to prevent an alert box on exit shown by py2exe
         #UAC in vista onwards will not allow us to write where the software is installed,
         #so we place the log file (etc) in "~/Application Data"
-        appdata = os.environ.get("APPDATA")
+        appdata = os.environ.get("APPDATA" if roaming else "LOCALAPPDATA")
     if not appdata:
         #we need some kind of path..
         appdata = os.environ.get("TEMP", "C:\\TEMP\\")
@@ -42,8 +43,6 @@ def _get_data_dir(roaming=True):
     if not os.path.exists(appdata):
         os.mkdir(appdata)
     data_dir = os.path.join(appdata, "Xpra")
-    if not os.path.exists(data_dir):
-        os.mkdir(data_dir)
     return data_dir
 
 
@@ -63,6 +62,13 @@ def do_get_icon_dir():
     from xpra.platform.paths import get_resources_dir
     return os.path.join(get_resources_dir(), "icons")
 
+def do_get_default_log_dirs():
+    dd = _get_data_dir()
+    temp = os.environ.get("TEMP", "C:\\TEMP\\")
+    if dd==temp:
+        return [temp]
+    return [dd, temp]
+
 
 def get_program_data_dir():
     #ie: "C:\ProgramData"
@@ -71,17 +77,16 @@ def get_program_data_dir():
         SHGetFolderPath(0, CSIDL_COMMON_APPDATA, None, 0, buf)
         if buf.value:
             return buf.value
-    except:
+    except Exception:
         get_util_logger().debug("get_program_data_dir()", exc_info=True)
-    return u"C:\\ProgramData"
+    return "C:\\ProgramData"
 
 def do_get_system_conf_dirs():
     #ie: C:\ProgramData\Xpra
-    return [os.path.join(get_program_data_dir(), u"Xpra")]
+    return [os.path.join(get_program_data_dir(), "Xpra")]
 
 def do_get_ssh_conf_dirs():
-    from xpra.scripts.config import python_platform
-    if python_platform.architecture()[0]=="32bit":
+    if platform.architecture()[0]=="32bit":
         system32 = "SysNative"
     else:
         system32 = "System32"
@@ -106,16 +111,22 @@ def do_get_default_conf_dirs():
     return [os.path.join(get_app_dir(), "etc", "xpra")]
 
 def do_get_user_conf_dirs(_uid):
+    dd = _get_data_dir()
     #ie: "C:\Users\<user name>\AppData\Roaming"
-    return [_get_data_dir()]
+    SYSTEMROOT = os.environ.get("SYSTEMROOT")
+    #ie: when running as a system service, we may get:
+    # "C:\Windows\System32\config\systemprofile\AppData\Roaming"
+    # and we don't want to use that:
+    if dd.startswith(SYSTEMROOT):
+        return []
+    if not os.path.exists(dd):
+        os.mkdir(dd)
+    return [dd]
 
 
 def do_get_desktop_background_paths():
     try:
-        try:
-            import _winreg as winreg
-        except ImportError:
-            import winreg   #@UnresolvedImport @Reimport
+        import winreg   #@UnresolvedImport @Reimport
         key_path = "Control Panel\\Desktop"
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ)    #@UndefinedVariable
         wallpaper = winreg.QueryValueEx(key, 'WallPaper')[0]    #@UndefinedVariable
@@ -127,23 +138,15 @@ def do_get_desktop_background_paths():
 
 
 def do_get_download_dir():
-    #TODO: use "FOLDERID_Downloads":
-    # FOLDERID_Downloads = "{374DE290-123F-4565-9164-39C4925E467B}"
-    # maybe like here:
-    # https://gist.github.com/mkropat/7550097
-    #from win32com.shell import shell, shellcon
-    #shell.SHGetFolderPath(0, shellcon.CSIDL_MYDOCUMENTS, None, 0)
     try:
-        try:
-            import _winreg as winreg
-        except ImportError:
-            import winreg   #@UnresolvedImport @Reimport
-        #use the internet explorer registry key:
-        #HKEY_CURRENT_USER\Software\Microsoft\Internet Explorer
-        key_path = 'Software\\Microsoft\\Internet Explorer'
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ)    #@UndefinedVariable
-        DOWNLOAD_PATH = winreg.QueryValueEx(key, 'Download Directory')[0]               #@UndefinedVariable
-    except:
+        #values found here: https://stackoverflow.com/a/48706260
+        import winreg   #@UnresolvedImport @Reimport
+        sub_key = r'SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders'
+        downloads_guid = '{374DE290-123F-4565-9164-39C4925E467B}'
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, sub_key) as key:
+            DOWNLOAD_PATH = winreg.QueryValueEx(key, downloads_guid)[0]
+    except Exception:
+        get_util_logger()("do_get_download_dir()", exc_info=True)
         #fallback to what the documentation says is the default:
         DOWNLOAD_PATH = os.path.join(os.environ.get("USERPROFILE", "~"), "My Documents", "Downloads")
         if not os.path.exists(DOWNLOAD_PATH):
@@ -161,20 +164,18 @@ def do_get_socket_dirs():
 APP_DIR = None
 if getattr(sys, 'frozen', False) is True:
     #cx_freeze = sys.frozen == True
-    if PYTHON3:
-        APP_DIR = os.path.dirname(sys.executable)
-    else:
-        APP_DIR = os.path.dirname(unicode(sys.executable, sys.getfilesystemencoding())) #@UndefinedVariable
+    APP_DIR = os.path.dirname(sys.executable)
     if len(APP_DIR)>3 and APP_DIR[1]==":" and APP_DIR[2]=="/":
         #it seems that mingw builds can get confused about the correct value for os.pathsep:
         APP_DIR = APP_DIR.replace("/", "\\")
+    try:
+        sys.path.remove(APP_DIR)
+    except ValueError:
+        pass
     sys.path.insert(0, APP_DIR)
     os.chdir(APP_DIR)
     #so we can easily load DLLs with ctypes:
-    if PYTHON3:
-        os.environ['PATH'] = APP_DIR + os.pathsep + os.environ['PATH']
-    else:
-        os.environ['PATH'] = APP_DIR.encode('utf8') + os.pathsep + os.environ['PATH']
+    os.environ['PATH'] = APP_DIR + os.pathsep + os.environ['PATH']
 
 
 def do_get_app_dir():
@@ -204,7 +205,7 @@ def _get_xpra_exe_command(*cmd_options):
     for cmd in cmd_options:
         exe_name = "%s.exe" % cmd
         if sys.executable.lower().endswith(exe_name):
-            #prefer the same executable we were launch from:
+            #prefer the same executable we were launched from:
             return [sys.executable]
         #try to find it in exe dir:
         exe = os.path.join(exe_dir, exe_name)
@@ -216,8 +217,10 @@ def _get_xpra_exe_command(*cmd_options):
             return [script]
         if mingw:
             #the python interpreter to use with the scripts:
-            py = os.path.join(mingw, "bin", "python%i.exe" % sys.version_info[0])
+            py = os.path.join(mingw, "bin", "python3.exe")
             if os.path.exists(py):
+                if cmd.lower() in ("python", "python3"):
+                    return [py]
                 #ie: /e/Xpra/trunk/src/dist/scripts/xpra
                 script = os.path.join(os.getcwd(), "scripts", cmd.lower())
                 if os.path.exists(script) and os.path.isfile(script):
@@ -240,3 +243,6 @@ def do_get_xpra_command():
     if sl.endswith("xpra_cmd.exe") or sl.endswith("xpra.exe"):
         return [sys.executable]
     return _get_xpra_exe_command("Xpra", "Xpra_cmd")
+
+def do_get_python_execfile_command():
+    return _get_xpra_exe_command("Python_execfile_gui", "Python")

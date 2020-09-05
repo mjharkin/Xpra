@@ -18,15 +18,16 @@ def get_nvml_driver_version():
         from pynvml import nvmlInit, nvmlShutdown, nvmlSystemGetDriverVersion
         try:
             nvmlInit()
-            v = nvmlSystemGetDriverVersion()
+            try:
+                v = nvmlSystemGetDriverVersion()
+            finally:
+                nvmlShutdown()
             log("nvmlSystemGetDriverVersion=%s", v)
             return v.split(".")
         except Exception as e:
             log("get_nvml_driver_version() pynvml error", exc_info=True)
             log.warn("Warning: failed to query the NVidia kernel module version via NVML:")
             log.warn(" %s", e)
-        finally:
-            nvmlShutdown()
     except ImportError as e:
         log("cannot use nvml to query the kernel module version:")
         log(" %s", e)
@@ -34,6 +35,8 @@ def get_nvml_driver_version():
 
 
 def get_proc_driver_version():
+    if os.name!="posix":
+        return ""
     from xpra.os_util import load_binary_file
     proc_file = "/proc/driver/nvidia/version"
     v = load_binary_file(proc_file)

@@ -1,22 +1,22 @@
 #!/usr/bin/env python
 # This file is part of Xpra.
-# Copyright (C) 2013-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2013-2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 #@PydevCodeAnalysisIgnore
+#pylint: disable=no-member
 
 import os
 import pycuda               #@UnresolvedImport
 from pycuda import driver   #@UnresolvedImport
 
-from xpra.util import engs, print_nested_dict, envbool, envint
-from xpra.os_util import monotonic_time, bytestostr, PYTHON2
+from xpra.util import engs, print_nested_dict, envint, csv, first_time
+from xpra.os_util import monotonic_time, load_binary_file
 from xpra.log import Logger
 
-log = Logger("csc", "cuda")
+log = Logger("cuda")
 
-IGNORE_BLACKLIST = envbool("XPRA_CUDA_IGNORE_BLACKLIST", False)
 MIN_FREE_MEMORY = envint("XPRA_CUDA_MIN_FREE_MEMORY", 10)
 
 #record when we get failures/success:
@@ -36,10 +36,19 @@ def device_info(d):
         return "None"
     return "%s @ %s" % (d.name(), d.pci_bus_id())
 
+def pci_bus_id(d):
+    if not d:
+        return "None"
+    return d.pci_bus_id()
+
 def device_name(d):
     if not d:
         return "None"
     return d.name()
+
+def compute_capability(d):
+    SMmajor, SMminor = d.compute_capability()
+    return (SMmajor<<4) + SMminor
 
 
 def get_pycuda_version():
@@ -95,31 +104,78 @@ def get_prefs():
                 log("get_prefs() '%s' is not a file!", conf_file)
                 continue
             try:
+                c_prefs = {}
                 with open(conf_file, "rb") as f:
                     for line in f:
-                        sline = bytestostr(line.strip().rstrip(b'\r\n').strip())
+                        sline = line.strip().rstrip(b'\r\n').strip().decode("latin1")
                         props = sline.split("=", 1)
                         if len(props)!=2:
                             continue
                         name = props[0].strip()
                         value = props[1].strip()
-                        if name in ("blacklist", ):
-                            PREFS.setdefault(name, []).append(value)
-                        elif name in ("device-id", "device-name"):
-                            PREFS[name] = value
+                        if name in ("enabled-devices", "disabled-devices"):
+                            for v in value.split(","):
+                                c_prefs.setdefault(name, []).append(v.strip())
+                        elif name in ("device-id", "device-name", "load-balancing"):
+                            c_prefs[name] = value
             except Exception as e:
                 log.error("Error: cannot read cuda configuration file '%s':", conf_file)
                 log.error(" %s", e)
+            log("get_prefs() '%s' : %s", conf_file, c_prefs)
+            PREFS.update(c_prefs)
     return PREFS
 
 def get_pref(name):
-    assert name in ("blacklist", "device-id", "device-name")
+    assert name in ("device-id", "device-name", "enabled-devices", "disabled-devices", "load-balancing")
     #ie: env_name("device-id")="XPRA_CUDA_DEVICE_ID"
     env_name = "XPRA_CUDA_%s" % str(name).upper().replace("-", "_")
     env_value = os.environ.get(env_name)
     if env_value is not None:
+        if name in ("enabled-devices", "disabled-devices"):
+            return env_value.split(",")
         return env_value
     return get_prefs().get(name)
+
+def get_gpu_list(list_type):
+    v = get_pref(list_type)
+    log("get_gpu_list(%s) pref=%s", list_type, v)
+    if not v:
+        return None
+    if "all" in v:
+        return True
+    if "none" in v:
+        return []
+    def dev(x):
+        try:
+            return int(x)
+        except ValueError:
+            return x.strip()
+    try:
+        return [dev(x) for x in v]
+    except ValueError:
+        log("get_gpu_list(%s)", list_type, exc_info=True)
+        log.error("Error: invalid value for '%s' CUDA preference", list_type)
+        return None
+
+driver_init_done = None
+def driver_init():
+    global driver_init_done
+    if driver_init_done is None:
+        log.info("CUDA initialization (this may take a few seconds)")
+        try:
+            driver.init()
+            driver_init_done = True
+            log("CUDA driver version=%s", driver.get_driver_version())
+            ngpus = driver.Device.count()
+            if ngpus==0:
+                log.info("CUDA %s / PyCUDA %s, no devices found",
+                         ".".join(str(x) for x in driver.get_version()), pycuda.VERSION_TEXT)
+            driver_init_done = True
+        except Exception as e:
+            log.error("Error: cannot initialize CUDA")
+            log.error(" %s", e)
+            driver_init_done = False
+    return driver_init_done
 
 
 DEVICES = None
@@ -127,85 +183,103 @@ def init_all_devices():
     global DEVICES, DEVICE_INFO, DEVICE_NAME
     if DEVICES is not None:
         return DEVICES
-    log.info("CUDA initialization (this may take a few seconds)")
     DEVICES = []
     DEVICE_INFO = {}
-    try:
-        driver.init()
-    except Exception as e:
-        log.error("Error: cannot initialize CUDA")
-        log.error(" %s", e)
+    enabled_gpus = get_gpu_list("enabled-devices")
+    disabled_gpus = get_gpu_list("disabled-devices")
+    if disabled_gpus is True or enabled_gpus==[]:
+        log("all devices are disabled!")
         return DEVICES
-    log("CUDA driver version=%s", driver.get_driver_version())
+    log("init_all_devices() enabled: %s, disabled: %s", csv(enabled_gpus), csv(disabled_gpus))
+    if not driver_init():
+        return DEVICES
     ngpus = driver.Device.count()
+    log("init_all_devices() ngpus=%s", ngpus)
     if ngpus==0:
-        log.info("CUDA %s / PyCUDA %s, no devices found",
-                 ".".join(str(x) for x in driver.get_version()), pycuda.VERSION_TEXT)
         return DEVICES
-    cuda_device_blacklist = get_pref("blacklist")
-    da = driver.device_attribute
-    cf = driver.ctx_flags
     for i in range(ngpus):
+        #shortcut if this GPU number is disabled:
+        if disabled_gpus is not None and i in disabled_gpus:
+            log("device %i is in the list of disabled gpus, skipped", i)
+            continue
         device = None
-        context = None
         devinfo = "gpu %i" % i
         try:
             device = driver.Device(i)
             devinfo = device_info(device)
-            if cuda_device_blacklist and not IGNORE_BLACKLIST:
-                blacklisted = [x for x in cuda_device_blacklist if x and devinfo.find(x)>=0]
-                log("blacklisted(%s / %s)=%s", devinfo, cuda_device_blacklist, blacklisted)
-                if blacklisted:
-                    log.warn("Warning: device '%s' is blacklisted and will not be used", devinfo)
-                    continue
             log(" + testing device %s: %s", i, devinfo)
-            DEVICE_INFO[i] = devinfo
             DEVICE_NAME[i] = device_name(device)
-            host_mem = device.get_attribute(da.CAN_MAP_HOST_MEMORY)
-            if not host_mem:
-                log.warn("skipping device %s (cannot map host memory)", devinfo)
-                continue
-            context = device.make_context(flags=cf.SCHED_YIELD | cf.MAP_HOST)
-            try:
-                log("   created context=%s", context)
-                log("   api version=%s", context.get_api_version())
-                free, total = driver.mem_get_info()
-                log("   memory: free=%sMB, total=%sMB",  int(free//1024//1024), int(total//1024//1024))
-                log("   multi-processors: %s, clock rate: %s",
-                    device.get_attribute(da.MULTIPROCESSOR_COUNT), device.get_attribute(da.CLOCK_RATE))
-                log("   max block sizes: (%s, %s, %s)",
-                    device.get_attribute(da.MAX_BLOCK_DIM_X),
-                    device.get_attribute(da.MAX_BLOCK_DIM_Y),
-                    device.get_attribute(da.MAX_BLOCK_DIM_Z),
-                    )
-                log("   max grid sizes: (%s, %s, %s)",
-                    device.get_attribute(da.MAX_GRID_DIM_X),
-                    device.get_attribute(da.MAX_GRID_DIM_Y),
-                    device.get_attribute(da.MAX_GRID_DIM_Z),
-                    )
-                max_width = device.get_attribute(da.MAXIMUM_TEXTURE2D_WIDTH)
-                max_height = device.get_attribute(da.MAXIMUM_TEXTURE2D_HEIGHT)
-                log("   maximum texture size: %sx%s", max_width, max_height)
-                log("   max pitch: %s", device.get_attribute(da.MAX_PITCH))
-                SMmajor, SMminor = device.compute_capability()
-                compute = (SMmajor<<4) + SMminor
-                log("   compute capability: %#x (%s.%s)", compute, SMmajor, SMminor)
-                if i==0:
-                    #we print the list info "header" from inside the loop
-                    #so that the log output is bunched up together
-                    log.info("CUDA %s / PyCUDA %s, found %s device%s:",
-                             ".".join([str(x) for x in driver.get_version()]), pycuda.VERSION_TEXT, ngpus, engs(ngpus))
-                if SMmajor>=2:
-                    DEVICES.append(i)
-                else:
-                    log.info("  this device is too old!")
-                log.info("  + %s (memory: %s%% free, compute: %s.%s)",
-                         device_info(device), 100*free//total, SMmajor, SMminor)
-            finally:
-                context.pop()
+            DEVICE_INFO[i] = devinfo
+            if check_device(i, device):
+                DEVICES.append(i)
         except Exception as e:
             log.error("error on device %s: %s", devinfo, e)
     return DEVICES
+
+def check_device(i, device, min_compute=0):
+    ngpus = driver.Device.count()
+    da = driver.device_attribute
+    devinfo = device_info(device)
+    devname = device_name(device)
+    pci = pci_bus_id(device)
+    host_mem = device.get_attribute(da.CAN_MAP_HOST_MEMORY)
+    if not host_mem:
+        log.warn("skipping device %s (cannot map host memory)", devinfo)
+        return False
+    compute = compute_capability(device)
+    if compute<min_compute:
+        log("ignoring device %s: compute capability %#x (minimum %#x required)",
+            device_info(device), compute, min_compute)
+        return False
+    enabled_gpus = get_gpu_list("enabled-devices")
+    disabled_gpus = get_gpu_list("disabled-devices")
+    if enabled_gpus not in (None, True) and \
+        i not in enabled_gpus and devname not in enabled_gpus and pci not in enabled_gpus:
+        log("device %i '%s' / '%s' is not in the list of enabled gpus, skipped", i, devname, pci)
+        return False
+    if disabled_gpus is not None and (devname in disabled_gpus or pci in disabled_gpus):
+        log("device '%s' / '%s' is in the list of disabled gpus, skipped", i, devname, pci)
+        return False
+    cf = driver.ctx_flags
+    context = device.make_context(flags=cf.SCHED_YIELD | cf.MAP_HOST)
+    try:
+        log("   created context=%s", context)
+        log("   api version=%s", context.get_api_version())
+        free, total = driver.mem_get_info()
+        log("   memory: free=%sMB, total=%sMB",  int(free//1024//1024), int(total//1024//1024))
+        log("   multi-processors: %s, clock rate: %s",
+            device.get_attribute(da.MULTIPROCESSOR_COUNT), device.get_attribute(da.CLOCK_RATE))
+        log("   max block sizes: (%s, %s, %s)",
+            device.get_attribute(da.MAX_BLOCK_DIM_X),
+            device.get_attribute(da.MAX_BLOCK_DIM_Y),
+            device.get_attribute(da.MAX_BLOCK_DIM_Z),
+            )
+        log("   max grid sizes: (%s, %s, %s)",
+            device.get_attribute(da.MAX_GRID_DIM_X),
+            device.get_attribute(da.MAX_GRID_DIM_Y),
+            device.get_attribute(da.MAX_GRID_DIM_Z),
+            )
+        max_width = device.get_attribute(da.MAXIMUM_TEXTURE2D_WIDTH)
+        max_height = device.get_attribute(da.MAXIMUM_TEXTURE2D_HEIGHT)
+        log("   maximum texture size: %sx%s", max_width, max_height)
+        log("   max pitch: %s", device.get_attribute(da.MAX_PITCH))
+        SMmajor, SMminor = device.compute_capability()
+        compute = (SMmajor<<4) + SMminor
+        log("   compute capability: %#x (%s.%s)", compute, SMmajor, SMminor)
+        if i==0:
+            #we print the list info "header" from inside the loop
+            #so that the log output is bunched up together
+            log.info("CUDA %s / PyCUDA %s, found %s device%s:",
+                     ".".join([str(x) for x in driver.get_version()]), pycuda.VERSION_TEXT, ngpus, engs(ngpus))
+        log.info("  + %s (memory: %s%% free, compute: %s.%s)",
+                 device_info(device), 100*free//total, SMmajor, SMminor)
+        if SMmajor<2:
+            log.info("  this device is too old!")
+            return False
+        return True
+    finally:
+        context.pop()
+
 
 def get_devices():
     global DEVICES
@@ -222,17 +296,64 @@ def reset_state():
     DEVICE_STATE = {}
 
 
-def select_device(preferred_device_id=-1, preferred_device_name=None, min_compute=0):
-    if preferred_device_name is None:
-        preferred_device_name = get_pref("device-name")
-    if preferred_device_id<0:
-        device_id = get_pref("device-id")
+def select_device(preferred_device_id=-1, min_compute=0):
+    log("select_device(%s, %s)", preferred_device_id, min_compute)
+    for device_id in (preferred_device_id, get_pref("device-id")):
         if device_id is not None and device_id>=0:
-            preferred_device_id = device_id
+            #try to honour the device specified:
+            try:
+                device, context, tpct = load_device(device_id)
+            finally:
+                context.pop()
+                context.detach()
+            if min_compute>0:
+                compute = compute_capability(device)
+                if compute<min_compute:
+                    log.warn("Warning: GPU device %i only supports compute %#x", device_id, compute)
+            if tpct<MIN_FREE_MEMORY:
+                log.warn("Warning: GPU device %i is low on memory: %i%%", device_id, tpct)
+            return device_id, device
+    load_balancing = get_pref("load-balancing")
+    log("load-balancing=%s", load_balancing)
+    if load_balancing=="round-robin":
+        return select_round_robin(min_compute)
+    if load_balancing!="memory" and first_time("cuda-load-balancing"):
+        log.warn("Warning: invalid load balancing value '%s'", load_balancing)
+    return select_best_free_memory(min_compute)
+
+rr = 0
+def select_round_robin(min_compute):
+    if not driver_init():
+        return -1, None
+    enabled_gpus = get_gpu_list("enabled-devices")
+    disabled_gpus = get_gpu_list("disabled-devices")
+    if disabled_gpus is True or enabled_gpus==[]:
+        log("all devices are disabled!")
+        return -1, None
+    ngpus = driver.Device.count()
+    if ngpus==0:
+        return -1, None
+    devices = list(range(ngpus))
+    global rr
+    i = rr
+    while devices:
+        n = len(devices)
+        i = (rr+1) % n
+        device_id = devices[i]
+        device = driver.Device(device_id)
+        if check_device(device_id, device, min_compute):
+            break
+        devices.remove(device_id)
+    rr = i
+    return device_id, device
+
+
+def select_best_free_memory(min_compute=0):
+    #load preferences:
+    preferred_device_name = get_pref("device-name")
     devices = init_all_devices()
     global DEVICE_STATE
     free_pct = 0
-    cf = driver.ctx_flags
     #split device list according to device state:
     ok_devices = [device_id for device_id in devices if DEVICE_STATE.get(device_id, True) is True]
     nok_devices = [device_id for device_id in devices if DEVICE_STATE.get(device_id, True) is not True]
@@ -243,25 +364,11 @@ def select_device(preferred_device_id=-1, preferred_device_name=None, min_comput
         for device_id in device_list:
             context = None
             try:
-                log("device %i", device_id)
-                device = driver.Device(device_id)
-                log("select_device: testing device %s: %s", device_id, device_info(device))
-                context = device.make_context(flags=cf.SCHED_YIELD | cf.MAP_HOST)
-                log("created context=%s", context)
-                free, total = driver.mem_get_info()
-                log("memory: free=%sMB, total=%sMB",  int(free/1024/1024), int(total/1024/1024))
-                tpct = 100*free/total
-                SMmajor, SMminor = device.compute_capability()
-                compute = (SMmajor<<4) + SMminor
+                device, context, tpct = load_device(device_id)
+                compute = compute_capability(device)
                 if compute<min_compute:
                     log("ignoring device %s: compute capability %#x (minimum %#x required)",
                         device_info(device), compute, min_compute)
-                elif device_id==preferred_device_id:
-                    l = log
-                    if len(device_list)>1:
-                        l = log.info
-                    l("device matches preferred device id %s: %s", preferred_device_id, device_info(device))
-                    return device_id, device
                 elif preferred_device_name and device_info(device).find(preferred_device_name)>=0:
                     log("device matches preferred device name: %s", preferred_device_name)
                     return device_id, device
@@ -279,9 +386,22 @@ def select_device(preferred_device_id=-1, preferred_device_name=None, min_comput
             l = log
             if len(devices)>1:
                 l = log.info
-            l("selected device %s: %s", device_id, device_info(device))
+            l("selected device %s: %s", selected_device_id, device_info(selected_device))
             return selected_device_id, selected_device
     return -1, None
+
+def load_device(device_id):
+    log("load_device(%i)", device_id)
+    device = driver.Device(device_id)
+    log("select_device: testing device %s: %s", device_id, device_info(device))
+    cf = driver.ctx_flags
+    context = device.make_context(flags=cf.SCHED_YIELD | cf.MAP_HOST)
+    log("created context=%s", context)
+    free, total = driver.mem_get_info()
+    log("memory: free=%sMB, total=%sMB",  int(free/1024/1024), int(total/1024/1024))
+    tpct = 100*free//total
+    return device, context, tpct
+
 
 
 CUDA_ERRORS_INFO = {
@@ -359,9 +479,8 @@ def get_CUDA_function(device_id, function_name):
     global KERNELS
     data = KERNELS.get(function_name)
     if data is None:
-        from xpra.platform.paths import get_app_dir
-        from xpra.os_util import load_binary_file
-        cubin_file = os.path.join(get_app_dir(), "cuda", "%s.fatbin" % function_name)
+        from xpra.platform.paths import get_resources_dir
+        cubin_file = os.path.join(get_resources_dir(), "cuda", "%s.fatbin" % function_name)
         log("get_CUDA_function(%s, %s) cubin file=%s", device_id, function_name, cubin_file)
         data = load_binary_file(cubin_file)
         if not data:
@@ -381,11 +500,9 @@ def get_CUDA_function(device_id, function_name):
     log("get_CUDA_function(%s, %s) module=%s", device_id, function_name, mod)
     try:
         fn = function_name
-        if PYTHON2:
-            fn = function_name.encode()
         CUDA_function = mod.get_function(fn)
     except driver.LogicError as e:
-        raise Exception("failed to load '%s' from %s: %s" % (function_name, mod, e))
+        raise Exception("failed to load '%s' from %s: %s" % (function_name, mod, e)) from None
     end = monotonic_time()
     log("loading function %s from pre-compiled cubin took %.1fms", function_name, 1000.0*(end-start))
     return CUDA_function
@@ -398,12 +515,15 @@ def main():
 
     from xpra.platform import program_context
     with program_context("CUDA-Info", "CUDA Info"):
+        pycuda_info = get_pycuda_info()
         log.info("pycuda_info")
-        print_nested_dict(get_pycuda_info(), print_fn=log.info)
+        print_nested_dict(pycuda_info, print_fn=log.info)
         log.info("cuda_info")
         print_nested_dict(get_cuda_info(), print_fn=log.info)
         log.info("preferences:")
         print_nested_dict(get_prefs(), print_fn=log.info)
+        log.info("device automatically selected:")
+        log.info(" %s", device_info(select_device()[1]))
 
 if __name__ == "__main__":
     main()

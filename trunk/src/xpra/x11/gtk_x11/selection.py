@@ -1,6 +1,6 @@
 # This file is part of Xpra.
 # Copyright (C) 2008, 2009 Nathaniel Smith <njs@pobox.com>
-# Copyright (C) 2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2018-2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -9,13 +9,10 @@
 # selection, we can either abort or steal it.  Once we have it, if someone
 # else steals it, then we should exit.
 
-from struct import pack, unpack, calcsize
+import sys
+from struct import unpack, calcsize
+from gi.repository import GObject, Gtk, Gdk, GLib
 
-from xpra.gtk_common.gtk_util import (
-    gtk_main, gtk_main_quit, get_xwindow,
-    selectiondata_get_data, set_clipboard_data, wait_for_contents, GetClipboard,
-    STRUCTURE_MASK,
-    )
 from xpra.gtk_common.gobject_util import no_arg_signal, one_arg_signal
 from xpra.gtk_common.error import xsync, XError
 from xpra.x11.bindings.window_bindings import constants, X11WindowBindings #@UnresolvedImport
@@ -25,13 +22,13 @@ from xpra.x11.gtk_x11.gdk_bindings import (
     add_event_receiver,         #@UnresolvedImport
     remove_event_receiver,      #@UnresolvedImport
     )
-from xpra.gtk_common.gobject_compat import import_gtk, import_gobject
+from xpra.exit_codes import EXIT_TIMEOUT
+from xpra.util import envint
 from xpra.log import Logger
 
 log = Logger("x11", "util")
 
-gtk = import_gtk()
-gobject = import_gobject()
+SELECTION_EXIT_TIMEOUT = envint("XPRA_SELECTION_EXIT_TIMEOUT", 20)
 
 StructureNotifyMask = constants["StructureNotifyMask"]
 XNone = constants["XNone"]
@@ -40,7 +37,7 @@ XNone = constants["XNone"]
 class AlreadyOwned(Exception):
     pass
 
-class ManagerSelection(gobject.GObject):
+class ManagerSelection(GObject.GObject):
     __gsignals__ = {
         "selection-lost": no_arg_signal,
 
@@ -51,10 +48,12 @@ class ManagerSelection(gobject.GObject):
         return "ManagerSelection(%s)" % self.atom
 
     def __init__(self, selection):
-        gobject.GObject.__init__(self)
+        GObject.GObject.__init__(self)
         self.atom = selection
-        self.clipboard = GetClipboard(selection)
+        atom = Gdk.Atom.intern(selection, False)
+        self.clipboard = Gtk.Clipboard.get(atom)
         self._xwindow = None
+        self.exit_timer = None
 
     def _owner(self):
         return X11WindowBindings().XGetSelectionOwner(self.atom)
@@ -77,7 +76,12 @@ class ManagerSelection(gobject.GObject):
         if when is self.IF_UNOWNED and old_owner != XNone:
             raise AlreadyOwned
 
-        set_clipboard_data(self.clipboard, "VERSION")
+        #we can only set strings with GTK3,
+        # we should try to be compliant with ICCCM version 2.0 (see section 4.3)
+        # and use this format instead:
+        # outdata.set("INTEGER", 32, pack("@ii", 2, 0))
+        thestring = "VERSION"
+        self.clipboard.set_text(thestring, len(thestring))
 
         # Having acquired the selection, we have to announce our existence
         # (ICCCM 2.8, still).  The details here probably don't matter too
@@ -94,8 +98,11 @@ class ManagerSelection(gobject.GObject):
         # some weird tricks to get at these.
 
         # Ask ourselves when we acquired the selection:
-        contents = wait_for_contents(self.clipboard, "TIMESTAMP")
-        ts_data = selectiondata_get_data(contents)
+        timestamp_atom = Gdk.Atom.intern("TIMESTAMP", False)
+        contents = self.clipboard.wait_for_contents(timestamp_atom)
+        ts_data = contents.get_data()
+        log("ManagerSelection.acquire(%s) %s.wait_for_contents(%s)=%s",
+            when, self.clipboard, timestamp_atom, ts_data)
 
         #data is a timestamp, X11 datatype is Time which is CARD32,
         #(which is 64 bits on 64-bit systems!)
@@ -105,13 +112,14 @@ class ManagerSelection(gobject.GObject):
         else:
             ts_num = 0      #CurrentTime
             log.warn("invalid data for 'TIMESTAMP': %s", ([hex(ord(x)) for x in ts_data]))
+        log("selection timestamp(%s)=%s", ts_data, ts_num)
         # Calculate the X atom for this selection:
         selection_xatom = get_xatom(self.atom)
         # Ask X what window we used:
         self._xwindow = X11WindowBindings().XGetSelectionOwner(self.atom)
 
         root = self.clipboard.get_display().get_default_screen().get_root_window()
-        xid = get_xwindow(root)
+        xid = root.get_xid()
         X11WindowBindings().sendClientMessage(xid, xid, False, StructureNotifyMask,
                           "MANAGER",
                           ts_num, selection_xatom, self._xwindow)
@@ -122,33 +130,50 @@ class ManagerSelection(gobject.GObject):
             try:
                 with xsync:
                     window = get_pywindow(self.clipboard, old_owner)
-                    window.set_events(window.get_events() | STRUCTURE_MASK)
+                    window.set_events(window.get_events() | Gdk.EventMask.STRUCTURE_MASK)
                 log("got window")
             except XError:
                 log("Previous owner is already gone, not blocking")
             else:
                 log("Waiting for previous owner to exit...")
                 add_event_receiver(window, self)
-                gtk_main()
+                self.exit_timer = GLib.timeout_add(SELECTION_EXIT_TIMEOUT*1000, self.exit_timeout)
+                Gtk.main()
+                if self.exit_timer:
+                    GLib.source_remove(self.exit_timer)
+                    self.exit_timer = None
                 log("...they did.")
         window = get_pywindow(self.clipboard, self._xwindow)
-        window.set_title("Xpra-ManagerSelection")
+        window.set_title("Xpra-ManagerSelection-%s" % self.atom)
+        self.clipboard.connect("owner-change", self._owner_change)
+
+    def exit_timeout(self):
+        self.exit_timer = None
+        log.error("selection timeout")
+        log.error(" the current owner did not exit")
+        sys.exit(EXIT_TIMEOUT)
+
+    def _owner_change(self, clipboard, event):
+        log("owner_change(%s, %s)", clipboard, event)
+        if str(event.selection)!=self.atom:
+            #log("_owner_change(..) not our selection: %s vs %s", event.selection, self.atom)
+            return
+        if event.owner:
+            owner = event.owner.get_xid()
+            if owner==self._xwindow:
+                log("_owner_change(..) we still own %s", event.selection)
+                return
+        if self._xwindow:
+            self._xwindow = None
+            self.emit("selection-lost")
 
     def do_xpra_destroy_event(self, event):
         remove_event_receiver(event.window, self)
-        gtk_main_quit()
-
-    def _get(self, _clipboard, outdata, _which, _userdata):
-        # We are compliant with ICCCM version 2.0 (see section 4.3)
-        outdata.set("INTEGER", 32, pack("@ii", 2, 0))
-
-    def _clear(self, _clipboard, _userdata):
-        self._xwindow = None
-        self.emit("selection-lost")
+        Gtk.main_quit()
 
     def window(self):
         if self._xwindow is None:
             return None
         return get_pywindow(self.clipboard, self._xwindow)
 
-gobject.type_register(ManagerSelection)
+GObject.type_register(ManagerSelection)

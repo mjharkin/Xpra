@@ -37,6 +37,21 @@ def do_ready():
     pass
 
 
+_default_icon = "xpra.png"
+def set_default_icon(icon_filename):
+    global _default_icon
+    _default_icon = icon_filename
+
+def get_default_icon():
+    global _default_icon
+    return _default_icon
+
+
+def force_focus(duration=2000):
+    #only implemented on macos
+    assert isinstance(duration, int)
+
+
 def use_stdin():
     stdin = sys.stdin
     return stdin and stdin.isatty()
@@ -227,6 +242,10 @@ def get_wm_name():
     return None
 
 
+def can_access_display():
+    return True
+
+
 take_screenshot = None
 ClientExtras = None
 
@@ -269,6 +288,7 @@ def get_info_base():
             "icc"                           : get_icc_info(),
             "display-icc"                   : get_display_icc_info(),
             "window_frame"                  : get_window_frame_sizes(),
+            "can_access_display"            : can_access_display(),
             }
 
 get_info = get_info_base
@@ -277,6 +297,7 @@ get_info = get_info_base
 platform_import(globals(), "gui", False,
                 "do_ready",
                 "do_init",
+                "force_focus",
                 "gl_check",
                 "use_stdin",
                 "get_wm_name",
@@ -299,6 +320,7 @@ platform_import(globals(), "gui", False,
                 "get_fixed_cursor_size", "get_cursor_size", "get_window_frame_sizes",
                 "add_window_hooks", "remove_window_hooks",
                 "system_bell",
+                "can_access_display",
                 "get_info")
 
 
@@ -322,6 +344,7 @@ def main():
             init_posix_display_source()
         i = get_info()
         print_nested_dict(i, hex_keys=("data", "icc-data", "icc-profile"))
+    return 0
 
 
 if __name__ == "__main__":

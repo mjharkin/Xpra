@@ -94,7 +94,12 @@ def codec_import_check(name, description, top_module, class_module, classnames):
             log("", exc_info=True)
     except Exception as e:
         codec_errors[name] = str(e)
-        log.warn(" cannot load %s (%s): %s missing from %s", name, description, classname, class_module, exc_info=True)
+        if classname:
+            log.warn(" cannot load %s (%s): %s missing from %s",
+                     name, description, classname, class_module, exc_info=True)
+        else:
+            log.warn(" cannot load %s (%s)",
+                     name, description, exc_info=True)
     return None
 codec_versions = {}
 def add_codec_version(name, top_module, version="get_version()", alt_version="__version__"):
@@ -154,6 +159,7 @@ CODEC_OPTIONS = {
     #csc:
     "csc_swscale"   : ("swscale colorspace conversion", "csc_swscale", "colorspace_converter", "ColorspaceConverter"),
     "csc_libyuv"    : ("libyuv colorspace conversion", "csc_libyuv", "colorspace_converter", "ColorspaceConverter"),
+    "csc_cython"    : ("cython colorspace conversion", "csc_cython", "colorspace_converter", "ColorspaceConverter"),
     #decoders:
     "dec_pillow"    : ("Pillow decoder",    "pillow",       "decoder", "decompress"),
     "dec_webp"      : ("webp decoder",      "webp",         "decoder", "decompress"),
@@ -219,11 +225,11 @@ def get_codec(name):
 def get_codec_version(name):
     return codec_versions.get(name)
 
-def has_codec(name):
+def has_codec(name) -> bool:
     return name in codecs
 
 
-CSC_CODECS = "csc_swscale", "csc_libyuv"
+CSC_CODECS = "csc_swscale", "csc_cython", "csc_libyuv"
 ENCODER_CODECS = "enc_pillow", "enc_webp", "enc_jpeg"
 ENCODER_VIDEO_CODECS = "enc_vpx", "enc_x264", "enc_x265", "nvenc", "enc_ffmpeg"
 DECODER_CODECS = "dec_pillow", "dec_webp", "dec_jpeg"
@@ -264,8 +270,9 @@ def get_encoding_help(encoding):
     compressors = [x for x in compressors if x!="brotli"]
     return {
           "auto"    : "automatic mode (recommended)",
+          "grayscale" : "same as 'auto' but in grayscale mode",
           "h264"    : "H.264 video codec",
-          "h265"    : "H.265 (HEVC) video codec (slow and buggy - do not use!)",
+          "h265"    : "H.265 (HEVC) video codec (not recommended)",
           "vp8"     : "VP8 video codec",
           "vp9"     : "VP9 video codec",
           "mpeg4"   : "MPEG-4 video codec",
@@ -276,6 +283,7 @@ def get_encoding_help(encoding):
           "jpeg"    : "JPEG lossy compression",
           "rgb"     : "Raw RGB pixels, lossless,"
                       +" compressed using %s (24bpp or 32bpp for transparency)" % (" or ".join(compressors)),
+          "scroll"  : "motion vectors, supplemented with picture codecs",
           }.get(encoding)
 
 
@@ -343,6 +351,7 @@ def main():
         def forcever(v):
             return pver(v, numsep=".", strsep=".").lstrip("v")
         print_nested_dict(codec_versions, vformat=forcever)
+    return 0
 
 
 if __name__ == "__main__":

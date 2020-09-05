@@ -1,14 +1,15 @@
 # This file is part of Xpra.
-# Copyright (C) 2013-2017 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2013-2020 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import os
 import sys
+import time
 from multiprocessing import Queue as MQueue, freeze_support #@UnresolvedImport
+from gi.repository import GLib
 
-from xpra.gtk_common.gobject_compat import import_glib, import_gobject
 from xpra.util import (
     LOGIN_TIMEOUT, AUTHENTICATION_ERROR, SESSION_NOT_FOUND, SERVER_ERROR,
     repr_ellipsized, print_nested_dict, csv, envfloat, envbool, envint, typedict,
@@ -16,8 +17,8 @@ from xpra.util import (
 from xpra.os_util import (
     get_username_for_uid, get_groups, get_home_for_uid, bytestostr,
     getuid, getgid, WIN32, POSIX,
+    monotonic_time,
     )
-from xpra.server.proxy.proxy_instance_process import ProxyInstanceProcess
 from xpra.server.server_core import ServerCore
 from xpra.server.control_command import ArgsControlCommand, ControlError
 from xpra.child_reaper import getChildReaper
@@ -30,19 +31,33 @@ from xpra.log import Logger
 log = Logger("proxy")
 authlog = Logger("proxy", "auth")
 
-glib = import_glib()
-gobject = import_gobject()
-
 freeze_support()
 
 
 PROXY_SOCKET_TIMEOUT = envfloat("XPRA_PROXY_SOCKET_TIMEOUT", "0.1")
 PROXY_WS_TIMEOUT = envfloat("XPRA_PROXY_WS_TIMEOUT", "2.0")
 assert PROXY_SOCKET_TIMEOUT>0, "invalid proxy socket timeout"
-CAN_STOP_PROXY = envbool("XPRA_CAN_STOP_PROXY", getuid()!=0)
+CAN_STOP_PROXY = envbool("XPRA_CAN_STOP_PROXY", getuid()!=0 or WIN32)
 STOP_PROXY_SOCKET_TYPES = os.environ.get("XPRA_STOP_PROXY_SOCKET_TYPES", "unix-domain,named-pipe").split(",")
+STOP_PROXY_AUTH_SOCKET_TYPES = os.environ.get("XPRA_STOP_PROXY_AUTH_SOCKET_TYPES", "unix-domain").split(",")
+#something (a thread lock?) doesn't allow us to use multiprocessing on MS Windows:
+PROXY_INSTANCE_THREADED = envbool("XPRA_PROXY_INSTANCE_THREADED", WIN32)
+PROXY_CLEANUP_GRACE_PERIOD = envfloat("XPRA_PROXY_CLEANUP_GRACE_PERIOD", "0.5")
 
 MAX_CONCURRENT_CONNECTIONS = envint("XPRA_PROXY_MAX_CONCURRENT_CONNECTIONS", 200)
+if WIN32:
+    #DEFAULT_ENV_WHITELIST = "ALLUSERSPROFILE,APPDATA,COMMONPROGRAMFILES,COMMONPROGRAMFILES(X86),COMMONPROGRAMW6432,COMPUTERNAME,COMSPEC,FP_NO_HOST_CHECK,LOCALAPPDATA,NUMBER_OF_PROCESSORS,OS,PATH,PATHEXT,PROCESSOR_ARCHITECTURE,PROCESSOR_ARCHITECTURE,PROCESSOR_IDENTIFIER,PROCESSOR_LEVEL,PROCESSOR_REVISION,PROGRAMDATA,PROGRAMFILES,PROGRAMFILES(X86),PROGRAMW6432,PSMODULEPATH,PUBLIC,SYSTEMDRIVE,SYSTEMROOT,TEMP,TMP,USERDOMAIN,WORKGROUP,USERNAME,USERPROFILE,WINDIR,XPRA_REDIRECT_OUTPUT,XPRA_LOG_FILENAME,XPRA_ALL_DEBUG"
+    DEFAULT_ENV_WHITELIST = "*"
+else:
+    DEFAULT_ENV_WHITELIST = "LANG,HOSTNAME,PWD,TERM,SHELL,SHLVL,PATH"
+ENV_WHITELIST = os.environ.get("XPRA_PROXY_ENV_WHITELIST", DEFAULT_ENV_WHITELIST).split(",")
+
+
+def get_socktype(proto):
+    try:
+        return proto._conn.socktype
+    except AttributeError:
+        return "unknown"
 
 
 class ProxyServer(ServerCore):
@@ -63,24 +78,27 @@ class ProxyServer(ServerCore):
         #proxy servers may have to connect to remote servers,
         #or even start them, so allow more time before timing out:
         self._accept_timeout += 10
+        self.pings = 0
+        self.video_encoders = ()
+        self._start_sessions = False
         #keep track of the proxy process instances
         #the display they're on and the message queue we can
         # use to communicate with them
-        self.processes = {}
+        self.instances = {}
         #connections used exclusively for requests:
         self._requests = set()
-        self.idle_add = glib.idle_add
-        self.timeout_add = glib.timeout_add
-        self.source_remove = glib.source_remove
+        self.idle_add = GLib.idle_add
+        self.timeout_add = GLib.timeout_add
+        self.source_remove = GLib.source_remove
         self._socket_timeout = PROXY_SOCKET_TIMEOUT
         self._ws_timeout = PROXY_WS_TIMEOUT
 
     def init(self, opts):
         log("ProxyServer.init(%s)", opts)
+        self.pings = int(opts.pings)
         self.video_encoders = opts.proxy_video_encoders
-        self.csc_modules = opts.csc_modules
         self._start_sessions = opts.proxy_start_sessions
-        ServerCore.init(self, opts)
+        super().init(opts)
         #ensure we cache the platform info before intercepting SIGCHLD
         #as this will cause a fork and SIGCHLD to be emitted:
         from xpra.version_util import get_platform_info
@@ -94,8 +112,9 @@ class ProxyServer(ServerCore):
 
 
     def install_signal_handlers(self, callback):
-        from xpra.gtk_common.gobject_compat import register_os_signals
-        register_os_signals(callback)
+        from xpra.gtk_common.gobject_compat import register_os_signals, register_SIGUSR_signals
+        register_os_signals(callback, "Proxy Server")
+        register_SIGUSR_signals("Proxy Server")
 
 
     def make_dbus_server(self):
@@ -124,42 +143,78 @@ class ProxyServer(ServerCore):
         pass
 
     def do_run(self):
-        self.main_loop = glib.MainLoop()
+        self.main_loop = GLib.MainLoop()
         self.main_loop.run()
 
     def handle_stop_command(self, *args):
         display = args[0]
         log("stop command: will try to find proxy process for display %s", display)
-        for process, v in self.processes.items():
-            disp,mq = v
+        for instance, v in dict(self.instances).items():
+            _, disp, _ = v
             if disp==display:
-                pid = process.pid
-                log.info("stop command: found process %s with pid %i for display %s", process, pid, display)
-                log.info(" forwarding the 'stop' request")
-                mq.put("stop")
-                return "stopped proxy process with pid %s" % pid
+                log.info("stop command: found matching process %s with pid %i for display %s",
+                         instance, instance.pid, display)
+                self.stop_proxy(instance)
+                return "stopped proxy instance for display %s" % display
         raise ControlError("no proxy found for display %s" % display)
 
-
-    def stop_all_proxies(self):
-        processes = self.processes
-        self.processes = {}
-        log("stop_all_proxies() will stop proxy processes: %s", processes)
-        for process, v in processes.items():
-            if not process.is_alive():
-                continue
-            disp,mq = v
-            log("stop_all_proxies() stopping process %s for display %s", process, disp)
-            mq.put("stop")
+    def stop_all_proxies(self, force=False):
+        instances = self.instances
+        log("stop_all_proxies() will stop proxy instances: %s", instances)
+        for instance in tuple(instances.keys()):
+            self.stop_proxy(instance, force)
         log("stop_all_proxies() done")
+
+    def stop_proxy(self, instance, force=False):
+        v = self.instances.get(instance)
+        if not v:
+            log.error("Error: proxy instance not found for %s", instance)
+            return
+        log("stop_proxy(%s) is_alive=%s", instance, instance.is_alive())
+        if not instance.is_alive() and not force:
+            return
+        isprocess, _, mq = v
+        log("stop_proxy(%s) %s", instance, v)
+        #different ways of stopping for process vs threaded implementations:
+        if isprocess:
+            #send message:
+            if force:
+                instance.terminate()
+            else:
+                mq.put_nowait("stop")
+                try:
+                    mq.close()
+                except Exception as e:
+                    log("%s() %s", mq.close, e)
+        else:
+            #direct method call:
+            instance.stop(None, "proxy server request")
+
 
     def cleanup(self):
         self.stop_all_proxies()
         ServerCore.cleanup(self)
+        start = monotonic_time()
+        live = True
+        log("cleanup() proxy instances: %s", self.instances)
+        while monotonic_time()-start<PROXY_CLEANUP_GRACE_PERIOD and live:
+            live = tuple(x for x in tuple(self.instances.keys()) if x.is_alive())
+            if live:
+                log("cleanup() still %i proxies alive: %s", len(live), live)
+                time.sleep(0.1)
+        if live:
+            self.stop_all_proxies(True)
+        log("cleanup() frames remaining:")
+        from xpra.util import dump_all_frames
+        dump_all_frames(log)
+
 
     def do_quit(self):
         self.main_loop.quit()
         log.info("Proxy Server process ended")
+        #from now on, we can't rely on the main loop:
+        from xpra.os_util import register_SIGUSR_signals
+        register_SIGUSR_signals()
 
 
     def verify_connection_accepted(self, protocol):
@@ -169,7 +224,7 @@ class ProxyServer(ServerCore):
             self.send_disconnect(protocol, LOGIN_TIMEOUT)
 
     def hello_oked(self, proto, packet, c, auth_caps):
-        if ServerCore.hello_oked(self, proto, packet, c, auth_caps):
+        if super().hello_oked(proto, packet, c, auth_caps):
             #already handled in superclass
             return
         self.accept_client(proto, c)
@@ -187,10 +242,7 @@ class ProxyServer(ServerCore):
                 self.send_disconnect(proto, msg)
                 return
             #verify socket type (only local connections by default):
-            try:
-                socktype = proto._conn.get_info().get("type", "unknown")
-            except Exception:
-                socktype = "unknown"
+            socktype = get_socktype(proto)
             if socktype not in STOP_PROXY_SOCKET_TYPES:
                 msg = "cannot stop proxy server from a '%s' connection" % socktype
                 log.warn("Warning: %s", msg)
@@ -198,7 +250,7 @@ class ProxyServer(ServerCore):
                 self.send_disconnect(proto, msg)
                 return
             #connection must be authenticated:
-            if not proto.authenticators:
+            if socktype in STOP_PROXY_AUTH_SOCKET_TYPES and not proto.authenticators:
                 msg = "cannot stop proxy server from unauthenticated connections"
                 log.warn("Warning: %s", msg)
                 self.send_disconnect(proto, msg)
@@ -227,13 +279,14 @@ class ProxyServer(ServerCore):
         if not client_proto.authenticators:
             log.error("Error: the proxy server requires an authentication mode,")
             try:
-                log.error(" client connection '%s' does not specify one", client_proto._conn.socktype)
+                log.error(" client connection '%s' does not specify one", get_socktype(client_proto))
             except AttributeError:
                 pass
             log.error(" use 'none' to disable authentication")
             disconnect(SESSION_NOT_FOUND, "no sessions found")
             return
         sessions = None
+        authenticator = None
         for authenticator in client_proto.authenticators:
             try:
                 auth_sessions = authenticator.get_sessions()
@@ -269,6 +322,7 @@ class ProxyServer(ServerCore):
                 uid = getuid()
                 gid = getgid()
             username = get_username_for_uid(uid)
+            password = None
             groups = get_groups(username)
             log("username(%i)=%s, groups=%s", uid, username, groups)
         else:
@@ -276,6 +330,7 @@ class ProxyServer(ServerCore):
             assert client_proto.authenticators
             for authenticator in client_proto.authenticators:
                 username = getattr(authenticator, "username", "")
+                password = authenticator.get_password()
                 if username:
                     break
         #ensure we don't loop back to the proxy:
@@ -296,8 +351,8 @@ class ProxyServer(ServerCore):
                 disconnect(SESSION_NOT_FOUND, "no displays found")
                 return
             try:
-                proc, socket_path, display = self.start_new_session(username, uid, gid, sns, displays)
-                log("start_new_session%s=%s", (username, uid, gid, sns, displays), (proc, socket_path, display))
+                proc, socket_path, display = self.start_new_session(username, password, uid, gid, sns, displays)
+                log("start_new_session%s=%s", (username, "..", uid, gid, sns, displays), (proc, socket_path, display))
             except Exception as e:
                 log("start_server_subprocess failed", exc_info=True)
                 log.error("Error: failed to start server subprocess:")
@@ -372,59 +427,92 @@ class ProxyServer(ServerCore):
             return
         log("server connection=%s", server_conn)
 
-        #no other packets should be arriving until the proxy instance responds to the initial hello packet
-        def unexpected_packet(packet):
-            if packet:
-                log.warn("Warning: received an unexpected packet")
-                log.warn(" from the proxy connection %s:", client_proto)
-                log.warn(" %s", repr_ellipsized(packet))
-                client_proto.close()
-        client_conn = client_proto.steal_connection(unexpected_packet)
-        client_state = client_proto.save_state()
         cipher = None
         encryption_key = None
         if auth_caps:
             cipher = auth_caps.get("cipher")
             if cipher:
                 encryption_key = self.get_encryption_key(client_proto.authenticators, client_proto.keyfile)
-        log("start_proxy(..) client connection=%s", client_conn)
-        log("start_proxy(..) client state=%s", client_state)
+
+        use_thread = PROXY_INSTANCE_THREADED
+        if not use_thread:
+            client_socktype = get_socktype(client_proto)
+            server_socktype = disp_desc["type"]
+            if client_socktype in ("ssl", "wss", "ssh"):
+                log.info("using threaded mode for %s client connection", client_socktype)
+                use_thread = True
+            elif server_socktype in ("ssl", "wss", "ssh"):
+                log.info("using threaded mode for %s server connection", server_socktype)
+                use_thread = True
+        if use_thread:
+            if env_options:
+                log.warn("environment options are ignored in threaded mode")
+            from xpra.server.proxy.proxy_instance_thread import ProxyInstanceThread
+            pit = ProxyInstanceThread(session_options, self.video_encoders, self.pings,
+                                      client_proto, server_conn,
+                                      disp_desc, cipher, encryption_key, c)
+            pit.stopped = self.reap
+            pit.run()
+            self.instances[pit] = (False, display, None)
+            return
 
         #this may block, so run it in a thread:
-        def do_start_proxy():
-            log("do_start_proxy()")
+        def start_proxy_process():
+            log("start_proxy_process()")
             message_queue = MQueue()
+            client_conn = None
             try:
+                #no other packets should be arriving until the proxy instance responds to the initial hello packet
+                def unexpected_packet(packet):
+                    if packet:
+                        log.warn("Warning: received an unexpected packet")
+                        log.warn(" from the proxy connection %s:", client_proto)
+                        log.warn(" %s", repr_ellipsized(packet))
+                        client_proto.close()
+                client_conn = client_proto.steal_connection(unexpected_packet)
+                client_state = client_proto.save_state()
+                log("start_proxy_process(..) client connection=%s", client_conn)
+                log("start_proxy_process(..) client state=%s", client_state)
+
                 ioe = client_proto.wait_for_io_threads_exit(5+self._socket_timeout)
                 if not ioe:
                     log.error("Error: some network IO threads have failed to terminate")
+                    client_proto.close()
                     return
                 client_conn.set_active(True)
+                from xpra.server.proxy.proxy_instance_process import ProxyInstanceProcess
                 process = ProxyInstanceProcess(uid, gid, env_options, session_options, self._socket_dir,
-                                               self.video_encoders, self.csc_modules,
+                                               self.video_encoders, self.pings,
                                                client_conn, disp_desc, client_state,
                                                cipher, encryption_key, server_conn, c, message_queue)
                 log("starting %s from pid=%s", process, os.getpid())
-                self.processes[process] = (display, message_queue)
+                self.instances[process] = (True, display, message_queue)
                 process.start()
-                log("process started")
+                log("ProxyInstanceProcess started")
                 popen = process._popen
                 assert popen
-                #when this process dies, run reap to update our list of proxy processes:
+                #when this process dies, run reap to update our list of proxy instances:
                 self.child_reaper.add_process(popen, "xpra-proxy-%s" % display,
                                               "xpra-proxy-instance", True, True, self.reap)
+            except Exception as e:
+                log("start_proxy_process() failed", exc_info=True)
+                log.error("Error starting proxy instance process:")
+                log.error(" %s", e)
+                message_queue.put("error: %s" % e)
+                message_queue.put("stop")
             finally:
                 #now we can close our handle on the connection:
-                client_conn.close()
+                log("handover complete: closing connection from proxy server")
+                if client_conn:
+                    client_conn.close()
                 server_conn.close()
+                log("sending socket-handover-complete")
                 message_queue.put("socket-handover-complete")
-        start_thread(do_start_proxy, "start_proxy(%s)" % client_conn)
+        start_thread(start_proxy_process, "start_proxy(%s)" % client_proto)
 
-    def start_new_session(self, username, uid, gid, new_session_dict={}, displays=()):
-        log("start_new_session%s", (username, uid, gid, new_session_dict, displays))
-        sns = typedict(new_session_dict)
-        if WIN32:
-            return self.start_win32_shadow(username, new_session_dict)
+    def start_new_session(self, username, _password, uid, gid, new_session_dict=None, displays=()):
+        log("start_new_session%s", (username, "..", uid, gid, new_session_dict, displays))
+        sns = typedict(new_session_dict or {})
         mode = sns.get("mode", "start")
         assert mode in ("start", "start-desktop", "shadow"), "invalid start-new-session mode '%s'" % mode
         display = sns.get("display")
@@ -489,8 +577,7 @@ class ProxyServer(ServerCore):
         return proc, socket_path, display
 
     def get_proxy_env(self):
-        ENV_WHITELIST = ["LANG", "HOSTNAME", "PWD", "TERM", "SHELL", "SHLVL", "PATH"]
-        env = dict((k,v) for k,v in os.environ.items() if k in ENV_WHITELIST)
+        env = dict((k,v) for k,v in os.environ.items() if k in ENV_WHITELIST or "*" in ENV_WHITELIST)
         #env var to add to environment of subprocess:
         extra_env_str = os.environ.get("XPRA_PROXY_START_ENV", "")
         if extra_env_str:
@@ -504,71 +591,20 @@ class ProxyServer(ServerCore):
         return env
 
 
-    def start_win32_shadow(self, username, new_session_dict):
-        log("start_win32_shadow%s", (username, new_session_dict))
-        from xpra.platform.paths import get_app_dir
-        from xpra.platform.win32.lsa_logon_lib import logon_msv1_s4u
-        logon_info = logon_msv1_s4u(username)
-        log("logon_msv1_s4u(%s)=%s", username, logon_info)
-        #hwinstaold = set_window_station("winsta0")
-        def exec_command(command):
-            log("exec_command(%s)", command)
-            from xpra.platform.win32.create_process_lib import (
-                Popen,
-                CREATIONINFO, CREATION_TYPE_TOKEN,
-                LOGON_WITH_PROFILE, CREATE_NEW_PROCESS_GROUP, STARTUPINFO,
-                )
-            creation_info = CREATIONINFO()
-            creation_info.dwCreationType = CREATION_TYPE_TOKEN
-            creation_info.dwLogonFlags = LOGON_WITH_PROFILE
-            creation_info.dwCreationFlags = CREATE_NEW_PROCESS_GROUP
-            creation_info.hToken = logon_info.Token
-            log("creation_info=%s", creation_info)
-            startupinfo = STARTUPINFO()
-            startupinfo.lpDesktop = "WinSta0\\Default"
-            startupinfo.lpTitle = "Xpra-Shadow"
-            cwd = get_app_dir()
-            from subprocess import PIPE
-            env = self.get_proxy_env()
-            log("env=%s", env)
-            proc = Popen(command, stdout=PIPE, stderr=PIPE, cwd=cwd, env=env,
-                         startupinfo=startupinfo, creationinfo=creation_info)
-            log("Popen(%s)=%s", command, proc)
-            log("poll()=%s", proc.poll())
-            try:
-                log("stdout=%s", proc.stdout.read())
-                log("stderr=%s", proc.stderr.read())
-            except (OSError, IOError, AttributeError):
-                pass
-            if proc.poll() is not None:
-                return None
-            self.child_reaper.add_process(proc, "server-%s" % username, "xpra shadow", True, True)
-            return proc
-        #whoami = os.path.join(get_app_dir(), "whoami.exe")
-        #exec_command([whoami])
-        port = 10000
-        xpra_command = os.path.join(get_app_dir(), "xpra.exe")
-        command = [xpra_command, "shadow", "--bind-tcp=0.0.0.0:%i" % port, "-d", "win32"]
-        proc = exec_command(command)
-        if not proc:
-            return None, None
-        #exec_command(["C:\\Windows\notepad.exe"])
-        return "tcp/localhost:%i" % port, proc
-
     def reap(self, *args):
         log("reap%s", args)
         dead = []
-        for p in tuple(self.processes):
-            live = p.is_alive()
-            if not live:
-                dead.append(p)
+        for instance in tuple(self.instances.keys()):
+            #instance is a process
+            if not instance.is_alive():
+                dead.append(instance)
         log("reap%s dead processes: %s", args, dead or None)
         for p in dead:
-            del self.processes[p]
+            del self.instances[p]
 
 
     def get_info(self, proto, *_args):
-        info = ServerCore.get_minimal_server_info(self)
+        info = ServerCore.get_server_info(self)
         info.setdefault("server", {})["type"] = "Python/GLib/proxy"
         #only show more info if we have authenticated
         #as the user running the proxy server process:
@@ -581,16 +617,25 @@ class ProxyServer(ServerCore):
                     break
             if sessions:
                 uid, gid = sessions[:2]
-                if not POSIX or (uid==os.getuid() and gid==os.getgid()):
+                if not POSIX or (uid==getuid() and gid==getgid()):
                     self.reap()
                     i = 0
-                    for p,v in self.processes.items():
-                        d,_ = v
-                        info[i] = {
-                                   "display"    : d,
-                                   "live"       : p.is_alive(),
-                                   "pid"        : p.pid,
-                                   }
+                    instances = dict(self.instances)
+                    instances_info = {}
+                    for proxy_instance, v in instances.items():
+                        isprocess, d, _ = v
+                        iinfo = {
+                            "display"    : d,
+                            "live"       : proxy_instance.is_alive(),
+                            }
+                        if isprocess:
+                            iinfo.update({
+                                "pid"        : proxy_instance.pid,
+                                })
+                        else:
+                            iinfo.update(proxy_instance.get_info())
+                        instances_info[i] = iinfo
                         i += 1
-                    info["proxies"] = len(self.processes)
+                    info["instances"] = instances_info
+                    info["proxies"] = len(instances)
         return info

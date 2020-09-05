@@ -120,7 +120,7 @@ def get_digests():
     #python versions older than 2.7.9 may not have this attribute:
     #(in which case, your options will be more limited)
     if algorithms_available:
-        digests += ["hmac+%s" % x for x in tuple(reversed(sorted(algorithms_available)))]
+        digests += ["hmac+%s" % x for x in tuple(reversed(sorted(algorithms_available))) if not x.startswith("shake_") and getattr(hashlib, x, None) is not None]
     return digests
 
 def get_digest_module(digest):
@@ -160,7 +160,7 @@ def gendigest(digest, password, salt):
         return memoryview_to_bytes(xor(password, salt))
     digestmod = get_digest_module(digest)
     if not digestmod:
-        log("invalid digest module '%s': %s", digest)
+        log("invalid digest module '%s'", digest)
         return None
         #warn_server_and_exit(EXIT_UNSUPPORTED, "server requested digest '%s' but it is not supported" % digest, "invalid digest")
     v = hmac.HMAC(strtobytes(password), strtobytes(salt), digestmod=digestmod).hexdigest()

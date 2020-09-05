@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import os
 import time
 
-from xpra.util import envbool, envint, CLIENT_PING_TIMEOUT
+from xpra.util import envbool, envint, typedict, CLIENT_PING_TIMEOUT
 from xpra.os_util import monotonic_time, POSIX
 from xpra.server.source.stub_source_mixin import StubSourceMixin
 from xpra.log import Logger
@@ -20,6 +20,12 @@ PING_TIMEOUT = envint("XPRA_PING_TIMEOUT", 60)
 
 class NetworkStateMixin(StubSourceMixin):
 
+    @classmethod
+    def is_needed(cls, caps : typedict) -> bool:
+        #the 'network-state' capability were only added in v4,
+        #so we have to enable the mixin by default:
+        return caps.boolget("network-state", True)
+
     def init_state(self):
         self.last_ping_echoed_time = 0
         self.check_ping_echo_timers = {}
@@ -30,7 +36,10 @@ class NetworkStateMixin(StubSourceMixin):
         self.cancel_ping_echo_timers()
         self.cancel_ping_timer()
 
-    def get_info(self):
+    def get_caps(self) -> dict:
+        return {"ping-echo-sourceid" : True}
+
+    def get_info(self) -> dict:
         lpe = 0
         if self.last_ping_echoed_time>0:
             lpe = int(monotonic_time()*1000-self.last_ping_echoed_time)
@@ -68,7 +77,7 @@ class NetworkStateMixin(StubSourceMixin):
         for t in timers:
             self.source_remove(t)
 
-    def process_ping(self, time_to_echo):
+    def process_ping(self, time_to_echo, sid):
         l1,l2,l3 = 0,0,0
         cl = -1
         if PING_DETAILS:
@@ -81,7 +90,7 @@ class NetworkStateMixin(StubSourceMixin):
             if stats and stats.client_ping_latency:
                 _, cl = stats.client_ping_latency[-1]
                 cl = int(1000.0*cl)
-        self.send_async("ping_echo", time_to_echo, l1, l2, l3, cl, will_have_more=False)
+        self.send_async("ping_echo", time_to_echo, l1, l2, l3, cl, sid, will_have_more=False)
         #if the client is pinging us, ping it too:
         if not self.ping_timer:
             self.ping_timer = self.timeout_add(500, self.ping)
@@ -94,13 +103,9 @@ class NetworkStateMixin(StubSourceMixin):
 
     def process_ping_echo(self, packet):
         echoedtime, l1, l2, l3, server_ping_latency = packet[1:6]
-        timer = self.check_ping_echo_timers.get(echoedtime)
+        timer = self.check_ping_echo_timers.pop(echoedtime, None)
         if timer:
-            try:
-                self.source_remove(timer)
-                del self.check_ping_echo_timers[echoedtime]
-            except KeyError:
-                pass
+            self.source_remove(timer)
         self.last_ping_echoed_time = echoedtime
         client_ping_latency = monotonic_time()-echoedtime/1000.0
         stats = getattr(self, "statistics", None)

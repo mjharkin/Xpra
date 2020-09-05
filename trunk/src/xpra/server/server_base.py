@@ -7,11 +7,13 @@
 # later version. See the file COPYING for details.
 
 import os
-from threading import Thread
+from threading import Thread, Lock
 
-from xpra.server.server_core import ServerCore, get_thread_info
+from xpra.server.server_core import ServerCore
 from xpra.server.mixins.server_base_controlcommands import ServerBaseControlCommands
-from xpra.os_util import monotonic_time, bytestostr, strtobytes, WIN32, PYTHON3
+from xpra.server.background_worker import add_work_item
+from xpra.net.common import may_log_packet
+from xpra.os_util import monotonic_time, bytestostr, strtobytes, WIN32
 from xpra.util import (
     typedict, flatten_dict, updict, merge_dicts, envbool, envint,
     SERVER_EXIT, SERVER_ERROR, SERVER_SHUTDOWN, DETACH_REQUEST,
@@ -59,6 +61,9 @@ if server_features.logging:
 if server_features.network_state:
     from xpra.server.mixins.networkstate_server import NetworkStateServer
     SERVER_BASES.append(NetworkStateServer)
+if server_features.shell:
+    from xpra.server.mixins.shell_server import ShellServer
+    SERVER_BASES.append(ShellServer)
 if server_features.display:
     from xpra.server.mixins.display_manager import DisplayManager
     SERVER_BASES.append(DisplayManager)
@@ -105,6 +110,8 @@ class ServerBase(ServerBaseClass):
         self.sharing = None
         self.lock = None
         self.init_thread = None
+        self.init_thread_callbacks = []
+        self.init_thread_lock = Lock()
 
         self.idle_timeout = 0
         #duplicated from Server Source...
@@ -147,7 +154,6 @@ class ServerBase(ServerBaseClass):
         self.sharing = opts.sharing
         self.lock = opts.lock
         self.idle_timeout = opts.idle_timeout
-        self.av_sync = opts.av_sync
         self.bandwidth_detection = opts.bandwidth_detection
 
     def setup(self):
@@ -173,7 +179,22 @@ class ServerBase(ServerBaseClass):
         #populate the platform info cache:
         from xpra.version_util import get_platform_info
         get_platform_info()
+        with self.init_thread_lock:
+            for cb in self.init_thread_callbacks:
+                try:
+                    cb()
+                except Exception as e:
+                    log("threaded_init()", exc_info=True)
+                    log.error("Error in initialization thread callback %s", cb)
+                    log.error(" %s", e)
         log("threaded_init() end")
+
+    def after_threaded_init(self, callback):
+        with self.init_thread_lock:
+            if not self.init_thread or not self.init_thread.is_alive():
+                callback()
+            else:
+                self.init_thread_callbacks.append(callback)
 
     def wait_for_threaded_init(self):
         if not self.init_thread:
@@ -218,7 +239,7 @@ class ServerBase(ServerBaseClass):
         self.timeout_add(500, self.clean_quit)
 
 
-    def get_mdns_info(self):
+    def get_mdns_info(self) -> dict:
         mdns_info = ServerCore.get_mdns_info(self)
         if MDNS_CLIENT_COUNT:
             mdns_info["clients"] = len(self._server_sources)
@@ -353,7 +374,7 @@ class ServerBase(ServerBaseClass):
 
         self.accept_client(proto, c)
         #use blocking sockets from now on:
-        if not (PYTHON3 and WIN32):
+        if not WIN32:
             set_socket_timeout(proto._conn, None)
 
         def drop_client(reason="unknown", *args):
@@ -374,17 +395,17 @@ class ServerBase(ServerBaseClass):
             ss.close()
             raise
         self._server_sources[proto] = ss
-        self.mdns_update()
+        add_work_item(self.mdns_update, False)
         #process ui half in ui thread:
         send_ui = ui_client and not is_request
         self.idle_add(self._process_hello_ui, ss, c, auth_caps, send_ui, share_count)
 
-    def get_client_connection_class(self, _caps):
-        from xpra.server.source.client_connection import ClientConnection
-        return ClientConnection
+    def get_client_connection_class(self, caps):
+        from xpra.server.source.client_connection_factory import get_client_connection_class
+        return get_client_connection_class(caps)
 
 
-    def _process_hello_ui(self, ss, c, auth_caps, send_ui, share_count):
+    def _process_hello_ui(self, ss, c, auth_caps, send_ui : bool, share_count : int):
         #adds try:except around parse hello ui code:
         try:
             if self._closing:
@@ -454,22 +475,16 @@ class ServerBase(ServerBaseClass):
     def get_server_features(self, server_source=None):
         #these are flags that have been added over time with new versions
         #to expose new server features:
-        f = dict((k, True) for k in (
-                #all these flags are assumed enabled in 0.17 (they are present in 0.14.x onwards):
-                "toggle_cursors_bell_notify",
-                "toggle_keyboard_sync",
-                "xsettings-tuple",
-                "event_request",
-                "notify-startup-complete",
-                "server-events",
-                ))
+        f = {
+            "toggle_keyboard_sync" : True,  #v4.0 clients assume this is always available
+            }
         for c in SERVER_BASES:
             if c!=ServerCore:
                 merge_dicts(f, c.get_server_features(self, server_source))
         return f
 
     def make_hello(self, source):
-        capabilities = ServerCore.make_hello(self, source)
+        capabilities = super().make_hello(source)
         for c in SERVER_BASES:
             if c!=ServerCore:
                 merge_dicts(capabilities, c.get_caps(self, source))
@@ -491,33 +506,50 @@ class ServerBase(ServerBaseClass):
                  "pointer"                      : server_features.input_devices,
                  })
             capabilities.update(flatten_dict(self.get_server_features(source)))
-        #this is a feature, but we would need the hello request
-        #to know if it is really needed.. so always include it:
-        capabilities["exit_server"] = True
+        capabilities["configure.pointer"] = True    #v4 clients assume this is enabled
         return capabilities
 
     def send_hello(self, server_source, root_w, root_h, server_cipher):
         capabilities = self.make_hello(server_source)
-        if server_source.wants_encodings:
+        if server_source.wants_encodings and server_features.windows:
             try:
                 from xpra.codecs.loader import codec_versions
             except ImportError:
                 log("no codecs", exc_info=True)
             else:
-                updict(capabilities, "encoding", codec_versions, "version")
-                for k,v in self.get_encoding_info().items():
-                    if k=="":
-                        k = "encodings"
-                    else:
-                        k = "encodings.%s" % k
-                    capabilities[k] = v
+                def add_encoding_caps(d):
+                    updict(d, "encoding", codec_versions, "version")
+                    for k,v in self.get_encoding_info().items():
+                        if k=="":
+                            k = "encodings"
+                        else:
+                            k = "encodings.%s" % k
+                        d[k] = v
+                if server_source.encodings_packet:
+                    #we can send it later,
+                    #when the init thread has finished:
+                    def send_encoding_caps():
+                        d = {}
+                        add_encoding_caps(d)
+                        #make sure the 'hello' packet goes out first:
+                        self.idle_add(server_source.send_async, "encodings", d)
+                    self.after_threaded_init(send_encoding_caps)
+                else:
+                    self.wait_for_threaded_init()
+                    add_encoding_caps(capabilities)
+                #check for mmap:
+                if getattr(self, "mmap_size", 0)==0:
+                    self.after_threaded_init(server_source.print_encoding_info)
         if server_source.wants_display:
             capabilities.update({
                          "actual_desktop_size"  : (root_w, root_h),
                          "root_window_size"     : (root_w, root_h),
                          })
-        if self._reverse_aliases and server_source.wants_aliases:
-            capabilities["aliases"] = self._reverse_aliases
+        if self._aliases and server_source.wants_aliases:
+            reverse_aliases = {}
+            for i, packet_type in self._aliases.items():
+                reverse_aliases[packet_type] = i
+            capabilities["aliases"] = reverse_aliases
         if server_cipher:
             capabilities.update(server_cipher)
         server_source.send_hello(capabilities)
@@ -543,16 +575,17 @@ class ServerBase(ServerBaseClass):
             ss.send_info_response(info)
         self.get_all_info(info_callback, proto, None)
 
-    def send_hello_info(self, proto, flatten=True):
+    def send_hello_info(self, proto):
+        self.wait_for_threaded_init()
         start = monotonic_time()
         def cb(proto, info):
-            self.do_send_info(proto, info, flatten)
+            self.do_send_info(proto, info)
             end = monotonic_time()
-            log.info("processed %s info request from %s in %ims",
-                     ["structured", "flat"][flatten], proto._conn, (end-start)*1000)
+            log.info("processed info request from %s in %ims",
+                     proto._conn, (end-start)*1000)
         self.get_all_info(cb, proto, None)
 
-    def get_ui_info(self, proto, client_uuids=None, *args):
+    def get_ui_info(self, proto, client_uuids=None, *args) -> dict:
         """ info that must be collected from the UI thread
             (ie: things that query the display)
         """
@@ -564,11 +597,8 @@ class ServerBase(ServerBaseClass):
                 log.error("Error gathering UI info on %s", c, exc_info=True)
         return info
 
-    def get_thread_info(self, proto):
-        return get_thread_info(proto, tuple(self._server_sources.keys()))
 
-
-    def get_info(self, proto=None, client_uuids=None):
+    def get_info(self, proto=None, client_uuids=None) -> dict:
         log("ServerBase.get_info%s", (proto, client_uuids))
         start = monotonic_time()
         info = ServerCore.get_info(self, proto)
@@ -590,7 +620,7 @@ class ServerBase(ServerBaseClass):
         log("ServerBase.get_info took %.1fms", 1000.0*(monotonic_time()-start))
         return info
 
-    def get_packet_handlers_info(self):
+    def get_packet_handlers_info(self) -> dict:
         info = ServerCore.get_packet_handlers_info(self)
         info.update({
             "authenticated" : sorted(self._authenticated_packet_handlers.keys()),
@@ -599,7 +629,7 @@ class ServerBase(ServerBaseClass):
         return info
 
 
-    def get_features_info(self):
+    def get_features_info(self) -> dict:
         i = {
              "sharing"          : self.sharing is not False,
              "idle_timeout"     : self.idle_timeout,
@@ -607,7 +637,7 @@ class ServerBase(ServerBaseClass):
         i.update(self.get_server_features())
         return i
 
-    def do_get_info(self, proto, server_sources=None):
+    def do_get_info(self, proto, server_sources=None) -> dict:
         start = monotonic_time()
         info = {}
         def up(prefix, d):
@@ -720,12 +750,12 @@ class ServerBase(ServerBaseClass):
 
     ######################################################################
     # http server and http audio stream:
-    def get_http_info(self):
+    def get_http_info(self) -> dict:
         info = ServerCore.get_http_info(self)
         info["clients"] = len(self._server_sources)
         return info
 
-    def get_http_scripts(self):
+    def get_http_scripts(self) -> dict:
         scripts = ServerCore.get_http_scripts(self)
         scripts["/audio.mp3"] = self.http_audio_mp3_request
         return scripts
@@ -736,7 +766,7 @@ class ServerBase(ServerBaseClass):
             return None
         try:
             args_str = handler.path.split("?", 1)[1]
-        except:
+        except IndexError:
             return err()
         #parse args:
         args = {}
@@ -853,7 +883,7 @@ class ServerBase(ServerBaseClass):
         source = self._server_sources.pop(protocol, None)
         if source:
             self.cleanup_source(source)
-            self.mdns_update()
+            add_work_item(self.mdns_update, False)
         for c in SERVER_BASES:
             c.cleanup_protocol(self, protocol)
         return source
@@ -908,7 +938,7 @@ class ServerBase(ServerBaseClass):
                 c.reset_focus(self)
 
 
-    def get_all_protocols(self):
+    def get_all_protocols(self) -> list:
         return list(self._potential_protocols) + list(self._server_sources.keys())
 
 
@@ -975,22 +1005,24 @@ class ServerBase(ServerBaseClass):
         try:
             handler = None
             packet_type = bytestostr(packet[0])
-            self.may_log_packet(packet_type, packet)
+            def call_handler():
+                may_log_packet(False, packet_type, packet)
+                handler(proto, packet)
             if proto in self._server_sources:
                 handler = self._authenticated_ui_packet_handlers.get(packet_type)
                 if handler:
                     netlog("process ui packet %s", packet_type)
-                    self.idle_add(handler, proto, packet)
+                    self.idle_add(call_handler)
                     return
                 handler = self._authenticated_packet_handlers.get(packet_type)
                 if handler:
                     netlog("process non-ui packet %s", packet_type)
-                    handler(proto, packet)
+                    call_handler()
                     return
             handler = self._default_packet_handlers.get(packet_type)
             if handler:
                 netlog("process default packet %s", packet_type)
-                handler(proto, packet)
+                call_handler()
                 return
             def invalid_packet():
                 ss = self.get_server_source(proto)
@@ -1001,8 +1033,6 @@ class ServerBase(ServerBaseClass):
                 if not ss:
                     proto.close()
             self.idle_add(invalid_packet)
-        except KeyboardInterrupt:
-            raise
         except Exception:
             netlog.error("Error processing a '%s' packet", packet_type)
             netlog.error(" received from %s:", proto)

@@ -1,10 +1,9 @@
 # This file is part of Xpra.
-# Copyright (C) 2012-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2012-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 #cython: auto_pickle=False, wraparound=False, cdivision=True, language_level=3
-from __future__ import absolute_import
 
 import os
 
@@ -12,8 +11,8 @@ from xpra.log import Logger
 log = Logger("encoder", "x264")
 
 from xpra.util import nonl, envint, envbool, typedict, csv, AtomicInteger
-from xpra.os_util import bytestostr, strtobytes, get_cpu_count
-from xpra.codecs.codec_constants import get_subsampling_divs, video_spec
+from xpra.os_util import bytestostr, strtobytes
+from xpra.codecs.codec_constants import video_spec
 from collections import deque
 from xpra.buffers.membuf cimport object_as_buffer   #pylint: disable=syntax-error
 
@@ -22,11 +21,12 @@ from libc.stdint cimport int64_t, uint64_t, uint8_t, uintptr_t
 
 
 MAX_DELAYED_FRAMES = envint("XPRA_X264_MAX_DELAYED_FRAMES", 4)
-THREADS = envint("XPRA_X264_THREADS", min(4, max(1, get_cpu_count()//2)))
+THREADS = envint("XPRA_X264_THREADS", min(4, max(1, os.cpu_count()//2)))
 MIN_SLICED_THREADS_SPEED = envint("XPRA_X264_SLICED_THREADS", 60)
 LOGGING = os.environ.get("XPRA_X264_LOGGING", "WARNING")
 PROFILE = os.environ.get("XPRA_X264_PROFILE")
 SUPPORT_24BPP = envbool("XPRA_X264_SUPPORT_24BPP")
+SUPPORT_30BPP = envbool("XPRA_X264_SUPPORT_30BPP", True)
 TUNE = os.environ.get("XPRA_X264_TUNE")
 LOG_NALS = envbool("XPRA_X264_LOG_NALS")
 SAVE_TO_FILE = os.environ.get("XPRA_SAVE_TO_FILE")
@@ -48,6 +48,11 @@ cdef extern from "stdarg.h":
     void va_end(va_list)
     fake_type int_type "int"
 
+#ugly hack to generate an ifdef:
+cdef extern from *:
+    cdef void emit_ifdef_bitdepth "#if X264_BUILD>152 //" ()
+    cdef void emit_endif_bitdepth "#endif //" ()
+
 cdef extern from "x264.h":
     int X264_KEYINT_MAX_INFINITE
 
@@ -64,6 +69,9 @@ cdef extern from "x264.h":
     int X264_CSP_BGR
     int X264_CSP_BGRA
     int X264_CSP_RGB
+    int X264_CSP_NV12
+    int X264_CSP_V210
+    int X264_CSP_HIGH_DEPTH
 
     int X264_RC_CQP
     int X264_RC_CRF
@@ -169,6 +177,9 @@ cdef extern from "x264.h":
         int i_width
         int i_height
         int i_csp               #CSP of encoded bitstream
+        emit_ifdef_bitdepth()
+        int i_bitdepth
+        emit_endif_bitdepth()
         int i_level_idc
         int i_frame_total       #number of frames to encode if known, else 0
 
@@ -353,16 +364,21 @@ if SUPPORT_24BPP:
         })
 
 COLORSPACES = {
-    "YUV420P"   : ("YUV420P",),
-    "YUV422P"   : ("YUV422P",),
-    "YUV444P"   : ("YUV444P",),
-    "BGRA"      : ("BGRA",),
-    "BGRX"      : ("BGRX",),
+    "YUV420P"   : "YUV420P",
+    "YUV422P"   : "YUV422P",
+    "YUV444P"   : "YUV444P",
+    "BGRA"      : "BGRA",
+    "BGRX"      : "BGRX",
     }
+emit_ifdef_bitdepth()
+if SUPPORT_30BPP:
+    COLORSPACE_FORMATS["BGR48"] = (X264_CSP_BGR | X264_CSP_HIGH_DEPTH,    PROFILE_HIGH444_PREDICTIVE,    RGB_PROFILES)
+    COLORSPACES["BGR48"] = "GBRP10"
+emit_endif_bitdepth()
 if SUPPORT_24BPP:
     COLORSPACES.update({
-        "BGR"       : ("BGR",),
-        "RGB"       : ("RGB",),
+        "BGR"       : "BGR",
+        "RGB"       : "RGB",
         })
 
 
@@ -398,7 +414,7 @@ def get_input_colorspaces(encoding):
 def get_output_colorspaces(encoding, input_colorspace):
     assert encoding in get_encodings()
     assert input_colorspace in COLORSPACES
-    return COLORSPACES[input_colorspace]
+    return (COLORSPACES[input_colorspace],)
 
 if X264_BUILD<146:
     #untested, but should be OK for 4k:
@@ -414,7 +430,7 @@ def get_spec(encoding, colorspace):
     #we can handle high quality and any speed
     #setup cost is moderate (about 10ms)
     has_lossless_mode = colorspace in ("YUV444P", "BGR", "BGRA", "BGRX", "RGB")
-    return video_spec(encoding=encoding, input_colorspace=colorspace, output_colorspaces=COLORSPACES[colorspace],
+    return video_spec(encoding=encoding, input_colorspace=colorspace, output_colorspaces=(COLORSPACES[colorspace],),
                       has_lossless_mode=has_lossless_mode,
                       codec_class=Encoder, codec_type=get_type(),
                       quality=60+40*int(has_lossless_mode), speed=60,
@@ -463,6 +479,7 @@ cdef class Encoder:
     cdef unsigned int fast_decode
     #cdef int opencl
     cdef object src_format
+    cdef object csc_format
     cdef object content_type
     cdef object profile
     cdef object tune
@@ -488,7 +505,6 @@ cdef class Encoder:
     cdef object __weakref__
 
     def init_context(self, unsigned int width, unsigned int height, src_format, dst_formats, encoding, int quality, int speed, scaling, options={}):
-        options = typedict(options)
         global COLORSPACE_FORMATS, generation
         cs_info = COLORSPACE_FORMATS.get(src_format)
         assert cs_info is not None, "invalid source format: %s, must be one of: %s" % (src_format, COLORSPACE_FORMATS.keys())
@@ -505,6 +521,7 @@ cdef class Encoder:
         self.max_delayed = options.intget("max-delayed", MAX_DELAYED_FRAMES) * int(not self.fast_decode) * int(self.b_frames)
         self.preset = self.get_preset_for_speed(speed)
         self.src_format = src_format
+        self.csc_format = COLORSPACES[src_format]
         self.colorspace = cs_info[0]
         self.frames = 0
         self.frame_types = {}
@@ -521,6 +538,8 @@ cdef class Encoder:
         if self.profile is None:
             self.profile = cs_info[1]
             log("using default profile=%s", bytestostr(self.profile))
+        else:
+            log("using profile=%s", bytestostr(self.profile))
         self.init_encoder(options)
         gen = generation.increase()
         if SAVE_TO_FILE is not None:
@@ -538,12 +557,17 @@ cdef class Encoder:
         log("x264: get_tune() TUNE=%s, fast_decode=%s, content_type=%s", TUNE, self.fast_decode, self.content_type)
         if TUNE:
             return TUNE
+        tunes = []
         if self.content_type=="video":
-            return b"film"
+            tunes.append(b"film")
         elif self.content_type=="text":
-            return b"grain"
-        #return "animation"
-        return b"zerolatency"
+            tunes.append(b"grain")
+            tunes.append(b"zerolatency")
+        else:
+            tunes.append(b"zerolatency")
+        if self.fast_decode:
+            tunes.append(b"fastdecode")
+        return b",".join(tunes)
 
     cdef init_encoder(self, options):
         cdef x264_param_t param
@@ -612,6 +636,12 @@ cdef class Encoder:
         param.i_width = self.width
         param.i_height = self.height
         param.i_csp = self.colorspace
+        emit_ifdef_bitdepth()
+        if (self.colorspace & X264_CSP_HIGH_DEPTH)>0:
+            param.i_bitdepth = 10
+        else:
+            param.i_bitdepth = 8
+        emit_endif_bitdepth()
         #logging hook:
         param.pf_log = <void *> X264_log
         param.i_log_level = LOG_LEVEL
@@ -645,7 +675,7 @@ cdef class Encoder:
             f.close()
 
 
-    def get_info(self):             #@DuplicatedSignature
+    def get_info(self) -> dict:             #@DuplicatedSignature
         cdef double pps
         if self.profile is None:
             return {}
@@ -665,6 +695,7 @@ cdef class Encoder:
             "quality"       : self.quality,
             "lossless"      : self.quality==100,
             "src_format"    : self.src_format,
+            "csc_format"    : self.csc_format,
             "content-type"  : self.content_type,
             "version"       : get_version(),
             "frame-types"   : self.frame_types,
@@ -681,7 +712,7 @@ cdef class Encoder:
                 "ratio_pct" : int(100.0 * self.bytes_out / self.bytes_in),
                 })
         if self.frames>0 and self.time>0:
-            pps = float(self.width) * float(self.height) * float(self.frames) / self.time
+            pps = self.width * self.height * self.frames / self.time
             info.update({
                 "total_time_ms"     : int(self.time*1000.0),
                 "pixels_per_second" : int(pps),
@@ -824,10 +855,13 @@ cdef class Encoder:
             assert len(pixels)>0
             assert istrides>0
             assert object_as_buffer(pixels, <const void**> &pic_buf, &pic_buf_len)==0, "unable to convert %s to a buffer" % type(pixels)
-            for i in range(3):
-                pic_in.img.plane[i] = pic_buf
-                pic_in.img.i_stride[i] = istrides
+            pic_in.img.plane[0] = pic_buf
+            pic_in.img.i_stride[0] = istrides
+            for i in range(1, 3):
+                pic_in.img.plane[i] = NULL
+                pic_in.img.i_stride[i] = 0
             self.bytes_in += pic_buf_len
+            pic_in.img.i_plane = 1
         else:
             assert len(pixels)==3, "image pixels does not have 3 planes! (found %s)" % len(pixels)
             assert len(istrides)==3, "image strides does not have 3 values! (found %s)" % len(istrides)
@@ -835,9 +869,9 @@ cdef class Encoder:
                 assert object_as_buffer(pixels[i], <const void**> &pic_buf, &pic_buf_len)==0, "unable to convert %s to a buffer (plane=%s)" % (type(pixels[i]), i)
                 pic_in.img.plane[i] = pic_buf
                 pic_in.img.i_stride[i] = istrides[i]
+            pic_in.img.i_plane = 3
 
         pic_in.img.i_csp = self.colorspace
-        pic_in.img.i_plane = 3
         pic_in.i_pts = image.get_timestamp()-self.first_frame_timestamp
         return self.do_compress_image(&pic_in, quality, speed)
 
@@ -905,6 +939,7 @@ cdef class Encoder:
                 "pts"       : int(pic_out.i_pts),
                 #"quality"   : max(0, min(100, quality)),
                 #"speed"     : max(0, min(100, speed)),
+                "csc"       : self.csc_format,
                 "type"      : slice_type,
                 }
         if self.delayed_frames>0:
@@ -992,6 +1027,7 @@ cdef class Encoder:
 
 
 def selftest(full=False):
+    log("enc_x264 selftest: %s", get_info())
     global SAVE_TO_FILE
     from xpra.codecs.codec_checks import testencoder, get_encoder_max_sizes
     from xpra.codecs.enc_x264 import encoder

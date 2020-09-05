@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 from xpra.server.source.stub_source_mixin import StubSourceMixin
 from xpra.keyboard.mask import DEFAULT_MODIFIER_MEANINGS
+from xpra.util import typedict
 from xpra.log import Logger
 
 log = Logger("keyboard")
@@ -16,6 +17,12 @@ log = Logger("keyboard")
 Manage input devices (keyboard, mouse, etc)
 """
 class InputMixin(StubSourceMixin):
+
+    @classmethod
+    def is_needed(cls, caps : typedict) -> bool:
+        #the 'keyboard' and 'mouse' capability were only added in v4,
+        #so we have to enable the mixin by default:
+        return caps.boolget("keyboard", True) or caps.boolget("mouse", True)
 
     def init_state(self):
         self.pointer_relative = False
@@ -30,7 +37,7 @@ class InputMixin(StubSourceMixin):
     def cleanup(self):
         self.keyboard_config = None
 
-    def parse_client_caps(self, c):
+    def parse_client_caps(self, c : typedict):
         self.pointer_relative = c.boolget("pointer.relative")
         self.double_click_time = c.intget("double_click.time")
         self.double_click_distance = c.intpair("double_click.distance")
@@ -38,7 +45,7 @@ class InputMixin(StubSourceMixin):
         self.mouse_last_position = c.intpair("mouse.initial-position")
 
 
-    def get_info(self):
+    def get_info(self) -> dict:
         dc_info = {}
         dct = self.double_click_time
         if dct:
@@ -54,7 +61,7 @@ class InputMixin(StubSourceMixin):
             info["keyboard"] = kc.get_info()
         return info
 
-    def get_caps(self):
+    def get_caps(self) -> dict:
         #expose the "modifier_client_keycodes" defined in the X11 server keyboard config object,
         #so clients can figure out which modifiers map to which keys:
         kc = self.keyboard_config
@@ -88,7 +95,7 @@ class InputMixin(StubSourceMixin):
         return kc
 
 
-    def is_modifier(self, keyname, keycode):
+    def is_modifier(self, keyname, keycode) -> bool:
         if keyname in DEFAULT_MODIFIER_MEANINGS.keys():
             return True
         #keyboard config should always exist if we are here?
@@ -116,12 +123,12 @@ class InputMixin(StubSourceMixin):
                 self.keyboard_config = current_keyboard_config
 
 
-    def get_keycode(self, client_keycode, keyname, pressed, modifiers):
+    def get_keycode(self, client_keycode, keyname, pressed, modifiers, keyval, group) -> int:
         kc = self.keyboard_config
         if kc is None:
             log.info("ignoring client key %s / %s since keyboard is not configured", client_keycode, keyname)
             return -1
-        return kc.get_keycode(client_keycode, keyname, pressed, modifiers)
+        return kc.get_keycode(client_keycode, keyname, pressed, modifiers, keyval, group)
 
 
     def update_mouse(self, wid, x, y, rx, ry):

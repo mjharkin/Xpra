@@ -1,45 +1,41 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
 # Copyright (C) 2011 Serviware (Arthur Huillet, <ahuillet@serviware.com>)
-# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import os
 import threading
+from gi.repository import Gdk
 
-from xpra.gtk_common.gobject_compat import import_gdk
 from xpra.x11.bindings.core_bindings import set_context_check, X11CoreBindings     #@UnresolvedImport
 from xpra.x11.bindings.randr_bindings import RandRBindings  #@UnresolvedImport
 from xpra.x11.bindings.keyboard_bindings import X11KeyboardBindings #@UnresolvedImport
 from xpra.x11.bindings.window_bindings import X11WindowBindings #@UnresolvedImport
 from xpra.gtk_common.error import XError, xswallow, xsync, xlog, trap, verify_sync
-from xpra.gtk_common.gtk_util import get_xwindow, display_get_default, get_default_root_window
+from xpra.gtk_common.gtk_util import get_default_root_window
 from xpra.server.server_uuid import save_uuid, get_uuid
+from xpra.x11.vfb_util import parse_resolution
 from xpra.x11.fakeXinerama import find_libfakeXinerama, save_fakeXinerama_config, cleanup_fakeXinerama
 from xpra.x11.gtk_x11.prop import prop_get, prop_set
 from xpra.x11.gtk_x11.gdk_display_source import close_gdk_display_source
 from xpra.x11.gtk_x11.gdk_bindings import init_x11_filter, cleanup_x11_filter, cleanup_all_event_receivers
-from xpra.x11.common import MAX_WINDOW_SIZE
-from xpra.os_util import monotonic_time, strtobytes, bytestostr, PYTHON3
-from xpra.util import engs, csv, typedict, iround, envbool, XPRA_DPI_NOTIFICATION_ID
+from xpra.common import MAX_WINDOW_SIZE
+from xpra.os_util import monotonic_time, strtobytes
+from xpra.util import typedict, iround, envbool, XPRA_DPI_NOTIFICATION_ID
 from xpra.net.compression import Compressed
 from xpra.server.gtk_server_base import GTKServerBase
 from xpra.x11.xkbhelper import clean_keyboard_state
 from xpra.scripts.config import FALSE_OPTIONS
 from xpra.log import Logger
 
-gdk = import_gdk()
-
 set_context_check(verify_sync)
 RandR = RandRBindings()
 X11Keyboard = X11KeyboardBindings()
 X11Core = X11CoreBindings()
 X11Window = X11WindowBindings()
-
-if PYTHON3:
-    unicode = str           #@ReservedAssignment
 
 
 log = Logger("x11", "server")
@@ -49,13 +45,13 @@ grablog = Logger("server", "grab")
 cursorlog = Logger("server", "cursor")
 screenlog = Logger("server", "screen")
 xinputlog = Logger("xinput")
-gllog = Logger("screen", "opengl")
 
 
 ALWAYS_NOTIFY_MOTION = envbool("XPRA_ALWAYS_NOTIFY_MOTION", False)
+FAKE_X11_INIT_ERROR = envbool("XPRA_FAKE_X11_INIT_ERROR", False)
 
 
-class XTestPointerDevice(object):
+class XTestPointerDevice:
 
     def __repr__(self):
         return "XTestPointerDevice"
@@ -85,33 +81,37 @@ class X11ServerCore(GTKServerBase):
     """
 
     def __init__(self):
-        self.screen_number = display_get_default().get_default_screen().get_number()
+        self.screen_number = Gdk.Screen.get_default().get_number()
         self.root_window = get_default_root_window()
         self.pointer_device = XTestPointerDevice()
         self.touchpad_device = None
         self.pointer_device_map = {}
         self.keys_pressed = {}
         self.last_mouse_user = None
+        self.libfakeXinerama_so = None
+        self.initial_resolution = None
         self.x11_filter = False
         GTKServerBase.__init__(self)
         log("XShape=%s", X11Window.displayHasXShape())
 
     def init(self, opts):
         self.do_init(opts)
-        GTKServerBase.init(self, opts)
+        super().init(opts)
 
     def server_init(self):
-        with xsync:
-            self.x11_init()
+        self.x11_init()
         from xpra.server import server_features
         if server_features.windows:
             from xpra.x11.x11_window_filters import init_x11_window_filters
             init_x11_window_filters()
-        super(X11ServerCore, self).server_init()
+        super().server_init()
 
     def do_init(self, opts):
-        self.opengl = opts.opengl
-        self.randr = opts.resize_display
+        try:
+            self.initial_resolution = parse_resolution(opts.resize_display)
+        except ValueError:
+            pass
+        self.randr = bool(self.initial_resolution) or not (opts.resize_display in FALSE_OPTIONS)
         self.randr_exact_size = False
         self.fake_xinerama = "no"      #only enabled in seamless server
         self.current_xinerama_config = None
@@ -120,27 +120,36 @@ class X11ServerCore(GTKServerBase):
 
 
     def x11_init(self):
-        clean_keyboard_state()
+        if FAKE_X11_INIT_ERROR:
+            raise Exception("fake x11 init error")
+        self.init_fake_xinerama()
+        with xlog:
+            clean_keyboard_state()
+        with xlog:
+            if not X11Keyboard.hasXFixes() and self.cursors:
+                log.error("Error: cursor forwarding support disabled")
+            if not X11Keyboard.hasXTest():
+                log.error("Error: keyboard and mouse disabled")
+            elif not X11Keyboard.hasXkb():
+                log.error("Error: limited keyboard support")
+        with xsync:
+            self.init_x11_atoms()
+        with xlog:
+            if self.randr:
+                self.init_randr()
+        with xlog:
+            self.init_cursor()
+        with xlog:
+            self.x11_filter = init_x11_filter()
+        assert self.x11_filter
+
+    def init_fake_xinerama(self):
         if self.fake_xinerama in FALSE_OPTIONS:
             self.libfakeXinerama_so = None
         elif os.path.isabs(self.fake_xinerama):
             self.libfakeXinerama_so = self.fake_xinerama
         else:
             self.libfakeXinerama_so = find_libfakeXinerama()
-        if not X11Keyboard.hasXFixes() and self.cursors:
-            log.error("Error: cursor forwarding support disabled")
-        if not X11Keyboard.hasXTest():
-            log.error("Error: keyboard and mouse disabled")
-        elif not X11Keyboard.hasXkb():
-            log.error("Error: limited keyboard support")
-        self.init_x11_atoms()
-        if self.randr:
-            self.init_randr()
-        self.init_cursor()
-        self.query_opengl()
-        self.x11_filter = init_x11_filter()
-        assert self.x11_filter
-
 
     def init_randr(self):
         self.randr = RandR.has_randr()
@@ -185,64 +194,6 @@ class X11ServerCore(GTKServerBase):
             return X11Window.get_depth(X11Window.getDefaultRootWindow())
         return 0
 
-    def query_opengl(self):
-        self.opengl_props = {}
-        if self.opengl.lower()=="noprobe":
-            gllog("query_opengl() skipped: %s", self.opengl)
-            return
-        blacklisted_kernel_modules = []
-        for mod in ("vboxguest", "vboxvideo"):
-            if os.path.exists("/sys/module/%s" % mod):
-                blacklisted_kernel_modules.append(mod)
-        if blacklisted_kernel_modules:
-            gllog.warn("Warning: skipped OpenGL probing,")
-            gllog.warn(" found %i blacklisted kernel module%s:",
-                       len(blacklisted_kernel_modules), engs(blacklisted_kernel_modules))
-            gllog.warn(" %s", csv(blacklisted_kernel_modules))
-            self.opengl_props["error"] = "VirtualBox guest detected: %s" % csv(blacklisted_kernel_modules)
-        else:
-            try:
-                from subprocess import Popen, PIPE
-                from xpra.platform.paths import get_xpra_command
-                cmd = self.get_full_child_command(get_xpra_command()+["opengl", "--opengl=yes"])
-                env = self.get_child_env()
-                proc = Popen(cmd, stdin=PIPE, stdout=PIPE, stderr=PIPE, env=env, shell=False, close_fds=True)
-                out,err = proc.communicate()
-                gllog("out(%s)=%s", cmd, out)
-                gllog("err(%s)=%s", cmd, err)
-                if proc.returncode==0:
-                    #parse output:
-                    for line in out.splitlines():
-                        parts = line.split(b"=")
-                        if len(parts)!=2:
-                            continue
-                        k = bytestostr(parts[0].strip())
-                        v = bytestostr(parts[1].strip())
-                        self.opengl_props[k] = v
-                    gllog("opengl props=%s", self.opengl_props)
-                    gllog.info("OpenGL is supported on display '%s'", os.environ.get("DISPLAY"))
-                    renderer = self.opengl_props.get("renderer")
-                    if renderer:
-                        gllog.info(" using '%s' renderer", renderer)
-                else:
-                    self.opengl_props["error-details"] = str(err).strip("\n\r")
-                    error = "unknown error"
-                    for x in str(err).splitlines():
-                        if x.startswith("RuntimeError: "):
-                            error = x[len("RuntimeError: "):]
-                            break
-                        if x.startswith("ImportError: "):
-                            error = x[len("ImportError: "):]
-                            break
-                    self.opengl_props["error"] = error
-                    log.warn("Warning: OpenGL support check failed:")
-                    log.warn(" %s", error)
-            except Exception as e:
-                gllog("query_opengl()", exc_info=True)
-                gllog.error("Error: OpenGL support check failed")
-                gllog.error(" '%s'", e)
-                self.opengl_props["error"] = str(e)
-        gllog("OpenGL: %s", self.opengl_props)
 
     def init_x11_atoms(self):
         #some applications (like openoffice), do not work properly
@@ -269,24 +220,31 @@ class X11ServerCore(GTKServerBase):
 
 
     def set_keyboard_layout_group(self, grp):
-        keylog("set_keyboard_layout_group(%i) config=%s, current keyboard group=%s",
-               grp, self.keyboard_config, self.current_keyboard_group)
         if not self.keyboard_config:
+            keylog("set_keyboard_layout_group(%i) ignored, no config", grp)
             return
         if not self.keyboard_config.xkbmap_layout_groups:
+            keylog("set_keyboard_layout_group(%i) ignored, no layout groups support", grp)
             #not supported by the client that owns the current keyboard config,
             #so make sure we stick to the default group:
             grp = 0
+        if not X11Keyboard.hasXkb():
+            keylog("set_keyboard_layout_group(%i) ignored, no Xkb support", grp)
+            return
         if grp<0:
             grp = 0
-        if self.current_keyboard_group!=grp and X11Keyboard.hasXkb():
-            try:
-                with xsync:
-                    self.current_keyboard_group = X11Keyboard.set_layout_group(grp)
-            except XError as e:
-                keylog("set_keyboard_layout_group group=%s", grp, exc_info=True)
-                keylog.error("Error: failed to set keyboard layout group '%s'", grp)
-                keylog.error(" %s", e)
+        if self.current_keyboard_group!=grp:
+            keylog("set_keyboard_layout_group(%i) ignored, value unchanged", grp)
+            return
+        keylog("set_keyboard_layout_group(%i) config=%s, current keyboard group=%s",
+               grp, self.keyboard_config, self.current_keyboard_group)
+        try:
+            with xsync:
+                self.current_keyboard_group = X11Keyboard.set_layout_group(grp)
+        except XError as e:
+            keylog("set_keyboard_layout_group group=%s", grp, exc_info=True)
+            keylog.error("Error: failed to set keyboard layout group '%s'", grp)
+            keylog.error(" %s", e)
 
     def init_packet_handlers(self):
         GTKServerBase.init_packet_handlers(self)
@@ -298,9 +256,9 @@ class X11ServerCore(GTKServerBase):
         self.input_devices = "xtest"
 
 
-    def get_child_env(self):
+    def get_child_env(self) -> dict:
         #adds fakeXinerama:
-        env = super(X11ServerCore, self).get_child_env()
+        env = super().get_child_env()
         if self.fake_xinerama and self.libfakeXinerama_so:
             env["LD_PRELOAD"] = self.libfakeXinerama_so
         return env
@@ -318,7 +276,7 @@ class X11ServerCore(GTKServerBase):
                     with xsync:
                         cleanup_all_event_receivers()
                         #all went well, we're done
-                        return
+                        break
                 except Exception as e:
                     l("failed to remove event receivers: %s", e)
         if self.fake_xinerama:
@@ -334,7 +292,7 @@ class X11ServerCore(GTKServerBase):
         return get_uuid()
 
     def save_uuid(self):
-        save_uuid(unicode(self.uuid))
+        save_uuid(str(self.uuid))
 
     def set_keyboard_repeat(self, key_repeat):
         if key_repeat:
@@ -352,7 +310,7 @@ class X11ServerCore(GTKServerBase):
             keylog("keyboard repeat disabled")
 
     def make_hello(self, source):
-        capabilities = GTKServerBase.make_hello(self, source)
+        capabilities = super().make_hello(source)
         capabilities["server_type"] = "Python/gtk/x11"
         if source.wants_features:
             capabilities.update({
@@ -371,11 +329,9 @@ class X11ServerCore(GTKServerBase):
                 capabilities["cursor.default"] = self.default_cursor_image
         return capabilities
 
-    def do_get_info(self, proto, server_sources):
+    def do_get_info(self, proto, server_sources) -> dict:
         start = monotonic_time()
-        info = GTKServerBase.do_get_info(self, proto, server_sources)
-        if self.opengl_props:
-            info["opengl"] = self.opengl_props
+        info = super().do_get_info(proto, server_sources)
         sinfo = info.setdefault("server", {})
         sinfo.update({
             "type"                  : "Python/gtk/x11",
@@ -385,15 +341,16 @@ class X11ServerCore(GTKServerBase):
         log("X11ServerBase.do_get_info took %ims", (monotonic_time()-start)*1000)
         return info
 
-    def get_ui_info(self, proto, wids=None, *args):
+    def get_ui_info(self, proto, wids=None, *args) -> dict:
         log("do_get_info thread=%s", threading.current_thread())
-        info = GTKServerBase.get_ui_info(self, proto, wids, *args)
+        info = super().get_ui_info(proto, wids, *args)
         #this is added here because the server keyboard config doesn't know about "keys_pressed"..
         if not self.readonly:
             with xlog:
                 info.setdefault("keyboard", {}).update({
                     "state"             : {
-                        "keys_pressed"   : tuple(self.keys_pressed.keys())
+                        "keys_pressed"  : tuple(self.keys_pressed.keys()),
+                        "keycodes-down" : X11Keyboard.get_keycodes_down(),
                         },
                     "fast-switching"    : True,
                     "layout-group"      : X11Keyboard.get_layout_group(),
@@ -405,7 +362,6 @@ class X11ServerCore(GTKServerBase):
         except ImportError:
             pass
         #cursor:
-        log("do_get_info: adding cursor=%s", self.last_cursor_image)
         info.setdefault("cursor", {}).update(self.get_cursor_info())
         with xswallow:
             sinfo.update({
@@ -413,18 +369,19 @@ class X11ServerCore(GTKServerBase):
                 "XTest"                 : X11Keyboard.hasXTest(),
                 })
         #randr:
-        with xlog:
-            sizes = RandR.get_xrr_screen_sizes()
-            if self.randr and len(sizes)>=0:
-                sinfo["randr"] = {
-                    ""          : True,
-                    "options"   : tuple(reversed(sorted(sizes))),
-                    "exact"     : self.randr_exact_size,
-                    }
+        if self.randr:
+            with xlog:
+                sizes = RandR.get_xrr_screen_sizes()
+                if len(sizes)>=0:
+                    sinfo["randr"] = {
+                        ""          : True,
+                        "options"   : tuple(reversed(sorted(sizes))),
+                        "exact"     : self.randr_exact_size,
+                        }
         return info
 
 
-    def get_cursor_info(self):
+    def get_cursor_info(self) -> dict:
         #(NOT from UI thread)
         #copy to prevent race:
         cd = self.last_cursor_image
@@ -441,8 +398,8 @@ class X11ServerCore(GTKServerBase):
                 cinfo[x] = v
         return cinfo
 
-    def get_window_info(self, window):
-        info = super(X11ServerCore, self).get_window_info(window)
+    def get_window_info(self, window) -> dict:
+        info = super().get_window_info(window)
         info["XShm"] = window.uses_XShm()
         info["geometry"] = window.get_geometry()
         return info
@@ -495,16 +452,15 @@ class X11ServerCore(GTKServerBase):
             keylog("clearing keys pressed: %s", self.keys_pressed)
             with xsync:
                 for keycode in self.keys_pressed:
-                    X11Keyboard.xtest_fake_key(keycode, False)
+                    self.fake_key(keycode, False)
             self.keys_pressed = {}
         #this will take care of any remaining ones we are not aware of:
         #(there should not be any - but we want to be certain)
-        with xswallow:
-            X11Keyboard.unpress_all_keys()
+        clean_keyboard_state()
 
 
     def get_cursor_sizes(self):
-        display = display_get_default()
+        display = Gdk.Display.get_default()
         return display.get_default_cursor_size(), display.get_maximal_cursor_size()
 
     def get_cursor_image(self):
@@ -530,14 +486,16 @@ class X11ServerCore(GTKServerBase):
 
     def get_max_screen_size(self):
         max_w, max_h = self.root_window.get_geometry()[2:4]
-        sizes = RandR.get_xrr_screen_sizes()
-        if self.randr and len(sizes)>=1:
-            for w,h in sizes:
-                max_w = max(max_w, w)
-                max_h = max(max_h, h)
-        if max_w>MAX_WINDOW_SIZE or max_h>MAX_WINDOW_SIZE:
-            screenlog.warn("maximum size is very large: %sx%s, you may encounter window sizing problems", max_w, max_h)
-        screenlog("get_max_screen_size()=%s", (max_w, max_h))
+        if self.randr:
+            sizes = RandR.get_xrr_screen_sizes()
+            if len(sizes)>=1:
+                for w,h in sizes:
+                    max_w = max(max_w, w)
+                    max_h = max(max_h, h)
+            if max_w>MAX_WINDOW_SIZE or max_h>MAX_WINDOW_SIZE:
+                screenlog.warn("Warning: maximum screen size is very large: %sx%s", max_w, max_h)
+                screenlog.warn(" you may encounter window sizing problems")
+            screenlog("get_max_screen_size()=%s", (max_w, max_h))
         return max_w, max_h
 
 
@@ -586,6 +544,8 @@ class X11ServerCore(GTKServerBase):
         return self.do_get_best_screen_size(desired_w, desired_h, bigger)
 
     def do_get_best_screen_size(self, desired_w, desired_h, bigger=True):
+        if not self.randr:
+            return desired_w, desired_h
         screen_sizes = RandR.get_xrr_screen_sizes()
         if (desired_w, desired_h) in screen_sizes:
             return desired_w, desired_h
@@ -798,6 +758,9 @@ class X11ServerCore(GTKServerBase):
 
     def fake_key(self, keycode, press):
         keylog("fake_key(%s, %s)", keycode, press)
+        mink, maxk = X11Keyboard.get_minmax_keycodes()
+        if keycode<mink or keycode>maxk:
+            return
         with xsync:
             X11Keyboard.xtest_fake_key(keycode, press)
 
@@ -810,8 +773,10 @@ class X11ServerCore(GTKServerBase):
             return
         cursorlog("cursor_event: %s", event)
         self.last_cursor_serial = event.cursor_serial
+        from xpra.server.source.windows_mixin import WindowsMixin
         for ss in self._server_sources.values():
-            ss.send_cursor()
+            if isinstance(ss, WindowsMixin):
+                ss.send_cursor()
 
 
     def _motion_signaled(self, model, event):
@@ -841,7 +806,7 @@ class X11ServerCore(GTKServerBase):
 
 
     def _bell_signaled(self, wm, event):
-        log("bell signaled on window %#x", get_xwindow(event.window))
+        log("bell signaled on window %#x", event.window.get_xid())
         if not self.bell:
             return
         wid = 0
@@ -851,16 +816,18 @@ class X11ServerCore(GTKServerBase):
             except KeyError:
                 pass
         log("_bell_signaled(%s,%r) wid=%s", wm, event, wid)
+        from xpra.server.source.windows_mixin import WindowsMixin
         for ss in self._server_sources.values():
-            name = strtobytes(event.bell_name or "")
-            ss.bell(wid, event.device, event.percent, event.pitch, event.duration, event.bell_class, event.bell_id, name)
+            if isinstance(ss, WindowsMixin):
+                name = strtobytes(event.bell_name or "")
+                ss.bell(wid, event.device, event.percent, event.pitch, event.duration, event.bell_class, event.bell_id, name)
 
 
     def get_screen_number(self, _wid):
         #maybe this should be in all cases (it is in desktop_server):
         #model = self._id_to_window.get(wid)
         #return model.client_window.get_screen().get_number()
-        #return display_get_default().get_default_screen().get_number()
+        #return Gdk.Display.get_default().get_default_screen().get_number()
         #-1 uses the current screen
         return -1
 
@@ -994,6 +961,7 @@ class X11ServerCore(GTKServerBase):
         device = self.get_pointer_device(deviceid)
         assert device, "pointer device %s not found" % deviceid
         try:
+            log("%s%s", device.click, (button, pressed, args))
             with xsync:
                 device.click(button, pressed, *args)
         except XError:

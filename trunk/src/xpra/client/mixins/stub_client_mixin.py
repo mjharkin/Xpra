@@ -9,106 +9,102 @@ import time
 from xpra.util import typedict
 
 
-class StubClientMixin(object):
+class StubClientMixin:
 
     __signals__ = {}
     def __init__(self):
         self.exit_code = None
         self.start_time = int(time.time())
-        self.server_capabilities = typedict()
 
-    """
-    Initialize this instance with the options given.
-    Options are usually obtained by parsing the command line,
-    or using a default configuration object.
-    """
     def init(self, _opts, _extra_args=()):
-        pass
+        """
+        Initialize this instance with the options given.
+        Options are usually obtained by parsing the command line,
+        or using a default configuration object.
+        """
 
-    """
-    Dummy method, actual client implementations will run the main loop.
-    """
     def run(self):
-        pass
+        """
+        run the main loop.
+        """
 
-    """
-    Terminate the client with the given exit code.
-    (the exit code is ignored if we already have one)
-    """
-    def quit(self, exit_code):
+    def quit(self, exit_code):  # pragma: no cover
+        """
+        Terminate the client with the given exit code.
+        (the exit code is ignored if we already have one)
+        """
         self.exit_code = exit_code
         sys.exit(exit_code)
 
-    """
-    Free up any resources.
-    """
     def cleanup(self):
-        pass
+        """
+        Free up any resources.
+        """
 
-    """
-    Send a packet to the server, dummy implementation.
-    """
     def send(self, *_args, **_kwargs):
-        pass
+        """
+        Send a packet to the server, dummy implementation.
+        """
 
-    """
-    Send a packet to the server,
-    this takes precedence over packets sent via send().
-    """
     def send_now(self, *parts):
-        pass
+        """
+        Send a packet to the server,
+        this takes precedence over packets sent via send().
+        """
 
-    """
-    Emit a signal, dummy implementation overriden by gobject.
-    """
     def emit(self, *_args, **_kwargs):
-        pass
+        """
+        Emit a signal, dummy implementation overriden by gobject.
+        """
 
-    """
-    Prepare to run using this connection to the server.
-    """
     def setup_connection(self, _conn):
-        pass
+        """
+        Prepare to run using this connection to the server.
+        """
 
-    """
-    Return the capabilities provided by this mixin.
-    """
-    def get_caps(self):
+    def get_caps(self) -> dict:
+        """
+        Return the capabilities provided by this mixin.
+        """
         return {}
 
-    """
-    Parse server attributes specified in the hello capabilities.
-    This runs in a non-UI thread.
-    """
-    def parse_server_capabilities(self):
+    def get_info(self) -> dict:
+        """
+        Information contained in this mixin
+        """
+        return {}
+
+    def parse_server_capabilities(self, c : typedict) -> bool:
+        """
+        Parse server attributes specified in the hello capabilities.
+        This runs in a non-UI thread.
+        """
         return True
 
-    """
-    Parse server attributes specified in the hello capabilities.
-    This runs in the UI thread.
-    """
-    def process_ui_capabilities(self):
-        pass
+    def process_ui_capabilities(self, caps : typedict):
+        """
+        Parse server attributes specified in the hello capabilities.
+        This runs in the UI thread.
+        """
 
-    """
-    Dummy utility method for compressing data.
-    Actual client implementations will provide compression
-    based on the client and server capabilities (lz4, lzo, zlib).
-    """
     def compressed_wrapper(self, datatype, data, level=5):
+        """
+        Dummy utility method for compressing data.
+        Actual client implementations will provide compression
+        based on the client and server capabilities (lz4, lzo, zlib).
+        """
         #sub-classes should override this
         assert level>=0
         from xpra.net.compression import Compressed
         return Compressed("raw %s" % datatype, data, can_inline=True)
 
-    """
-    Register the packet types that this mixin can handle.
-    """
     def init_authenticated_packet_handlers(self):
-        pass
+        """
+        Register the packet types that this mixin can handle.
+        """
 
-    def add_packet_handler(self, packet_type, handler, main_thread=True):
+    def add_packet_handler(self, packet_type : str, handler : callable, main_thread=True):  # pragma: no cover
         raise NotImplementedError()
 
-    def add_packet_handlers(self, defs, main_thread=True):
+    def add_packet_handlers(self, defs, main_thread=True):  # pragma: no cover
         raise NotImplementedError()

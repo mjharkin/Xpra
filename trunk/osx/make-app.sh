@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PYTHON="${PYTHON:=python}"
+PYTHON="python3"
 PYTHON_MAJOR_VERSION=`$PYTHON -c 'import sys;sys.stdout.write("%s" % sys.version_info[0])'`
 PYTHON_MINOR_VERSION=`$PYTHON -c 'import sys;sys.stdout.write("%s" % sys.version_info[1])'`
 
@@ -32,8 +32,8 @@ LIBDIR="${RSCDIR}/lib"
 
 echo "*******************************************************************************"
 echo "Deleting existing xpra modules and temporary directories"
-PYTHON_PREFIX=`python${PYTHON_MAJOR_VERSION}-config --prefix`
-PYTHON_PACKAGES=`ls -d ${PYTHON_PREFIX}/lib/python${PYTHON_MAJOR_VERSION}*/site-packages | sort | tail -n 1`
+PYTHON_PREFIX=`python3-config --prefix`
+PYTHON_PACKAGES=`ls -d ${PYTHON_PREFIX}/lib/python3*/site-packages | sort | tail -n 1`
 rm -fr "${PYTHON_PACKAGES}/xpra"*
 rm -fr image/* dist
 ln -sf ../src/dist ./dist
@@ -70,7 +70,7 @@ if [ "${DO_TESTS}" == "1" ]; then
 	pushd ./unittests
 	rm -fr ./tmpdir
 	mkdir ./tmpdir
-	#make sure the unit tests can run "python2 xpra ...":
+	#make sure the unit tests can run "python3 xpra ...":
 	rm -f ./xpra >& /dev/null
 	ln -sf ../scripts/xpra .
 	UNITTEST_LOG=`pwd`/unittest.log
@@ -103,7 +103,12 @@ if [ "$?" != "0" ]; then
 	exit 1
 fi
 echo "py2app forgets AVFoundation, do it by hand:"
-rsync -rplogt ${JHBUILD_PREFIX}/lib/python${PYTHON_MAJOR_VERSION}.${PYTHON_MINOR_VERSION}/site-packages/AVFoundation ./dist/xpra.app/Contents/Resources/lib/python${PYTHON_MAJOR_VERSION}.${PYTHON_MINOR_VERSION}/
+rsync -rplogt ${JHBUILD_PREFIX}/lib/python3.${PYTHON_MINOR_VERSION}/site-packages/AVFoundation ./dist/xpra.app/Contents/Resources/lib/python3.${PYTHON_MINOR_VERSION}/
+echo "fixup pkg_resources.py2_warn and gi: force include the whole packages"
+for m in pkg_resources gi; do
+	mpath=`python3 -c "import os;import $m;print(os.path.dirname($m.__file__))"`
+	cp -r $mpath ./dist/xpra.app/Contents/Resources/lib/python3.${PYTHON_MINOR_VERSION}/
+done
 echo "OK"
 popd
 
@@ -123,7 +128,7 @@ fi
 echo
 echo "*******************************************************************************"
 echo "adding version \"$VERSION\" and revision \"$REVISION$REV_MOD\" to Info.plist files"
-svn revert Info.plist Xpra.bundle
+svn revert Info.plist
 sed -i '' -e "s+%VERSION%+$VERSION+g" "./Info.plist"
 sed -i '' -e "s+%REVISION%+$REVISION$REV_MOD+g" "./Info.plist"
 sed -i '' -e "s+%BUILDNO%+$BUILDNO+g" "./Info.plist"
@@ -135,12 +140,8 @@ fi
 echo
 echo "*******************************************************************************"
 echo "calling 'gtk-mac-bundler Xpra.bundle' in `pwd`"
-if [ "${PYTHON_MAJOR_VERSION}" == "3" ]; then
-	sed -i '' -e "s+gtk2+gtk3+g" "./Xpra.bundle"
-	sed -i '' -e "s+pygtk/2.0+cairo+g" Xpra.bundle
-fi
 #we have to make sure we use python2 here (not ported yet):
-python2 ~/.local/bin/gtk-mac-bundler Xpra.bundle
+PYTHON=${PYTHON} python2 ~/.local/bin/gtk-mac-bundler Xpra.bundle
 if [ "$?" != "0" ]; then
 	echo "ERROR: gtk-mac-bundler failed"
 	exit 1
@@ -150,7 +151,7 @@ echo
 echo "*******************************************************************************"
 echo "make python softlink without version number"
 pushd ${LIBDIR} || exit 1
-ln -sf python${PYTHON_MAJOR_VERSION}.${PYTHON_MINOR_VERSION} python
+ln -sf python3.${PYTHON_MINOR_VERSION} python
 cd python
 rmdir config
 if [ "${ZIP_MODULES}" != "1" ]; then
@@ -159,7 +160,7 @@ if [ "${ZIP_MODULES}" != "1" ]; then
 		unzip -nq site-packages.zip
 		rm site-packages.zip
 	else
-		unzip -nq ../python${PYTHON_MAJOR_VERSION}${PYTHON_MINOR_VERSION}.zip
+		unzip -nq ../python3${PYTHON_MINOR_VERSION}.zip
 	fi
 fi
 popd
@@ -247,16 +248,6 @@ echo "Hacks"
 echo " * macos notifications API look for Info.plist in the wrong place"
 cp ${CONTENTS_DIR}/Info.plist ${RSCDIR}/bin/
 #no idea why I have to do this by hand
-echo " * add pygtk bits, gtk .so"
-if [ "${PYTHON_MAJOR_VERSION}" == "2" ]; then
-	rsync -rpl $PYTHON_PACKAGES/gtk-2.0/* $LIBDIR/
-	#add pygtk .py
-	PYGTK_LIBDIR="$LIBDIR/pygtk/2.0"
-	mkdir -p $PYGTK_LIBDIR
-	rsync -rpl $JHBUILD_PREFIX/lib/pygtk/2.0/* $PYGTK_LIBDIR/
-	rsync -rpl $PYTHON_PACKAGES/pygtk* $PYGTK_LIBDIR/
-	rsync -rpl $PYTHON_PACKAGES/cairo $PYGTK_LIBDIR/
-fi
 echo " * add all OpenGL"
 rsync -rpl $PYTHON_PACKAGES/OpenGL* $LIBDIR/python/
 if [ "$STRIP_OPENGL" == "1" ]; then
@@ -276,14 +267,13 @@ fi
 echo " * add gobject-introspection (py2app refuses to do it)"
 rsync -rpl $PYTHON_PACKAGES/gi $LIBDIR/python/
 mkdir $LIBDIR/girepository-1.0
-GI_MODULES="Gst GObject GLib GModule"
-if [ "${PYTHON_MAJOR_VERSION}" == "3" ]; then
-	#GI_MODULES="${GI_MODULES} Gtk Gdk GtkosxApplication"
-	GI_MODULES="${GI_MODULES} Gtk Gdk GtkosxApplication GL Gio Pango cairo Atk"
-fi
+GI_MODULES="Gst GObject GLib GModule Gtk Gdk GtkosxApplication GL Gio Pango cairo Atk"
 for t in ${GI_MODULES}; do
 	rsync -rpl ${JHBUILD_PREFIX}/lib/girepository-1.0/$t*typelib $LIBDIR/girepository-1.0/
 done
+echo " * add Adwaita theme"
+#gtk-mac-bundler doesn't do it properly, so do it ourselves:
+rsync -rpl ${JHBUILD_PREFIX}/share/icons/Adwaita ${RSCDIR}/share/icons/
 if [ "$STRIP_NUMPY" == "1" ]; then
 	echo " * trim numpy"
 	pushd $LIBDIR/python/numpy
@@ -293,6 +283,8 @@ if [ "$STRIP_NUMPY" == "1" ]; then
 	done
 	popd
 fi
+echo " * move GTK css"
+mv ${RSCDIR}/share/xpra/css ${RSCDIR}/
 #unused py2app scripts:
 rm ${RSCDIR}/__boot__.py ${RSCDIR}/__error__.sh ${RSCDIR}/client_launcher.py
 
@@ -399,4 +391,4 @@ echo "Done"
 echo "*******************************************************************************"
 echo
 
-svn revert Info.plist Xpra.bundle
+svn revert Info.plist

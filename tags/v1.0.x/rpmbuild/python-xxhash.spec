@@ -8,7 +8,7 @@
 
 #this spec file is for both Fedora and CentOS
 #only Fedora has Python3 at present:
-%if 0%{?fedora}
+%if 0%{?fedora}%{?el8}
 %define with_python3 1
 %endif
 
@@ -19,16 +19,21 @@
 
 
 Name:           python2-xxhash
-Version:        1.4.0
+Version:        1.4.3
 Release:        1%{?dist}
 URL:            https://github.com/ifduyue/python-xxhash
 Summary:        xxhash Bindings for Python
 License:        BSD
 Group:          Development/Languages/Python
-Source:         https://codeload.github.com/ifduyue/python-xxhash/tar.gz/v%{version}
+Source:         https://files.pythonhosted.org/packages/df/02/89b90fd83d5e882697d26b07c0cebc14caa4953d1aeeaee07f777fd33799/xxhash-%{version}.tar.gz
 BuildRoot:      %{_tmppath}/%{name}-%{version}-build
+%if 0%{?fedora}%{?el8}
+BuildRequires:  python2-devel
+BuildRequires:  python2-setuptools
+%else
 BuildRequires:  python-devel
 BuildRequires:  python-setuptools
+%endif
 Provides:		python-xxhash
 
 %description
@@ -46,7 +51,7 @@ https://github.com/Cyan4973/xxHash by Yann Collet.
 %endif
 
 %prep
-%setup -q -n python-xxhash-%{version}
+%setup -q -n xxhash-%{version}
 %if 0%{?with_python3}
 rm -rf %{py3dir}
 cp -a . %{py3dir}
@@ -84,6 +89,15 @@ rm -rf %{buildroot}
 %endif
 
 %changelog
+* Tue Nov 12 2019 Antoine Martin <antoine@nagafix.co.uk> - 1.4.3-1
+- new upstream release
+
+* Sun Oct 13 2019 Antoine Martin <antoine@nagafix.co.uk> - 1.4.2-1
+- new upstream release
+
+* Fri Oct 11 2019 Antoine Martin <antoine@nagafix.co.uk> - 1.4.1-1
+- new upstream release
+
 * Sun Aug 05 2018 Antoine Martin <antoine@nagafix.co.uk> - 1.2.0-1
 - new upstream release
 

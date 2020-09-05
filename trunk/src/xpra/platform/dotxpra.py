@@ -14,18 +14,25 @@ from xpra.os_util import get_util_logger, osexpand, umask_context
 from xpra.platform.dotxpra_common import PREFIX, LIVE, DEAD, UNKNOWN, INACCESSIBLE
 from xpra.platform import platform_import
 
+DISPLAY_PREFIX = ":"
+
 
 def norm_makepath(dirpath, name):
-    if name[0]==":":
-        name = name[1:]
+    if DISPLAY_PREFIX and name.startswith(DISPLAY_PREFIX):
+        name = name[len(DISPLAY_PREFIX):]
     return os.path.join(dirpath, PREFIX + name)
+
+def strip_display_prefix(s):
+    if s.startswith(DISPLAY_PREFIX):
+        return s[len(DISPLAY_PREFIX):]
+    return s
 
 def debug(msg, *args, **kwargs):
     log = get_util_logger()
     log(msg, *args, **kwargs)
 
 
-class DotXpra(object):
+class DotXpra:
     def __init__(self, sockdir=None, sockdirs=None, actual_username="", uid=0, gid=0):
         self.uid = uid or os.getuid()
         self.gid = gid or os.getgid()
@@ -74,22 +81,27 @@ class DotXpra(object):
 
     def get_server_state(self, sockpath, timeout=5):
         if not os.path.exists(sockpath):
-            return self.DEAD
+            return DotXpra.DEAD
         sock = socket.socket(socket.AF_UNIX)
         sock.settimeout(timeout)
         try:
             sock.connect(sockpath)
-            return self.LIVE
+            return DotXpra.LIVE
         except socket.error as e:
-            debug("get_server_state: connect(%s)=%s", sockpath, e)
+            debug("get_server_state: connect(%s)=%s (timeout=%s)", sockpath, e, timeout)
             err = e.args[0]
             if err==errno.EACCES:
-                return self.INACCESSIBLE
+                return DotXpra.INACCESSIBLE
             if err==errno.ECONNREFUSED:
                 #could be the server is starting up
-                return self.UNKNOWN
-            if err in (errno.EWOULDBLOCK, errno.ENOENT):
-                return self.DEAD
+                debug("ECONNREFUSED")
+                return DotXpra.UNKNOWN
+            if err==errno.EWOULDBLOCK:
+                debug("EWOULDBLOCK")
+                return DotXpra.DEAD
+            if err==errno.ENOENT:
+                debug("ENOENT")
+                return DotXpra.DEAD
             return self.UNKNOWN
         finally:
             try:
@@ -104,7 +116,8 @@ class DotXpra(object):
     #this is imported by winswitch, so we can't change the method signature
     def sockets(self, check_uid=0, matching_state=None):
         #flatten the dictionnary into a list:
-        return list(set((v[0], v[1]) for details_values in self.socket_details(check_uid, matching_state).values() for v in details_values))
+        return list(set((v[0], v[1]) for details_values in
+                        self.socket_details(check_uid, matching_state).values() for v in details_values))
 
     def socket_paths(self, check_uid=0, matching_state=None, matching_display=None):
         paths = []
@@ -132,7 +145,7 @@ class DotXpra(object):
             seen.add(real_dir)
             #ie: "~/.xpra/HOSTNAME-"
             base = os.path.join(d, PREFIX)
-            potential_sockets = glob.glob(base + display.lstrip(":"))
+            potential_sockets = glob.glob(base + strip_display_prefix(display))
             for sockpath in sorted(potential_sockets):
                 try:
                     s = os.stat(sockpath)
@@ -141,7 +154,7 @@ class DotXpra(object):
                     #socket cannot be accessed
                     continue
                 if stat.S_ISSOCK(s.st_mode):
-                    local_display = ":"+sockpath[len(base):]
+                    local_display = DISPLAY_PREFIX+sockpath[len(base):]
                     if local_display!=display:
                         debug("get_display_state: '%s' display does not match (%s vs %s)",
                               sockpath, local_display, display)
@@ -154,8 +167,7 @@ class DotXpra(object):
     #find the matching sockets, and return:
     #(state, local_display, sockpath) for each socket directory we probe
     def socket_details(self, check_uid=0, matching_state=None, matching_display=None):
-        import collections
-        sd = collections.OrderedDict()
+        sd = {}
         dirs = []
         if self._sockdir!="undefined":
             dirs.append(self._sockdir)
@@ -174,9 +186,10 @@ class DotXpra(object):
             #ie: "~/.xpra/HOSTNAME-"
             base = os.path.join(d, PREFIX)
             if matching_display:
-                potential_sockets = glob.glob(base + matching_display.lstrip(":"))
+                dstr = strip_display_prefix(matching_display)
             else:
-                potential_sockets = glob.glob(base + "*")
+                dstr = "*"
+            potential_sockets = glob.glob(base + dstr)
             results = []
             for sockpath in sorted(potential_sockets):
                 try:
@@ -195,7 +208,7 @@ class DotXpra(object):
                     if matching_state and state!=matching_state:
                         debug("socket_details: '%s' state does not match (%s vs %s)", sockpath, state, matching_state)
                         continue
-                    local_display = ":"+sockpath[len(base):]
+                    local_display = DISPLAY_PREFIX+sockpath[len(base):]
                     results.append((state, local_display, sockpath))
             if results:
                 sd[d] = results
@@ -205,4 +218,5 @@ class DotXpra(object):
 #win32 re-defines DotXpra for namedpipes:
 platform_import(globals(), "dotxpra", False,
                 "DotXpra",
+                "DISPLAY_PREFIX",
                 "norm_makepath")

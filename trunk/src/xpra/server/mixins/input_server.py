@@ -57,7 +57,6 @@ class InputServer(StubServerMixin):
 
     def get_server_features(self, _source=None):
         return {
-            "toggle_keyboard_sync"  : True,
             "input-devices"         : self.input_devices,
             "pointer.relative"      : True,
             }
@@ -87,14 +86,14 @@ class InputServer(StubServerMixin):
             self.key_repeat = c.intpair("key_repeat", (0, 0))
             self.set_keyboard_repeat(self.key_repeat)
             #always clear modifiers before setting a new keymap
-            ss.make_keymask_match(c.strlistget("modifiers", []))
+            ss.make_keymask_match(c.strtupleget("modifiers"))
         else:
             self.set_keyboard_repeat(None)
             self.key_repeat = (0, 0)
         self.key_repeat_delay, self.key_repeat_interval = self.key_repeat
         self.set_keymap(ss)
 
-    def get_keyboard_info(self):
+    def get_keyboard_info(self) -> dict:
         start = monotonic_time()
         info = {
              "repeat"           : {
@@ -154,11 +153,12 @@ class InputServer(StubServerMixin):
         if ss is None:
             return
         keyname = bytestostr(keyname)
-        modifiers = tuple(bytestostr(x) for x in modifiers)
+        modifiers = list(bytestostr(x) for x in modifiers)
         self.set_ui_driver(ss)
-        self.set_keyboard_layout_group(group)
-        keycode = self.get_keycode(ss, client_keycode, keyname, pressed, modifiers)
-        keylog("process_key_action(%s) server keycode=%s", packet, keycode)
+        keycode, group = self.get_keycode(ss, client_keycode, keyname, pressed, modifiers, keyval, group)
+        keylog("process_key_action(%s) server keycode=%s, group=%i", packet, keycode, group)
+        if group>=0:
+            self.set_keyboard_layout_group(group)
         #currently unused: (group, is_modifier) = packet[8:10]
         self._focus(ss, wid, None)
         ss.make_keymask_match(modifiers, keycode, ignored_modifier_keynames=[keyname])
@@ -175,8 +175,8 @@ class InputServer(StubServerMixin):
                 keylog.error(" for keyname=%s, keyval=%i, keycode=%i", keyname, keyval, keycode)
         ss.user_event()
 
-    def get_keycode(self, ss, client_keycode, keyname, pressed, modifiers):
-        return ss.get_keycode(client_keycode, keyname, pressed, modifiers)
+    def get_keycode(self, ss, client_keycode, keyname, pressed, modifiers, keyval, group):
+        return ss.get_keycode(client_keycode, keyname, pressed, modifiers, keyval, group)
 
     def fake_key(self, keycode, press):
         pass
@@ -234,7 +234,7 @@ class InputServer(StubServerMixin):
             delay_ms = min(1500, max(250, delay_ms))
             keylog("scheduling key repeat timer with delay %s for %s / %s", delay_ms, keyname, keycode)
             now = monotonic_time()
-            self.key_repeat_timer = self.timeout_add(0, self._key_repeat_timeout, now, delay_ms, wid, keyname, keyval, keycode, modifiers, is_mod)
+            self.key_repeat_timer = self.timeout_add(delay_ms, self._key_repeat_timeout, now, delay_ms, wid, keyname, keyval, keycode, modifiers, is_mod)
 
     def _key_repeat_timeout(self, when, delay_ms, wid, keyname, keyval, keycode, modifiers, is_mod):
         self.key_repeat_timer = None
@@ -247,13 +247,18 @@ class InputServer(StubServerMixin):
     def _process_key_repeat(self, proto, packet):
         if self.readonly:
             return
-        wid, keyname, keyval, client_keycode, modifiers = packet[1:6]
         ss = self.get_server_source(proto)
         if ss is None:
             return
+        wid, keyname, keyval, client_keycode, modifiers = packet[1:6]
         keyname = bytestostr(keyname)
         modifiers = tuple(bytestostr(x) for x in modifiers)
-        keycode = ss.get_keycode(client_keycode, keyname, modifiers)
+        group = 0
+        if len(packet)>=7:
+            group = packet[6]
+        keycode, group = ss.get_keycode(client_keycode, keyname, modifiers, keyval, group)
+        if group>=0:
+            self.set_keyboard_layout_group(group)
         #key repeat uses modifiers from a pointer event, so ignore mod_pointermissing:
         ss.make_keymask_match(modifiers)
         if not ss.keyboard_config.sync:
@@ -276,7 +281,6 @@ class InputServer(StubServerMixin):
         ss.user_event()
 
     def _process_keyboard_sync_enabled_status(self, proto, packet):
-        assert proto in self._server_sources
         if self.readonly:
             return
         ss = self.get_server_source(proto)
@@ -288,7 +292,8 @@ class InputServer(StubServerMixin):
     def _keys_changed(self, *_args):
         if not self.keymap_changing:
             for ss in self._server_sources.values():
-                ss.keys_changed()
+                if hasattr(ss, "keys_changed"):
+                    ss.keys_changed()
 
     def clear_keys_pressed(self):
         pass
@@ -394,12 +399,12 @@ class InputServer(StubServerMixin):
         pass
 
 
+    #FIXME: we should not be overriding this method here
     def send_hello(self, server_source, _root_w, _root_h, key_repeat, _server_cipher):
         capabilities = self.make_hello(server_source)
         if key_repeat:
             capabilities.update({
                 "key_repeat"           : key_repeat,
-                "key_repeat_modifiers" : True,
                 })
 
 

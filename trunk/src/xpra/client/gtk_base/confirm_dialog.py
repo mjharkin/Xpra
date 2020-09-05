@@ -1,145 +1,78 @@
 #!/usr/bin/env python
 # This file is part of Xpra.
-# Copyright (C) 2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2018-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-
-import os.path
 import sys
 
-from xpra.gtk_common.gobject_compat import (
-    import_gtk, import_pango, import_glib,
-    register_os_signals,
-    )
-from xpra.gtk_common.gtk_util import (
-    gtk_main, add_close_accel, scaled_image, pixbuf_new_from_file,
-    window_defaults, color_parse, is_gtk3,
-    WIN_POS_CENTER, WINDOW_POPUP, STATE_NORMAL,
-    )
-from xpra.platform.paths import get_icon_dir
+import gi
+gi.require_version("Gtk", "3.0")
+gi.require_version("Pango", "1.0")
+gi.require_version("GdkPixbuf", "2.0")
+from gi.repository import Pango, Gtk
+
+from xpra.gtk_common.gobject_compat import register_os_signals
+from xpra.gtk_common.gtk_util import add_close_accel, color_parse, get_icon_pixbuf
+from xpra.platform.gui import force_focus
 from xpra.os_util import get_util_logger
 
 log = get_util_logger()
 
-gtk = import_gtk()
-glib = import_glib()
-pango = import_pango()
 
-
-class ConfirmDialogWindow(object):
+class ConfirmDialogWindow(Gtk.Dialog):
 
     def __init__(self, title="Title", prompt="", info=(), icon="", buttons=()):
-        if is_gtk3():
-            self.window = gtk.Window(type=WINDOW_POPUP)
-        else:
-            self.window = gtk.Window(WINDOW_POPUP)
-        window_defaults(self.window)
-        self.window.set_position(WIN_POS_CENTER)
-        self.window.connect("destroy", self.quit)
-        self.window.set_default_size(400, 150)
-        self.window.set_title(title)
-        #self.window.set_modal(True)
+        log("ConfirmDialogWindow%s", (title, prompt, info, icon, buttons))
+        super().__init__()
+        self.set_border_width(20)
+        self.set_position(Gtk.WindowPosition.CENTER)
+        self.connect("delete-event", self.quit)
+        self.set_default_size(400, 150)
+        self.set_title(title)
+        add_close_accel(self, self.quit)
 
-        if icon:
-            icon_pixbuf = self.get_icon(icon)
-            if icon_pixbuf:
-                self.window.set_icon(icon_pixbuf)
+        icon_pixbuf = get_icon_pixbuf(icon)
+        if icon_pixbuf:
+            self.set_icon(icon_pixbuf)
 
-        vbox = gtk.VBox(False, 0)
+        vbox = self.get_content_area()
         vbox.set_spacing(10)
 
         def al(label, font="sans 14", xalign=0):
-            l = gtk.Label(label)
-            l.modify_font(pango.FontDescription(font))
+            l = Gtk.Label(label=label)
+            l.modify_font(Pango.FontDescription(font))
             if label.startswith("WARNING"):
                 red = color_parse("red")
-                l.modify_fg(STATE_NORMAL, red)
-            al = gtk.Alignment(xalign=xalign, yalign=0.5, xscale=0.0, yscale=0)
+                l.modify_fg(Gtk.StateType.NORMAL, red)
+            al = Gtk.Alignment(xalign=xalign, yalign=0.5, xscale=0.0, yscale=0)
             al.add(l)
-            vbox.add(al)
-
-        al(title, "sans 18", 0.5)
-        al(info, "sans 14")
-        al(prompt, "sans 14")
+            al.show_all()
+            return al
+        vbox.add(al(title, "sans 18", 0.5))
+        info_box = Gtk.VBox()
+        for i in info:
+            info_box.add(al(i, "sans 14"))
+        info_box.show_all()
+        vbox.add(info_box)
+        vbox.add(al(prompt, "sans 14"))
 
         # Buttons:
-        self.exit_code = 0
-        if buttons:
-            hbox = gtk.HBox(False, 0)
-            al = gtk.Alignment(xalign=1, yalign=0.5, xscale=0, yscale=0)
-            al.add(hbox)
-            vbox.pack_start(al)
-            for label, code in buttons:
-                b = self.btn(label,  "", code)
-                hbox.pack_start(b)
-
-        add_close_accel(self.window, self.quit)
-        vbox.show_all()
-        self.window.add(vbox)
-
-    def btn(self, label, tooltip, code, icon_name=None):
-        btn = gtk.Button(label)
-        settings = btn.get_settings()
-        settings.set_property('gtk-button-images', True)
-        if tooltip:
-            btn.set_tooltip_text(tooltip)
-        def btn_clicked(*_args):
-            log("%s button clicked, returning %s", label, code)
-            self.exit_code = code
-            self.quit()
-        btn.set_size_request(100, 48)
-        btn.connect("clicked", btn_clicked)
-        btn.set_can_focus(True)
-        isdefault = label[:1].upper()!=label[:1]
-        btn.set_can_default(isdefault)
-        if isdefault:
-            self.window.set_default(btn)
-            self.window.set_focus(btn)
-        if icon_name:
-            icon = self.get_icon(icon_name)
-            if icon:
-                btn.set_image(scaled_image(icon, 24))
-        return btn
-
-
-    def show(self):
-        log("show()")
-        self.window.show_all()
-        glib.idle_add(self.window.present)
-
-    def destroy(self, *args):
-        log("destroy%s", args)
-        if self.window:
-            self.window.destroy()
-            self.window = None
-
-    def run(self):
-        log("run()")
-        gtk_main()
-        log("run() gtk_main done")
-        return self.exit_code
+        for label, code in buttons:
+            btn = self.add_button(label, code)
+            btn.set_size_request(100, 48)
 
     def quit(self, *args):
         log("quit%s", args)
         self.destroy()
-        gtk.main_quit()
-
-
-    def get_icon(self, icon_name):
-        icon_filename = os.path.join(get_icon_dir(), icon_name)
-        if os.path.exists(icon_filename):
-            return pixbuf_new_from_file(icon_filename)
-        return None
+        return True
 
 
 def show_confirm_dialog(argv):
-    from xpra.platform.gui import ready as gui_ready
-    from xpra.gtk_common.quit import gtk_main_quit_on_fatal_exceptions_enable
-    from xpra.platform.gui import init as gui_init
+    from xpra.platform.gui import ready as gui_ready, init as gui_init, set_default_icon
 
+    set_default_icon("information.png")
     gui_init()
-    gtk_main_quit_on_fatal_exceptions_enable()
 
     log("show_confirm_dialog(%s)", argv)
     def arg(n):
@@ -162,9 +95,11 @@ def show_confirm_dialog(argv):
         buttons.append((label, code))
         n += 2
     app = ConfirmDialogWindow(title, prompt, info, icon, buttons)
-    register_os_signals(app.quit)
+    register_os_signals(app.quit, "Dialog")
     gui_ready()
-    app.show()
+    force_focus()
+    app.show_all()
+    app.present()
     return app.run()
 
 
@@ -172,7 +107,7 @@ def main():
     from xpra.platform import program_context
     with program_context("Confirm-Dialog", "Confirm Dialog"):
         #logging init:
-        if "-v" in sys.argv:
+        if "-v" in sys.argv or "--verbose" in sys.argv:
             from xpra.log import enable_debug_for
             enable_debug_for("util")
 

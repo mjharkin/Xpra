@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 #pylint: disable-msg=E1101
 
 import os.path
 
-from xpra.util import parse_scaling_value, from0to100
-from xpra.server.control_command import ArgsControlCommand, ControlError
+from xpra.util import parse_scaling_value, csv, from0to100
 from xpra.os_util import load_binary_file
-from xpra.util import csv
+from xpra.simple_stats import std_unit
 from xpra.scripts.config import parse_bool, FALSE_OPTIONS, TRUE_OPTIONS
+from xpra.server.control_command import ArgsControlCommand, ControlError
 from xpra.server.mixins.stub_server_mixin import StubServerMixin
 from xpra.log import Logger
 
@@ -89,6 +89,9 @@ class ServerBaseControlCommands(StubServerMixin):
             ArgsControlCommand("sound-output",          "control sound forwarding",         min_args=1, max_args=2),
             #windows:
             ArgsControlCommand("workspace",             "move a window to a different workspace", min_args=2, max_args=2, validation=[int, int]),
+            ArgsControlCommand("move",                  "move a window",                    min_args=3, max_args=3, validation=[int, int, int]),
+            ArgsControlCommand("resize",                "resize a window",                  min_args=3, max_args=3, validation=[int, int, int]),
+            ArgsControlCommand("moveresize",            "move and resize a window",         min_args=5, max_args=5, validation=[int, int, int, int, int]),
             ArgsControlCommand("scaling-control",       "set the scaling-control aggressiveness (from 0 to 100)", min_args=1, validation=[from0to100]),
             ArgsControlCommand("scaling",               "set a specific scaling value",     min_args=1, validation=[parse_scaling_value]),
             ArgsControlCommand("auto-refresh",          "set a specific auto-refresh value", min_args=1, validation=[float]),
@@ -101,7 +104,7 @@ class ServerBaseControlCommands(StubServerMixin):
             ArgsControlCommand("reset-video-region",    "reset video region heuristics",    min_args=1, max_args=1, validation=[int]),
             ArgsControlCommand("lock-batch-delay",      "set a specific batch delay for a window",       min_args=2, max_args=2, validation=[int, int]),
             ArgsControlCommand("unlock-batch-delay",    "let the heuristics calculate the batch delay again for a window (following a 'lock-batch-delay')",  min_args=1, max_args=1, validation=[int]),
-            ArgsControlCommand("remove-window-filters", "remove all window filters",        min_args=0, max_args=1),
+            ArgsControlCommand("remove-window-filters", "remove all window filters",        min_args=0, max_args=0),
             ArgsControlCommand("add-window-filter",     "add a window filter",              min_args=4, max_args=5),
             ):
             cmd.do_run = getattr(self, "control_command_%s" % cmd.name.replace("-", "_"))
@@ -259,6 +262,11 @@ class ServerBaseControlCommands(StubServerMixin):
         sources = self._control_get_sources(client_uuids)
         if not sources:
             raise ControlError("no clients found matching: %s" % client_uuids)
+        def checksize(file_size):
+            if file_size>self.file_transfer.file_size_limit:
+                raise ControlError("file '%s' is too large: %sB (limit is %sB)" % (
+                    filename, std_unit(file_size), std_unit(self.file_transfer.file_size_limit)))
+
         #find the file and load it:
         actual_filename = os.path.abspath(os.path.expanduser(filename))
         try:
@@ -266,30 +274,32 @@ class ServerBaseControlCommands(StubServerMixin):
             log("os.stat(%s)=%s", actual_filename, stat)
         except os.error:
             log("os.stat(%s)", actual_filename, exc_info=True)
+        else:
+            checksize(stat.st_size)
         if not os.path.exists(actual_filename):
             raise ControlError("file '%s' does not exist" % filename)
         data = load_binary_file(actual_filename)
+        if data is None:
+            raise ControlError("failed to load '%s'" % actual_filename)
         #verify size:
         file_size = len(data)
-        file_size_MB = file_size//1024//1024
-        if file_size_MB>self.file_transfer.file_size_limit:
-            raise ControlError("file '%s' is too large: %iMB (limit is %iMB)" % (
-                filename, file_size_MB, self.file_transfer.file_size_limit))
+        checksize(file_size)
         #send it to each client:
         for ss in sources:
             #ie: ServerSource.file_transfer (found in FileTransferAttributes)
             if not getattr(ss, source_flag_name):
                 log.warn("Warning: cannot %s '%s'", command_type, filename)
                 log.warn(" client %s does not support this feature", ss)
-            elif file_size_MB>ss.file_size_limit:
+            elif file_size>ss.file_size_limit:
                 log.warn("Warning: cannot %s '%s'", command_type, filename)
-                log.warn(" client %s file size limit is %iMB (file is %iMB)", ss, ss.file_size_limit, file_size_MB)
+                log.warn(" client %s file size limit is %sB (file is %sB)",
+                         ss, std_unit(ss.file_size_limit), std_unit(file_size))
             else:
                 ss.send_file(filename, "", data, file_size, *send_file_args)
         return "%s of '%s' to %s initiated" % (command_type, filename, client_uuids)
 
 
-    def control_command_remove_window_filters(self, client_uuids=""):
+    def control_command_remove_window_filters(self):
         #modify the existing list object,
         #which is referenced by all the sources
         l = len(self.window_filters)
@@ -343,7 +353,7 @@ class ServerBaseControlCommands(StubServerMixin):
 
     def control_command_client(self, *args):
         self.all_send_client_command(*args)
-        return "client control command '%s' forwarded to clients" % str(args)
+        return "client control command %s forwarded to clients" % str(args)
 
     def control_command_client_property(self, wid, uuid, prop, value, conv=None):
         wid = int(wid)
@@ -363,6 +373,7 @@ class ServerBaseControlCommands(StubServerMixin):
         log.info("changed session name: %s", self.session_name)
         #self.all_send_client_command("name", name)    not supported by any clients, don't bother!
         self.setting_changed("session_name", name)
+        self.mdns_update()
         return "session name set to %s" % name
 
     def _control_windowsources_from_args(self, *args):
@@ -555,7 +566,8 @@ class ServerBaseControlCommands(StubServerMixin):
             elif press in ("0", "unpress"):
                 press = False
             else:
-                raise ControlError("if present, the press argument must be one of: %s", ("1", "press", "0", "unpress"))
+                raise ControlError("if present, the press argument must be one of: %s" %
+                                   csv(("1", "press", "0", "unpress")))
         self.fake_key(keycode, press)
 
     def control_command_sound_output(self, *args):
@@ -567,13 +579,52 @@ class ServerBaseControlCommands(StubServerMixin):
     def control_command_workspace(self, wid, workspace):
         window = self._id_to_window.get(wid)
         if not window:
-            raise ControlError("window %s does not exist", wid)
+            raise ControlError("window %s does not exist" % wid)
         if "workspace" not in window.get_property_names():
-            raise ControlError("cannot set workspace on window %s", window)
+            raise ControlError("cannot set workspace on window %s" % window)
         if workspace<0:
-            raise ControlError("invalid workspace value: %s", workspace)
+            raise ControlError("invalid workspace value: %s" % workspace)
         window.set_property("workspace", workspace)
         return "window %s moved to workspace %s" % (wid, workspace)
+
+
+    def control_command_move(self, wid, x, y):
+        window = self._id_to_window.get(wid)
+        if not window:
+            raise ControlError("window %s does not exist" % wid)
+        ww, wh = window.get_dimensions()
+        count = 0
+        for source in tuple(self._server_sources.values()):
+            move_resize_window = getattr(source, "move_resize_window", None)
+            if move_resize_window:
+                move_resize_window(wid, window, x, y, ww, wh)
+                count += 1
+        return "window %s moved to %i,%i for %i clients" % (wid, x, y, count)
+
+    def control_command_resize(self, wid, w, h):
+        window = self._id_to_window.get(wid)
+        if not window:
+            raise ControlError("window %s does not exist" % wid)
+        x, y = window.get_geometry()[:2]
+        count = 0
+        for source in tuple(self._server_sources.values()):
+            resize_window = getattr(source, "resize_window", None)
+            if resize_window:
+                resize_window(wid, window, w, h)
+                count += 1
+        return "window %s resized to %ix%i for %i clients" % (wid, w, h, count)
+
+    def control_command_moveresize(self, wid, x, y, w, h):
+        window = self._id_to_window.get(wid)
+        if not window:
+            raise ControlError("window %s does not exist" % wid)
+        count = 0
+        for source in tuple(self._server_sources.values()):
+            move_resize_window = getattr(source, "move_resize_window", None)
+            if move_resize_window:
+                move_resize_window(wid, window, x, y, w, h)
+                count += 1
+        return "window %s moved to %i,%i and resized to %ix%i for %i clients" % (wid, x, y, w, h, count)
 
 
     def _process_command_request(self, _proto, packet):

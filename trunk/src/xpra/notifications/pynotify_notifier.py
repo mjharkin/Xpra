@@ -4,21 +4,23 @@
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-import pynotify                 #@UnresolvedImport
+import notify2                 #@UnresolvedImport
 
 from xpra.notifications.notifier_base import NotifierBase
 
 
 class PyNotify_Notifier(NotifierBase):
 
-    def show_notify(self, dbus_id, _tray, nid, app_name, replaces_nid, app_icon, summary, body, actions, hints, expire_timeout, icon):
+    def show_notify(self, dbus_id, tray, nid,
+                    app_name, replaces_nid, app_icon,
+                    summary, body, actions, hints, timeout, icon):
         if not self.dbus_check(dbus_id):
             return
         icon_string = self.get_icon_string(nid, app_icon, icon)
-        pynotify.init(app_name or "Xpra")
-        n = pynotify.Notification(summary, body, icon_string)
-        n.set_urgency(pynotify.URGENCY_LOW)
-        n.set_timeout(expire_timeout)
+        notify2.init(app_name or "Xpra")
+        n = notify2.Notification(summary, body, icon_string)
+        n.set_urgency(notify2.URGENCY_LOW)
+        n.set_timeout(timeout)
         if actions and False:
             while len(actions)>=2:
                 action_id, action_label = actions[:2]
@@ -41,16 +43,14 @@ class PyNotify_Notifier(NotifierBase):
 
 
 def main():
-    from xpra.gtk_common.gobject_compat import import_glib, import_gtk
-    glib = import_glib()
-    gtk = import_gtk()
+    from gi.repository import GLib, Gtk
     def show():
         n = PyNotify_Notifier()
         n.show_notify("", None, 0, "Test", 0, "", "Summary", "Body...", ["0", "Hello", "1", "Bye"], {}, 0, "")
         return False
-    glib.idle_add(show)
-    glib.timeout_add(20000, gtk.main_quit)
-    gtk.main()
+    GLib.idle_add(show)
+    GLib.timeout_add(20000, Gtk.main_quit)
+    Gtk.main()
 
 
 if __name__ == "__main__":

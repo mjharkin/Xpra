@@ -28,26 +28,20 @@ PACMAN="pacman"
 #PACMAN="echo pacman"
 
 #most packages get installed here: (python, gtk, etc):
-$PACMAN --noconfirm -S ${XPKG}python2 ${XPKG}python2-pygtk ${XPKG}gtkglext ${XPKG}python2-gobject ${XPKG}libnotify
+$PACMAN --noconfirm -S ${XPKG}python ${XPKG}libnotify
 #media libraries (more than we actually need):
 $PACMAN --noconfirm -S ${XPKG}ffmpeg ${XPKG}libyuv-git ${XPKG}gst-plugins-good ${XPKG}gst-plugins-bad ${XPKG}gst-plugins-ugly
 #network layer libraries:
-$PACMAN --noconfirm -S ${XPKG}lz4 ${XPKG}lzo2 heimdal-libs openssh sshpass libsodium
-#python3 GStreamer bindings:
+$PACMAN --noconfirm -S ${XPKG}lz4 ${XPKG}lzo2 heimdal-libs openssh sshpass libsodium qrencode
+#python GStreamer bindings:
 $PACMAN --noconfirm -S ${XPKG}gst-python
 #Git:
 $PACMAN --noconfirm -S git
 #development tools and libs for building extra packages:
 $PACMAN --noconfirm -S base-devel ${XPKG}yasm ${XPKG}nasm subversion rsync zip gtk-doc ${XPKG}cmake ${XPKG}gcc ${XPKG}pkg-config ${XPKG}libffi
-#python libraries and packaging tools:
-$PACMAN --noconfirm -S ${XPKG}python2-enum34
-for x in cryptography cffi pycparser numpy pillow cx_Freeze appdirs paramiko comtypes netifaces rencode setproctitle pyu2f ldap ldap3 bcrypt pynacl lz4 brotli PyOpenGL nvidia-ml zeroconf certifi; do
-	$PACMAN --noconfirm -S ${XPKG}python2-${x}
-	$PACMAN --noconfirm -S ${XPKG}python3-${x}
+for x in cryptography cffi pycparser numpy pillow cx_Freeze appdirs paramiko comtypes netifaces rencode setproctitle pyu2f ldap ldap3 bcrypt pynacl lz4 lzo brotli PyOpenGL nvidia-ml zeroconf certifi yaml py-cpuinfo winkerberos gssapi coverage psutil; do
+	$PACMAN --noconfirm -S ${XPKG}python-${x}
 done
-#python2-cryptography 2.4.2 has an undeclared dependency on:
-$PACMAN --noconfirm -S ${XPKG}python2-ipaddress
-$PACMAN --noconfirm -S ${XPKG}cython2 ${XPKG}python2-setuptools
 $PACMAN --noconfirm -S ${XPKG}cython
 
 #cx_Freeze gets very confused about sqlite DLL location
@@ -57,5 +51,13 @@ pushd /mingw64/DLLs
 ln -sf /mingw64/lib/sqlite3*/sqlite3*.dll sqlite3.dll
 popd
 
+#this needs to be converted to a PKGBUILD:
+pip3 install yuicompressor
+
 #for webcam support:
 #$PACMAN --noconfirm -S ${XPKG}opencv ${XPKG}hdf5 ${XPKG}tesseract-ocr
+
+echo "for printing support, install libpdfium"
+
+echo "for a more seamless theme, install https://b00merang.weebly.com/windows-10.html"
+echo " (see ticket #2762)"

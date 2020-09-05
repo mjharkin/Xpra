@@ -9,7 +9,7 @@ from xpra.platform.keyboard_base import KeyboardBase
 from xpra.keyboard.mask import MODIFIER_MAP
 from xpra.keyboard.layouts import xkbmap_query_tostring
 from xpra.log import Logger
-from xpra.os_util import is_X11, is_Wayland
+from xpra.os_util import is_X11, is_Wayland, bytestostr
 
 log = Logger("keyboard", "posix")
 
@@ -81,7 +81,7 @@ class Keyboard(KeyboardBase):
         if not out:
             return {}
         locale = {}
-        for line in out.splitlines():
+        for line in bytestostr(out).splitlines():
             parts = line.lstrip(" ").split(": ")
             if len(parts)==2:
                 locale[parts[0]]=parts[1]
@@ -97,7 +97,7 @@ class Keyboard(KeyboardBase):
                 layout = locale.get("X11 Layout")
                 if layout:
                     query_struct["layout"] = layout
-            log("query_struct(locale)=%s", locale, query_struct)
+            log("query_struct(%s)=%s", locale, query_struct)
             return None, None, query_struct
         query_struct = self.keyboard_bindings.getXkbProperties()
         _query = xkbmap_query_tostring(query_struct)
@@ -110,8 +110,6 @@ class Keyboard(KeyboardBase):
 
     def get_xkb_rules_names_property(self):
         #parses the "_XKB_RULES_NAMES" X11 property
-        #FIXME: a bit ugly to call gtk here...
-        #but otherwise we have to call XGetWindowProperty and deal with X11 errors..
         if not is_X11():
             return ""
         xkb_rules_names = ""
@@ -149,7 +147,7 @@ class Keyboard(KeyboardBase):
         def s(v):
             try:
                 return v.encode("latin1")
-            except:
+            except Exception:
                 return str(v)
         return s(layout), [s(x) for x in layouts], "", None, options
 
@@ -178,6 +176,6 @@ class Keyboard(KeyboardBase):
         self.keymap_modifiers = None
         try:
             dn = "%s %s" % (type(display).__name__, display.get_name())
-        except:
+        except Exception:
             dn = str(display)
         log("update_modifier_map(%s, %s) modifier_map=%s", dn, xkbmap_mod_meanings, self.modifier_map)

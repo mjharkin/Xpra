@@ -1,13 +1,13 @@
 # This file is part of Xpra.
 # Copyright (C) 2008, 2009 Nathaniel Smith <njs@pobox.com>
-# Copyright (C) 2012-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2012-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
+from gi.repository import GObject
 
 from xpra.x11.gtk_x11.window_damage import WindowDamageHandler
-from xpra.gtk_common.gobject_util import one_arg_signal, AutoPropGObjectMixin
-from xpra.gtk_common.gtk_util import get_xwindow
+from xpra.gtk_common.gobject_util import one_arg_signal
 from xpra.x11.gtk_x11.gdk_bindings import (
     add_event_receiver,             #@UnresolvedImport
     remove_event_receiver,          #@UnresolvedImport
@@ -17,12 +17,9 @@ from xpra.gtk_common.error import trap
 from xpra.x11.gtk_x11.world_window import get_world_window
 from xpra.x11.bindings.ximage import XImageBindings #@UnresolvedImport
 from xpra.x11.bindings.window_bindings import constants, X11WindowBindings #@UnresolvedImport
-from xpra.gtk_common.gobject_compat import import_gobject
 from xpra.log import Logger
 
 log = Logger("x11", "window")
-
-gobject = import_gobject()
 
 XImage = XImageBindings()
 X11Window = X11WindowBindings()
@@ -31,7 +28,7 @@ X11Window.ensure_XComposite_support()
 StructureNotifyMask = constants["StructureNotifyMask"]
 
 
-class CompositeHelper(WindowDamageHandler, AutoPropGObjectMixin, gobject.GObject):
+class CompositeHelper(WindowDamageHandler, GObject.GObject):
 
     __gsignals__ = WindowDamageHandler.__common_gsignals__.copy()
     __gsignals__.update({
@@ -42,8 +39,7 @@ class CompositeHelper(WindowDamageHandler, AutoPropGObjectMixin, gobject.GObject
     # This may raise XError.
     def __init__(self, window):
         WindowDamageHandler.__init__(self, window)
-        AutoPropGObjectMixin.__init__(self)
-        gobject.GObject.__init__(self)
+        GObject.GObject.__init__(self)
         self._listening_to = None
 
     def __repr__(self):
@@ -89,7 +85,11 @@ class CompositeHelper(WindowDamageHandler, AutoPropGObjectMixin, gobject.GObject
         listening = []
         e = None
         try:
-            root = self.client_window.get_screen().get_root_window()
+            screen = self.client_window.get_screen()
+            if not screen:
+                log("cannot set pixmap on client window - maybe deleted?")
+                return
+            root = screen.get_root_window()
             gdkworld = None
             world = get_world_window()
             if world:
@@ -103,7 +103,7 @@ class CompositeHelper(WindowDamageHandler, AutoPropGObjectMixin, gobject.GObject
                 # corral window selection masks, and those don't deserve
                 # clobbering.  They are our friends!  X is driving me
                 # slowly mad.
-                xid = get_xwindow(win)
+                xid = win.get_xid()
                 X11Window.addXSelectInput(xid, StructureNotifyMask)
                 add_event_receiver(win, self, max_receivers=-1)
                 listening.append(win)
@@ -131,4 +131,4 @@ class CompositeHelper(WindowDamageHandler, AutoPropGObjectMixin, gobject.GObject
         event.y += self._border_width
         self.emit("contents-changed", event)
 
-gobject.type_register(CompositeHelper)
+GObject.type_register(CompositeHelper)

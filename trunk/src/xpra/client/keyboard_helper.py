@@ -1,13 +1,13 @@
 # This file is part of Xpra.
 # Copyright (C) 2011 Serviware (Arthur Huillet, <ahuillet@serviware.com>)
-# Copyright (C) 2010-2017 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008, 2010 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import os
 
-from xpra.util import nonl, csv, std, envbool, print_nested_dict, repr_ellipsized
+from xpra.util import nonl, csv, std, envbool, print_nested_dict, ellipsizer
 from xpra.os_util import POSIX, bytestostr
 from xpra.log import Logger
 
@@ -16,7 +16,7 @@ log = Logger("keyboard")
 LAYOUT_GROUPS = envbool("XPRA_LAYOUT_GROUPS", True)
 
 
-class KeyboardHelper(object):
+class KeyboardHelper:
 
     def __init__(self, net_send, keyboard_sync=True,
                  shortcut_modifiers="auto", key_shortcuts=(),
@@ -26,6 +26,7 @@ class KeyboardHelper(object):
         self.send = net_send
         self.locked = False
         self.keyboard_sync = keyboard_sync
+        self.shortcuts_enabled = True
         self.shortcut_modifiers = shortcut_modifiers
         self.key_shortcuts = self.parse_shortcuts(key_shortcuts)
         #command line overrides:
@@ -220,7 +221,11 @@ class KeyboardHelper(object):
     def key_handled_as_shortcut(self, window, key_name, modifiers, depressed):
         #find the shortcuts that may match this key:
         shortcuts = self.key_shortcuts.get(key_name)
-        log("key_handled_as_shortcut: shortcut(%s)=%s", key_name, shortcuts)
+        log("key_handled_as_shortcut%s shortcuts_enabled=%s, shortcuts=%s",
+            (window, key_name, modifiers, depressed),
+            self.shortcuts_enabled, shortcuts)
+        if not self.shortcuts_enabled:
+            return False
         if not shortcuts:
             return False
         if len(shortcuts)>1:
@@ -241,6 +246,8 @@ class KeyboardHelper(object):
         for rm in req_mods:
             if rm not in modifiers:
                 #modifier is missing, bail out
+                log("not matched %s for %s: %s not in %s",
+                    shortcut, key_name, rm, modifiers)
                 return False
             try:
                 extra_modifiers.remove(rm)
@@ -288,9 +295,9 @@ class KeyboardHelper(object):
             a chance to fire more than one send_key_action.
             (win32 uses this for AltGr emulation)
         """
-        if self.key_handled_as_shortcut(window, key_event.keyname, key_event.modifiers, key_event.pressed):
-            return
-        self.keyboard.process_key_event(self.send_key_action, wid, key_event)
+        if not self.key_handled_as_shortcut(window, key_event.keyname, key_event.modifiers, key_event.pressed):
+            self.keyboard.process_key_event(self.send_key_action, wid, key_event)
+        return False
 
     def send_key_action(self, wid, key_event):
         log("send_key_action(%s, %s)", wid, key_event)
@@ -368,8 +375,8 @@ class KeyboardHelper(object):
         log("layout=%s, layouts=%s, variant=%s, variants=%s",
             self.xkbmap_layout, self.xkbmap_layouts, self.xkbmap_variant, self.xkbmap_variants)
         log("print=%s, query=%s, struct=%s", nonl(self.xkbmap_print), nonl(self.xkbmap_query), self.xkbmap_query_struct)
-        log("keycodes=%s", repr_ellipsized(str(self.xkbmap_keycodes)))
-        log("x11 keycodes=%s", repr_ellipsized(str(self.xkbmap_x11_keycodes)))
+        log("keycodes=%s", ellipsizer(self.xkbmap_keycodes))
+        log("x11 keycodes=%s", ellipsizer(self.xkbmap_x11_keycodes))
         log("mod managed: %s", self.xkbmap_mod_managed)
         log("mod meanings: %s", self.xkbmap_mod_meanings)
         log("mod pointermissing: %s", self.xkbmap_mod_pointermissing)

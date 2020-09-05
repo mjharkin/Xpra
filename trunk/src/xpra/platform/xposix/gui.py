@@ -1,6 +1,6 @@
 # This file is part of Xpra.
 # Copyright (C) 2010 Nathaniel Smith <njs@pobox.com>
-# Copyright (C) 2011-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2011-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -9,8 +9,8 @@ import sys
 import struct
 
 from xpra.os_util import bytestostr, hexstr
-from xpra.util import iround, envbool, envint, csv, repr_ellipsized
-from xpra.os_util import is_unity, is_gnome, is_kde, is_Fedora, is_X11, is_Wayland
+from xpra.util import iround, envbool, envint, csv, ellipsizer
+from xpra.os_util import is_unity, is_gnome, is_kde, is_Ubuntu, is_Fedora, is_X11, is_Wayland
 from xpra.log import Logger
 
 log = Logger("posix")
@@ -36,7 +36,18 @@ def X11WindowBindings():
                 log.error(" %s", e)
     return _X11Window
 
-X11XI2 = None
+def X11RandRBindings():
+    if is_X11():
+        try:
+            from xpra.x11.bindings.randr_bindings import RandRBindings  #@UnresolvedImport
+            return RandRBindings()
+        except Exception as e:
+            log("RandRBindings()", exc_info=True)
+            log.error("Error: no X11 RandR bindings")
+            log.error(" %s", e)
+    return None
+
+X11XI2 = False
 def X11XI2Bindings():
     global X11XI2
     if X11XI2 is False:
@@ -54,14 +65,10 @@ device_bell = None
 GTK_MENUS = envbool("XPRA_GTK_MENUS", False)
 RANDR_DPI = envbool("XPRA_RANDR_DPI", True)
 XSETTINGS_DPI = envbool("XPRA_XSETTINGS_DPI", True)
-USE_NATIVE_TRAY = envbool("XPRA_USE_NATIVE_TRAY", is_unity() or (is_gnome() and not is_Fedora()) or is_kde())
+USE_NATIVE_TRAY = envbool("XPRA_USE_NATIVE_TRAY", is_unity() or (is_Ubuntu() and is_gnome()) or (is_gnome() and not is_Fedora()) or is_kde())
 XINPUT_WHEEL_DIV = envint("XPRA_XINPUT_WHEEL_DIV", 15)
 DBUS_SCREENSAVER = envbool("XPRA_DBUS_SCREENSAVER", False)
 
-
-def get_xwindow(win):
-    from xpra.gtk_common.gtk_util import get_xwindow as _get_xwindow
-    return _get_xwindow(win)
 
 def gl_check():
     if not is_X11() and is_Wayland():
@@ -74,7 +81,7 @@ def get_native_system_tray_classes():
 
 def get_wm_name():
     wm_name = os.environ.get("XDG_CURRENT_DESKTOP", "")
-    if os.environ.get("XDG_SESSION_TYPE")=="wayland":
+    if os.environ.get("XDG_SESSION_TYPE")=="wayland" or os.environ.get("GDK_BACKEND")=="wayland":
         wm_name = "wayland"
     elif is_X11():
         try:
@@ -159,6 +166,8 @@ def _get_X11_root_property(name, req_type):
 def _get_xsettings():
     from xpra.gtk_common.error import xlog
     X11Window = X11WindowBindings()
+    if not X11Window:
+        return None
     with xlog:
         selection = "_XSETTINGS_S0"
         owner = X11Window.XGetSelectionOwner(selection)
@@ -205,15 +214,16 @@ def _get_xsettings_dpi():
 def _get_randr_dpi():
     if RANDR_DPI and not is_Wayland():
         from xpra.gtk_common.error import xlog
-        from xpra.x11.bindings.randr_bindings import RandRBindings  #@UnresolvedImport
         with xlog:
-            randr_bindings = RandRBindings()
-            wmm, hmm = randr_bindings.get_screen_size_mm()
-            w, h =  randr_bindings.get_screen_size()
-            dpix = iround(w * 25.4 / wmm)
-            dpiy = iround(h * 25.4 / hmm)
-            screenlog("xdpi=%s, ydpi=%s - size-mm=%ix%i, size=%ix%i", dpix, dpiy, wmm, hmm, w, h)
-            return dpix, dpiy
+            randr_bindings = X11RandRBindings()
+            if randr_bindings and randr_bindings.has_randr():
+                wmm, hmm = randr_bindings.get_screen_size_mm()
+                if wmm>0 and hmm>0:
+                    w, h =  randr_bindings.get_screen_size()
+                    dpix = iround(w * 25.4 / wmm)
+                    dpiy = iround(h * 25.4 / hmm)
+                    screenlog("xdpi=%s, ydpi=%s - size-mm=%ix%i, size=%ix%i", dpix, dpiy, wmm, hmm, w, h)
+                    return dpix, dpiy
     return -1, -1
 
 def get_xdpi():
@@ -316,7 +326,7 @@ def get_workarea():
             if not workarea:
                 return None
             screenlog("get_workarea() _NET_WORKAREA=%s (%s), len=%s",
-                      repr_ellipsized(workarea), type(workarea), len(workarea))
+                      ellipsizer(workarea), type(workarea), len(workarea))
             #workarea comes as a list of 4 CARDINAL dimensions (x,y,w,h), one for each desktop
             sizeof_long = struct.calcsize(b"@L")
             if len(workarea)<(d+1)*4*sizeof_long:
@@ -370,7 +380,8 @@ def get_vrefresh():
         try:
             from xpra.x11.bindings.randr_bindings import RandRBindings      #@UnresolvedImport
             randr = RandRBindings()
-            v = randr.get_vrefresh()
+            if randr.has_randr():
+                v = randr.get_vrefresh()
         except Exception as e:
             log("get_vrefresh()", exc_info=True)
             log.warn("Warning: failed to query the display vertical refresh rate:")
@@ -451,7 +462,7 @@ def system_bell(window, device, percent, _pitch, _duration, bell_class, bell_id,
             #try to load it:
             from xpra.x11.bindings.keyboard_bindings import X11KeyboardBindings       #@UnresolvedImport
             device_bell = X11KeyboardBindings().device_bell
-        device_bell(get_xwindow(window), device, bell_class, bell_id, percent, bell_name)
+        device_bell(window.get_xid(), device, bell_class, bell_id, percent, bell_name)
     try:
         from xpra.gtk_common.error import xlog
         with xlog:
@@ -471,13 +482,15 @@ def _send_client_message(window, message_type, *values):
         X11Window = X11WindowBindings()
         root_xid = X11Window.getDefaultRootWindow()
         if window:
-            xid = get_xwindow(window)
+            xid = window.get_xid()
         else:
             xid = root_xid
         SubstructureNotifyMask = constants["SubstructureNotifyMask"]
         SubstructureRedirectMask = constants["SubstructureRedirectMask"]
         event_mask = SubstructureNotifyMask | SubstructureRedirectMask
-        X11Window.sendClientMessage(root_xid, xid, False, event_mask, message_type, *values)
+        from xpra.gtk_common.error import xsync
+        with xsync:
+            X11Window.sendClientMessage(root_xid, xid, False, event_mask, message_type, *values)
     except Exception as e:
         log.warn("failed to send client message '%s' with values=%s: %s", message_type, values, e)
 
@@ -538,13 +551,13 @@ def get_info():
     return i
 
 
-class XI2_Window(object):
+class XI2_Window:
     def __init__(self, window):
         log("XI2_Window(%s)", window)
         self.XI2 = X11XI2Bindings()
         self.X11Window = X11WindowBindings()
         self.window = window
-        self.xid = get_xwindow(window.get_window())
+        self.xid = window.get_window().get_xid()
         self.windows = ()
         self.motion_valuators = {}
         window.connect("configure-event", self.configured)
@@ -683,7 +696,7 @@ class XI2_Window(object):
         if dx!=0 or dy!=0:
             xinputlog("do_xi_motion(%s, %s) wheel deltas: dx=%i, dy=%i", event, device, dx, dy)
             #normalize (xinput is always using 15 degrees?)
-            client.wheel_event(wid, float(dx)/XINPUT_WHEEL_DIV, float(dy)/XINPUT_WHEEL_DIV, event.device)
+            client.wheel_event(wid, dx/XINPUT_WHEEL_DIV, dy/XINPUT_WHEEL_DIV, event.device)
 
     def get_pointer_extra_args(self, event):
         def intscaled(f):
@@ -704,7 +717,7 @@ class XI2_Window(object):
         return args
 
 
-class ClientExtras(object):
+class ClientExtras:
     def __init__(self, client, _opts):
         self.client = client
         self._xsettings_watcher = None

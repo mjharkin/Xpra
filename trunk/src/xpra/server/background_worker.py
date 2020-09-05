@@ -6,11 +6,10 @@
 
 
 from threading import Thread, Lock
-from xpra.os_util import Queue
+from queue import Queue
 
 from xpra.log import Logger
 log = Logger("util")
-debug = log.debug
 
 
 class Worker_Thread(Thread):
@@ -21,7 +20,7 @@ class Worker_Thread(Thread):
     """
 
     def __init__(self):
-        Thread.__init__(self, name="Worker_Thread")
+        super().__init__(name="Worker_Thread")
         self.items = Queue()
         self.exit = False
         self.setDaemon(True)
@@ -32,37 +31,41 @@ class Worker_Thread(Thread):
     def stop(self, force=False):
         if self.exit:
             return
+        items = tuple(x for x in self.items.queue if x is not None)
+        log("Worker_Thread.stop(%s) %i items still in work queue: %s", force, len(items), items)
         if force:
-            if self.items.qsize()>0:
-                log.warn("Worker stop: %s items in the queue will not be run!", self.items.qsize())
+            if items:
+                log.warn("Worker stop: %s items in the queue will not be run!", len(items))
                 self.items.put(None)
                 self.items = Queue()
             self.exit = True
         else:
-            if self.items.qsize()>0:
-                log.info("waiting for %s items in work queue to complete", self.items.qsize())
-        debug("Worker_Thread.stop(%s) %s items in work queue", force, self.items)
+            if items:
+                log.info("waiting for %s items in work queue to complete", len(items))
         self.items.put(None)
 
-    def add(self, item):
+    def add(self, item, allow_duplicates=True):
         if self.items.qsize()>10:
             log.warn("Worker_Thread.items queue size is %s", self.items.qsize())
+        if not allow_duplicates:
+            if item in self.items.queue:
+                return
         self.items.put(item)
 
     def run(self):
-        debug("Worker_Thread.run() starting")
+        log("Worker_Thread.run() starting")
         while not self.exit:
             item = self.items.get()
             if item is None:
-                debug("Worker_Thread.run() found end of queue marker")
+                log("Worker_Thread.run() found end of queue marker")
                 self.exit = True
                 break
             try:
-                debug("Worker_Thread.run() calling %s (queue size=%s)", item, self.items.qsize())
+                log("Worker_Thread.run() calling %s (queue size=%s)", item, self.items.qsize())
                 item()
             except Exception:
                 log.error("Error in worker thread processing item %s", item, exc_info=True)
-        debug("Worker_Thread.run() ended (queue size=%s)", self.items.qsize())
+        log("Worker_Thread.run() ended (queue size=%s)", self.items.qsize())
 
 #only one worker thread for now:
 singleton = None
@@ -80,13 +83,13 @@ def get_worker(create=True):
             singleton.start()
     return singleton
 
-def add_work_item(item):
+def add_work_item(item, allow_duplicates=True):
     w = get_worker(True)
-    debug("add_work_item(%s) worker=%s", item, w)
-    w.add(item)
+    log("add_work_item(%s, %s) worker=%s", item, allow_duplicates, w)
+    w.add(item, allow_duplicates)
 
 def stop_worker(force=False):
     w = get_worker(False)
-    debug("stop_worker(%s) worker=%s", force, w)
+    log("stop_worker(%s) worker=%s", force, w)
     if w:
         w.stop(force)

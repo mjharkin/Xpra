@@ -1,28 +1,29 @@
 # This file is part of Xpra.
-# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008, 2010 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
+import os.path
 import sys
 
+from gi.repository import GLib
+from gi.repository import GObject
+
 from xpra.util import (
-    nonl, sorted_nicely, print_nested_dict, envint, flatten_dict,
-    disconnect_is_an_error, repr_ellipsized, DONE, first_time,
+    nonl, sorted_nicely, print_nested_dict, envint, flatten_dict, typedict,
+    disconnect_is_an_error, ellipsizer, DONE, first_time,
     )
-from xpra.os_util import bytestostr, get_hex_uuid, PYTHON3, POSIX, OSX
+from xpra.os_util import bytestostr, get_hex_uuid, POSIX, OSX, hexstr
+from xpra.simple_stats import std_unit
 from xpra.client.client_base import XpraClientBase, EXTRA_TIMEOUT
 from xpra.exit_codes import (
     EXIT_OK, EXIT_CONNECTION_LOST, EXIT_TIMEOUT, EXIT_INTERNAL_ERROR,
     EXIT_FAILURE, EXIT_UNSUPPORTED, EXIT_REMOTE_ERROR, EXIT_FILE_TOO_BIG,
     )
-from xpra.gtk_common.gobject_compat import import_gobject, import_glib
 from xpra.log import Logger
 
 log = Logger("gobject", "client")
-
-gobject = import_gobject()
-glib = import_glib()
 
 FLATTEN_INFO = envint("XPRA_FLATTEN_INFO", 1)
 
@@ -31,43 +32,51 @@ def errwrite(msg):
     try:
         sys.stderr.write(msg)
         sys.stderr.flush()
-    except (IOError, OSError, AttributeError):
+    except (OSError, AttributeError):
         pass
 
 
-class GObjectXpraClient(gobject.GObject, XpraClientBase):
+class GObjectXpraClient(GObject.GObject, XpraClientBase):
     """
         Utility superclass for GObject clients
     """
-    INSTALL_SIGNAL_HANDLERS = True
+    COMMAND_TIMEOUT = EXTRA_TIMEOUT
 
     def __init__(self):
-        self.idle_add = glib.idle_add
-        self.timeout_add = glib.timeout_add
-        self.source_remove = glib.source_remove
-        gobject.GObject.__init__(self)
+        self.idle_add = GLib.idle_add
+        self.timeout_add = GLib.timeout_add
+        self.source_remove = GLib.source_remove
+        GObject.GObject.__init__(self)
         XpraClientBase.__init__(self)
 
     def init(self, opts):
         XpraClientBase.init(self, opts)
-        if self.INSTALL_SIGNAL_HANDLERS:
-            self.install_signal_handlers()
         self.glib_init()
 
     def get_scheduler(self):
-        return glib
+        return GLib
+
+
+    def install_signal_handlers(self):
+        from xpra.gtk_common.gobject_compat import install_signal_handlers
+        install_signal_handlers("%s Client" % self.client_type(), self.handle_app_signal)
+
+
+    def setup_connection(self, conn):
+        protocol = super().setup_connection(conn)
+        protocol._log_stats  = False
+        GLib.idle_add(self.send_hello)
+        return protocol
 
 
     def client_type(self):
         #overriden in subclasses!
-        return "Python%s/GObject" % sys.version_info[0]
+        return "Python3/GObject"
 
-    def timeout(self, *_args):
-        log.warn("timeout!")
 
     def init_packet_handlers(self):
         XpraClientBase.init_packet_handlers(self)
-        def noop(*args):
+        def noop(*args):    # pragma: no cover
             log("ignoring packet: %s", args)
         #ignore the following packet types without error:
         #(newer servers should avoid sending us any of those)
@@ -83,7 +92,7 @@ class GObjectXpraClient(gobject.GObject, XpraClientBase):
 
     def run(self):
         XpraClientBase.run(self)
-        self.glib_mainloop = glib.MainLoop()
+        self.glib_mainloop = GLib.MainLoop()
         self.glib_mainloop.run()
         return self.exit_code
 
@@ -97,7 +106,7 @@ class GObjectXpraClient(gobject.GObject, XpraClientBase):
         if self.exit_code is None:
             self.exit_code = exit_code
         self.cleanup()
-        glib.timeout_add(50, self.glib_mainloop.quit)
+        GLib.timeout_add(50, self.glib_mainloop.quit)
 
 
 
@@ -106,29 +115,31 @@ class CommandConnectClient(GObjectXpraClient):
         Utility superclass for clients that only send one command
         via the hello packet.
     """
-    COMMAND_TIMEOUT = EXTRA_TIMEOUT
 
-    def __init__(self, conn, opts):
-        GObjectXpraClient.__init__(self)
-        GObjectXpraClient.init(self, opts)
-        connection, display_desc = conn
-        self.display_desc = display_desc
-        self.connect_with_timeout(connection)
-        self._protocol._log_stats  = False
+    def __init__(self, opts):
+        super().__init__()
+        super().init(opts)
+        self.display_desc = {}
         #not used by command line clients,
         #so don't try probing for printers, etc
         self.file_transfer = False
         self.printing = False
         #don't bother with many of these things for one-off commands:
         for x in ("ui_client", "wants_aliases", "wants_encodings",
-                  "wants_versions", "wants_features", "wants_sound", "windows"):
+                  "wants_versions", "wants_features", "wants_sound", "windows",
+                  "webcam", "keyboard", "mouse", "network-state",
+                  ):
             self.hello_extra[x] = False
 
-    def connect_with_timeout(self, conn):
-        self.setup_connection(conn)
+    def setup_connection(self, conn):
+        protocol = super().setup_connection(conn)
         if conn.timeout>0:
-            glib.timeout_add((conn.timeout + self.COMMAND_TIMEOUT) * 1000, self.timeout)
-        glib.idle_add(self.send_hello)
+            GLib.timeout_add((conn.timeout + self.COMMAND_TIMEOUT) * 1000, self.timeout)
+        return protocol
+
+    def timeout(self, *_args):
+        log.warn("timeout!")    # pragma: no cover
+
 
     def _process_connection_lost(self, _packet):
         #override so we don't log a warning
@@ -139,16 +150,16 @@ class CommandConnectClient(GObjectXpraClient):
         else:
             self.quit(EXIT_OK)
 
-    def server_connection_established(self):
+    def server_connection_established(self, caps : typedict):
         #don't bother parsing the network caps:
         #* it could cause errors if the caps are missing
         #* we don't care about sending anything back after hello
-        log("server_capabilities: %s", repr_ellipsized(str(self.server_capabilities)))
+        log("server_capabilities: %s", ellipsizer(caps))
         log("protocol state: %s", self._protocol.save_state())
-        self.do_command()
+        self.do_command(caps)
         return True
 
-    def do_command(self):
+    def do_command(self, caps : typedict):
         raise NotImplementedError()
 
 
@@ -159,10 +170,10 @@ class SendCommandConnectClient(CommandConnectClient):
         So unlike CommandConnectClient, we do need the network and encryption to be setup.
     """
 
-    def server_connection_established(self):
-        assert self.parse_encryption_capabilities(), "encryption failure"
-        assert self.parse_network_capabilities(), "network capabilities failure"
-        return CommandConnectClient.server_connection_established(self)
+    def server_connection_established(self, caps):
+        assert self.parse_encryption_capabilities(caps), "encryption failure"
+        assert self.parse_network_capabilities(caps), "network capabilities failure"
+        return super().server_connection_established(caps)
 
 
 class HelloRequestClient(SendCommandConnectClient):
@@ -172,17 +183,17 @@ class HelloRequestClient(SendCommandConnectClient):
     """
 
     def make_hello_base(self):
-        caps = CommandConnectClient.make_hello_base(self)
+        caps = super().make_hello_base()
         caps.update(self.hello_request())
         return caps
 
     def timeout(self, *_args):
         self.warn_and_quit(EXIT_TIMEOUT, "timeout: server did not disconnect us")
 
-    def hello_request(self):
+    def hello_request(self):        # pragma: no cover
         raise NotImplementedError()
 
-    def do_command(self):
+    def do_command(self, caps : typedict):
         self.quit(EXIT_OK)
 
     def _process_disconnect(self, packet):
@@ -205,9 +216,9 @@ class ScreenshotXpraClient(CommandConnectClient):
         and exits when the resulting image is received (or timedout)
     """
 
-    def __init__(self, conn, opts, screenshot_filename):
+    def __init__(self, opts, screenshot_filename):
         self.screenshot_filename = screenshot_filename
-        CommandConnectClient.__init__(self, conn, opts)
+        super().__init__(opts)
         self.hello_extra["screenshot_request"] = True
         self.hello_extra["request"] = "screenshot"
 
@@ -221,12 +232,17 @@ class ScreenshotXpraClient(CommandConnectClient):
             self.warn_and_quit(EXIT_OK,
                                "screenshot is empty and has not been saved (maybe there are no windows or they are not currently shown)")
             return
-        with open(self.screenshot_filename, 'wb') as f:
-            f.write(img_data)
+        if self.screenshot_filename=="-":
+            output = os.fdopen(sys.stdout.fileno(), "wb", closefd=False)
+        else:
+            output = open(self.screenshot_filename, "wb")
+        with output:
+            output.write(img_data)
+            output.flush()
         self.warn_and_quit(EXIT_OK, "screenshot %sx%s saved to: %s" % (w, h, self.screenshot_filename))
 
     def init_packet_handlers(self):
-        GObjectXpraClient.init_packet_handlers(self)
+        super().init_packet_handlers()
         self._ui_packet_handlers["screenshot"] = self._process_screenshot
 
 
@@ -235,8 +251,8 @@ class InfoXpraClient(CommandConnectClient):
         it queries the server with an 'info' request
     """
 
-    def __init__(self, *args):
-        CommandConnectClient.__init__(self, *args)
+    def __init__(self, opts):
+        super().__init__(opts)
         self.hello_extra["info_request"] = True
         self.hello_extra["request"] = "info"
         if FLATTEN_INFO>=1:
@@ -245,39 +261,40 @@ class InfoXpraClient(CommandConnectClient):
     def timeout(self, *_args):
         self.warn_and_quit(EXIT_TIMEOUT, "timeout: did not receive the info")
 
-    def do_command(self):
-        if self.server_capabilities:
+    def do_command(self, caps : typedict):
+        if caps:
             if FLATTEN_INFO<2:
                 #compatibility mode:
-                c = flatten_dict(self.server_capabilities)
+                c = flatten_dict(caps)
                 for k in sorted_nicely(c.keys()):
                     v = c.get(k)
-                    if PYTHON3:
-                        #FIXME: this is a nasty and horrible python3 workaround (yet again)
-                        #we want to print bytes as strings without the ugly 'b' prefix..
-                        #it assumes that all the strings are raw or in (possibly nested) lists or tuples only
-                        #we assume that all strings we get are utf-8,
-                        #and fallback to the bytestostr hack if that fails
-                        def fixvalue(w):
-                            if isinstance(w, bytes):
-                                try:
-                                    return w.decode("utf-8")
-                                except:
-                                    return bytestostr(w)
-                            elif isinstance(w, (tuple,list)):
-                                return type(w)([fixvalue(x) for x in w])
-                            return w
-                        v = fixvalue(v)
-                        k = fixvalue(k)
+                    #FIXME: this is a nasty and horrible python3 workaround (yet again)
+                    #we want to print bytes as strings without the ugly 'b' prefix..
+                    #it assumes that all the strings are raw or in (possibly nested) lists or tuples only
+                    #we assume that all strings we get are utf-8,
+                    #and fallback to the bytestostr hack if that fails
+                    def fixvalue(w):
+                        if isinstance(w, bytes):
+                            if k.endswith(".data"):
+                                return hexstr(w)
+                            try:
+                                return w.decode("utf-8")
+                            except:
+                                return bytestostr(w)
+                        elif isinstance(w, (tuple,list)):
+                            return type(w)([fixvalue(x) for x in w])
+                        return w
+                    v = fixvalue(v)
+                    k = fixvalue(k)
                     log.info("%s=%s", k, nonl(v))
             else:
-                print_nested_dict(self.server_capabilities)
+                print_nested_dict(caps)
         self.quit(EXIT_OK)
 
 class IDXpraClient(InfoXpraClient):
 
     def __init__(self, *args):
-        InfoXpraClient.__init__(self, *args)
+        super().__init__(*args)
         self.hello_extra["request"] = "id"
 
 
@@ -286,8 +303,8 @@ class ConnectTestXpraClient(CommandConnectClient):
         it queries the server with an 'info' request
     """
 
-    def __init__(self, *args, **kwargs):
-        CommandConnectClient.__init__(self, *args)
+    def __init__(self, opts, **kwargs):
+        super().__init__(opts)
         self.value = get_hex_uuid()
         self.hello_extra.update({
             "connect_test_request"      : self.value,
@@ -309,10 +326,10 @@ class ConnectTestXpraClient(CommandConnectClient):
         #which sets the correct exit code, landing here is an error:
         self.quit(EXIT_FAILURE)
 
-    def do_command(self):
-        if self.server_capabilities:
-            ctr = self.server_capabilities.strget("connect_test_response")
-            log("do_command() expected connect test response='%s', got '%s'", self.value, ctr)
+    def do_command(self, caps : typedict):
+        if caps:
+            ctr = caps.strget("connect_test_response")
+            log("do_command(..) expected connect test response='%s', got '%s'", self.value, ctr)
             if ctr==self.value:
                 self.quit(EXIT_OK)
             else:
@@ -327,8 +344,8 @@ class MonitorXpraClient(SendCommandConnectClient):
         If the server does not support this feature it exits with an error.
     """
 
-    def __init__(self, *args):
-        SendCommandConnectClient.__init__(self, *args)
+    def __init__(self, opts):
+        super().__init__(opts)
         for x in ("wants_features", "wants_events", "event_request"):
             self.hello_extra[x] = True
         self.hello_extra["request"] = "event"
@@ -338,20 +355,111 @@ class MonitorXpraClient(SendCommandConnectClient):
         pass
         #self.warn_and_quit(EXIT_TIMEOUT, "timeout: did not receive the info")
 
-    def do_command(self):
+    def do_command(self, caps : typedict):
         log.info("waiting for server events")
 
     def _process_server_event(self, packet):
         log.info(": ".join(bytestostr(x) for x in packet[1:]))
 
     def init_packet_handlers(self):
-        SendCommandConnectClient.init_packet_handlers(self)
+        super().init_packet_handlers()
         self._packet_handlers["server-event"] = self._process_server_event
         self._packet_handlers["ping"] = self._process_ping
 
     def _process_ping(self, packet):
         echotime = packet[1]
         self.send("ping_echo", echotime, 0, 0, 0, -1)
+
+
+class ShellXpraClient(SendCommandConnectClient):
+    """
+        Provides an interactive shell with the socket it connects to
+    """
+
+    def __init__(self, opts):
+        super().__init__(opts)
+        self.stdin_io_watch = None
+        self.stdin_buffer = ""
+        self.hello_extra["shell"] = "True"
+
+    def timeout(self, *args):
+        pass
+
+    def cleanup(self):
+        siw = self.stdin_io_watch
+        if siw:
+            self.stdin_io_watch = None
+            self.source_remove(siw)
+        super().cleanup()
+
+    def do_command(self, caps : typedict):
+        if not caps.boolget("shell"):
+            msg = "this server does not support the 'shell' subcommand"
+            log.error(msg)
+            self.disconnect_and_quit(EXIT_UNSUPPORTED, msg)
+            return
+        #start reading from stdin:
+        self.install_signal_handlers()
+        stdin = sys.stdin
+        fileno = stdin.fileno()
+        import os
+        import fcntl
+        fl = fcntl.fcntl(fileno, fcntl.F_GETFL)
+        fcntl.fcntl(fileno, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+        self.stdin_io_watch = GLib.io_add_watch(sys.stdin,
+                                                GLib.PRIORITY_DEFAULT, GLib.IO_IN,
+                                                self.stdin_ready)
+        self.print_prompt()
+
+    def stdin_ready(self, *_args):
+        data = sys.stdin.read()
+        #log.warn("stdin=%r", data)
+        self.stdin_buffer += data
+        sent = 0
+        if self.stdin_buffer.endswith("\n"):
+            for line in self.stdin_buffer.splitlines():
+                if line:
+                    if line.rstrip("\n\r") in ("quit", "exit"):
+                        self.disconnect_and_quit(EXIT_OK, "user requested %s" % line)
+                        self.stdin_io_watch = None
+                        return False
+                    self.send("shell-exec", line.encode())
+                    sent += 1
+        self.stdin_buffer = ""
+        if not sent:
+            self.print_prompt()
+        return True
+
+    def init_packet_handlers(self):
+        super().init_packet_handlers()
+        self._packet_handlers["shell-reply"] = self._process_shell_reply
+        self._packet_handlers["ping"] = self._process_ping
+
+    def _process_ping(self, packet):
+        echotime = packet[1]
+        self.send("ping_echo", echotime, 0, 0, 0, -1)
+
+    def _process_shell_reply(self, packet):
+        fd = packet[1]
+        message = packet[2]
+        if fd==1:
+            stream = sys.stdout
+        elif fd==2:
+            stream = sys.stderr
+        else:
+            raise Exception("invalid file descriptor %i" % fd)
+        s = message.decode("utf8")
+        if s.endswith("\n"):
+            s = s[:-1]
+        stream.write("%s" % s)
+        stream.flush()
+        if fd==2:
+            stream.write("\n")
+            self.print_prompt()
+
+    def print_prompt(self):
+        sys.stdout.write("> ")
+        sys.stdout.flush()
 
 
 class VersionXpraClient(HelloRequestClient):
@@ -370,12 +478,12 @@ class VersionXpraClient(HelloRequestClient):
         #don't bother checking anything - this could generate warnings
         return True
 
-    def do_command(self):
-        v = self.server_capabilities.get(b"version")
+    def do_command(self, caps : typedict):
+        v = caps.strget(b"version")
         if not v:
             self.warn_and_quit(EXIT_FAILURE, "server did not provide the version information")
         else:
-            sys.stdout.write("%s\n" % (bytestostr(v),))
+            sys.stdout.write("%s\n" % (v,))
             self.quit(EXIT_OK)
 
 
@@ -388,8 +496,8 @@ class ControlXpraClient(CommandConnectClient):
     def timeout(self, *_args):
         self.warn_and_quit(EXIT_TIMEOUT, "timeout: server did not respond")
 
-    def do_command(self):
-        cr = self.server_capabilities.listget("command_response")
+    def do_command(self, caps : typedict):
+        cr = caps.tupleget("command_response")
         if cr is None:
             self.warn_and_quit(EXIT_UNSUPPORTED, "server does not support control command")
             return
@@ -402,7 +510,7 @@ class ControlXpraClient(CommandConnectClient):
         self.warn_and_quit(EXIT_OK, text)
 
     def make_hello(self):
-        capabilities = GObjectXpraClient.make_hello(self)
+        capabilities = super().make_hello()
         log("make_hello() adding command request '%s' to %s", self.command, capabilities)
         capabilities["command_request"] = self.command
         capabilities["request"] = "command"
@@ -421,25 +529,26 @@ class PrintClient(SendCommandConnectClient):
         #TODO: load as needed...
         def sizeerr(size):
             self.warn_and_quit(EXIT_FILE_TOO_BIG,
-                               "the file is too large: %iMB (the file size limit is %iMB)" % (size//1024//1024, self.file_size_limit))
+                               "the file is too large: %sB (the file size limit is %sB)" % (
+                                   std_unit(size), std_unit(self.file_size_limit)))
             return
         if self.filename=="-":
             #replace with filename proposed
             self.filename = command[2]
             #read file from stdin
-            self.file_data = sys.stdin.read()
+            with open(sys.stdin.fileno(), mode='rb', closefd=False) as stdin_binary:
+                self.file_data = stdin_binary.read()
             log("read %i bytes from stdin", len(self.file_data))
         else:
-            import os.path
             size = os.path.getsize(self.filename)
-            if size>self.file_size_limit*1024*1024:
+            if size>self.file_size_limit:
                 sizeerr(size)
                 return
             from xpra.os_util import load_binary_file
             self.file_data = load_binary_file(self.filename)
             log("read %i bytes from %s", len(self.file_data), self.filename)
         size = len(self.file_data)
-        if size>self.file_size_limit*1024*1024:
+        if size>self.file_size_limit:
             sizeerr(size)
             return
         assert self.file_data, "no data found for '%s'" % self.filename
@@ -450,8 +559,8 @@ class PrintClient(SendCommandConnectClient):
     def timeout(self, *_args):
         self.warn_and_quit(EXIT_TIMEOUT, "timeout: server did not respond")
 
-    def do_command(self):
-        printing = self.server_capabilities.boolget("printing")
+    def do_command(self, caps : typedict):
+        printing = caps.boolget("printing")
         if not printing:
             self.warn_and_quit(EXIT_UNSUPPORTED, "server does not support printing")
             return
@@ -463,7 +572,7 @@ class PrintClient(SendCommandConnectClient):
         self.idle_add(self.send, "disconnect", DONE, "detaching")
 
     def make_hello(self):
-        capabilities = SendCommandConnectClient.make_hello(self)
+        capabilities = super().make_hello()
         capabilities["wants_features"] = True   #so we know if printing is supported or not
         capabilities["print_request"] = True    #marker to skip full setup
         capabilities["request"] = "print"
@@ -482,7 +591,7 @@ class ExitXpraClient(HelloRequestClient):
             "request"       : "exit",
             }
 
-    def do_command(self):
+    def do_command(self, caps : typedict):
         self.idle_add(self.send, "exit-server")
 
 
@@ -495,7 +604,7 @@ class StopXpraClient(HelloRequestClient):
             "request"       : "stop",
             }
 
-    def do_command(self):
+    def do_command(self, caps : typedict):
         if not self.server_client_shutdown:
             log.error("Error: cannot shutdown this server")
             log.error(" the feature is disable on the server")
@@ -517,7 +626,7 @@ class DetachXpraClient(HelloRequestClient):
             "request"           : "detach",
             }
 
-    def do_command(self):
+    def do_command(self, caps : typedict):
         self.idle_add(self.send, "disconnect", DONE, "detaching")
         #not exiting the client here,
         #the server should disconnect us with the response
@@ -537,11 +646,11 @@ class RequestStartClient(HelloRequestClient):
 
     def dots(self):
         errwrite(".")
-        return self.server_capabilities is None
+        return not self.connection_established
 
     def _process_connection_lost(self, packet):
         errwrite("\n")
-        HelloRequestClient._process_connection_lost(self, packet)
+        super()._process_connection_lost(packet)
 
     def hello_request(self):
         if first_time("hello-request"):
@@ -555,12 +664,12 @@ class RequestStartClient(HelloRequestClient):
             "connect"                   : False,
             }
 
-    def server_connection_established(self):
+    def server_connection_established(self, caps : typedict):
         #the server should respond with the display chosen
         log("server_connection_established() exit_code=%s", self.exit_code)
-        display = self.server_capabilities.get("display")
+        display = caps.strget("display")
         if display:
-            mode = self.server_capabilities.get("mode")
+            mode = caps.strget("mode")
             session_type = {
                 "start"         : "seamless ",
                 "start-desktop" : "desktop ",
@@ -572,14 +681,14 @@ class RequestStartClient(HelloRequestClient):
                     from xpra.platform.displayfd import write_displayfd
                     log("writing display %s to displayfd=%s", display, self.displayfd)
                     write_displayfd(self.displayfd, display[1:])
-            except (IOError, OSError):
-                log("server_connection_established()", exc_info=True)
+            except OSError:
+                log("server_connection_established(..)", exc_info=True)
         if not self.exit_code:
             self.quit(0)
         return True
 
-    def __init__(self, conn, opts):
-        HelloRequestClient.__init__(self, conn, opts)
+    def __init__(self, opts):
+        super().__init__(opts)
         try:
             self.displayfd = int(opts.displayfd)
         except (ValueError, TypeError):

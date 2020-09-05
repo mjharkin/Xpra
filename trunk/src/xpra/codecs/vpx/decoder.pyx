@@ -1,10 +1,9 @@
 # This file is part of Xpra.
-# Copyright (C) 2012-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2012-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 #cython: auto_pickle=False, wraparound=False, cdivision=True, language_level=3
-from __future__ import absolute_import
 
 import os
 import sys
@@ -15,26 +14,17 @@ log = Logger("decoder", "vpx")
 
 from xpra.codecs.codec_constants import get_subsampling_divs
 from xpra.codecs.image_wrapper import ImageWrapper
-from xpra.buffers.membuf cimport padbuf, MemBuf, memalign, object_as_buffer, memory_as_pybuffer #pylint: disable=syntax-error
-from xpra.os_util import bytestostr, OSX
+from xpra.buffers.membuf cimport padbuf, MemBuf, object_as_buffer #pylint: disable=syntax-error
+from xpra.os_util import bytestostr
 from xpra.util import envint
 
-from libc.stdint cimport uint8_t, int64_t
+from libc.stdint cimport uint8_t
 from libc.string cimport memset, memcpy
 from libc.stdlib cimport malloc
 from xpra.monotonic_time cimport monotonic_time
 
 
-#sensible default:
-cpus = 2
-try:
-    cpus = os.cpu_count()
-except:
-    try:
-        import multiprocessing
-        cpus = multiprocessing.cpu_count()
-    except:
-        pass
+cpus = os.cpu_count()
 cdef int VPX_THREADS = envint("XPRA_VPX_THREADS", max(1, cpus-1))
 
 cdef inline int roundup(int n, int m):
@@ -58,6 +48,8 @@ cdef extern from "vpx/vpx_codec.h":
 
 cdef extern from "vpx/vpx_image.h":
     cdef int VPX_IMG_FMT_I420
+    cdef int VPX_IMG_FMT_I444
+    cdef int VPX_IMG_FMT_HIGHBITDEPTH
     ctypedef struct vpx_image_t:
         unsigned int w
         unsigned int h
@@ -101,20 +93,11 @@ cdef extern from "vpx/vpx_decoder.h":
 
 #https://groups.google.com/a/webmproject.org/forum/?fromgroups#!msg/webm-discuss/f5Rmi-Cu63k/IXIzwVoXt_wJ
 #"RGB is not supported.  You need to convert your source to YUV, and then compress that."
-COLORSPACES = {}
 CODECS = ["vp8", "vp9"]
-COLORSPACES["vp8"] = ["YUV420P"]
-vp9_cs = ["YUV420P"]
-#this is the ABI version with libvpx 1.4.0:
-if VPX_DECODER_ABI_VERSION>=9:
-    vp9_cs.append("YUV444P")
-else:
-    if OSX:
-        pass        #cannot build libvpx 1.4 on osx... so skip warning
-    else:
-        log.warn("Warning: libvpx ABI version %s is too old:", VPX_DECODER_ABI_VERSION)
-        log.warn(" disabling YUV444P support with VP9")
-COLORSPACES["vp9"] = vp9_cs
+COLORSPACES = {
+    "vp8"   : ("YUV420P"),
+    "vp9"   : ("YUV420P", "YUV444P"),
+    }
 
 
 def init_module():
@@ -129,8 +112,10 @@ def get_abi_version():
     return VPX_DECODER_ABI_VERSION
 
 def get_version():
-    v = vpx_codec_version_str()
-    return bytestostr(v)
+    b = vpx_codec_version_str()
+    vstr = b.decode("latin1")
+    log("vpx_codec_version_str()=%s", vstr)
+    return vstr.lstrip("v")
 
 def get_type():
     return "vpx"
@@ -188,6 +173,7 @@ cdef class Decoder:
     cdef object __weakref__
 
     def init_context(self, encoding, width, height, colorspace):
+        log("vpx decoder init_context%s", (encoding, width, height, colorspace))
         assert encoding in CODECS
         assert colorspace in get_input_colorspaces(encoding)
         cdef int flags = 0
@@ -211,13 +197,13 @@ cdef class Decoder:
         dec_cfg.threads = self.max_threads
         if vpx_codec_dec_init_ver(self.context, codec_iface, &dec_cfg,
                               flags, VPX_DECODER_ABI_VERSION)!=VPX_CODEC_OK:
-            raise Exception("failed to instantiate %s decoder with ABI version %s: %s" % (encoding, VPX_DECODER_ABI_VERSION, bytestostr(vpx_codec_error(self.context))))
+            raise Exception("failed to instantiate %s decoder with ABI version %s: %s" % (encoding, VPX_DECODER_ABI_VERSION, self.codec_error_str()))
         log("vpx_codec_dec_init_ver for %s succeeded with ABI version %s", encoding, VPX_DECODER_ABI_VERSION)
 
     def __repr__(self):
         return "vpx.Decoder(%s)" % self.encoding
 
-    def get_info(self):                 #@DuplicatedSignature
+    def get_info(self) -> dict:                 #@DuplicatedSignature
         return {
                 "type"      : self.get_type(),
                 "width"     : self.get_width(),
@@ -283,12 +269,12 @@ cdef class Decoder:
         with nogil:
             ret = vpx_codec_decode(self.context, buf, buf_len, NULL, 0)
         if ret!=VPX_CODEC_OK:
-            log.error("Error: vpx_codec_decode: %s", bytestostr(vpx_codec_error(self.context)))
+            log.error("Error: vpx_codec_decode: %s", self.codec_error_str())
             return None
         with nogil:
             img = vpx_codec_get_frame(self.context, &iter)
         if img==NULL:
-            log.error("Error: vpx_codec_get_frame: %s", bytestostr(vpx_codec_error(self.context)))
+            log.error("Error: vpx_codec_get_frame: %s", self.codec_error_str())
             return None
         strides = []
         pixels = []
@@ -316,6 +302,9 @@ cdef class Decoder:
         cdef double elapsed = 1000*(monotonic_time()-start)
         log("%s frame %4i decoded in %3ims", self.encoding, self.frames, elapsed)
         return ImageWrapper(0, 0, self.width, self.height, pixels, self.get_colorspace(), 24, strides, 1, ImageWrapper.PLANAR_3)
+
+    def codec_error_str(self):
+        return vpx_codec_error(self.context).decode("latin1")
 
 
 def selftest(full=False):

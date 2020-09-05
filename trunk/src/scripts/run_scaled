@@ -1,0 +1,109 @@
+#!/usr/bin/python3
+
+import os
+import sys
+
+def join(args):
+    import shlex
+    #shlex.join() was only added in Python 3.8:
+    if hasattr(shlex, "join"):
+        return shlex.join(args)
+    return ' '.join(shlex.quote(x) for x in args)
+
+def which(pgm):
+    path = os.getenv("PATH")
+    for p in path.split(os.path.pathsep):
+        p = os.path.join(p, pgm)
+        if os.path.exists(p) and os.access(p, os.X_OK):
+            return p
+    return None
+
+def usage(msg, exit_code=1):
+    if msg:
+        sys.stderr.write("%s\n" % msg)
+    sys.stderr.write("usage: run_scaled --scale=VALUE application [optionalarguments]\n")
+    sys.stderr.write("   ie: run_scaled --scale=2     xterm +ls -fg blue\n")
+    sys.exit(exit_code)
+
+def parse_scale(scale):
+    try:
+        try:
+            if scale.endswith("%"):
+                return float(scale[:-1])/100
+            else:
+                return float(scale)
+        except ValueError:
+            #try parsing as a fraction:
+            from fractions import Fraction
+            return float(Fraction(scale))
+    except ValueError:
+        usage("invalid scale value '%s'" % (scale,))
+    if scale<0.1 or scale>10:
+        usage("scale value %f is out of range" % (scale,))
+
+def get_screen_spec():
+    #figure out the dpi and vfb size to use,
+    dpi = width = height = 0
+    from xpra.os_util import OSEnvContext
+    with OSEnvContext():
+        os.environ["GDK_SCALE"] = "1"
+        os.environ["GDK_DPI_SCALE"] = "1"
+        import gi
+        gi.require_version('Gdk', '3.0')
+        from gi.repository import Gdk
+        screen = Gdk.Screen.get_default()
+        if screen:
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                width = screen.get_width()
+                height = screen.get_height()
+                if 0<width<2**16 and 0<height<2**16:
+                    def dpiv(size, size_mm):
+                        return int(0.5 + size * 25.4 / size_mm)
+                    dpi = (dpiv(width, screen.get_width_mm()) + dpiv(height, screen.get_height_mm()))//2
+    return width, height, dpi
+
+#default value:
+scale = 2
+command_argv = []
+for i, x in enumerate(sys.argv[1:]):
+    if x in ("--help", "-h"):
+        usage(None, 0)
+    if x.startswith("--scale="):
+        scale = parse_scale(x[len("--scale="):])
+    else:
+        command_argv.append(x)
+if not command_argv:
+    usage("missing command argument")
+
+xpra_cmd = which("xpra")
+if not xpra_cmd and sys.argv[0].find("run_scaled")>=0:
+    xpra_cmd = sys.argv[0].replace("run_scaled", "xpra")
+if not xpra_cmd or not os.path.exists(xpra_cmd):
+    usage("cannot find 'xpra' on $PATH")
+
+xpra_argv = [
+    xpra_cmd,
+    "start",
+    "--start-child=\"%s\"" % join(command_argv),
+    "--attach=yes",
+    "--exit-with-children=yes",
+    "--desktop-scaling=%s" % scale,
+    "--encodings=rgb",
+    "--compress=0",
+    "--systemd-run=no",
+    ]
+
+width, height, dpi = get_screen_spec()
+#if found, prefer Xvfb, as it is faster to startup:
+xvfb = which("Xvfb")
+if xvfb:
+    from xpra.scripts.config import get_Xvfb_command
+    xpra_argv.append("--xvfb=%s" % join(get_Xvfb_command(width, height, dpi*scale)))
+if width>0 and height>0:
+    xpra_argv.append("--resize-display=%ix%i" % (width//scale, height//scale))
+if 10<dpi<1000:
+    xpra_argv.append("--dpi=%i" % (dpi*scale))
+
+os.execv(xpra_cmd, xpra_argv)

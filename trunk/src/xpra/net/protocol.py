@@ -1,5 +1,5 @@
 # This file is part of Xpra.
-# Copyright (C) 2011-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2011-2020 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008, 2009, 2010 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -11,11 +11,12 @@
 import os
 from socket import error as socket_error
 from threading import Lock, Event
+from queue import Queue
 
-from xpra.os_util import PYTHON3, Queue, memoryview_to_bytes, strtobytes, bytestostr, hexstr
-from xpra.util import repr_ellipsized, csv, envint, envbool
+from xpra.os_util import memoryview_to_bytes, strtobytes, bytestostr, hexstr
+from xpra.util import repr_ellipsized, ellipsizer, csv, envint, envbool, typedict, nonl
 from xpra.make_thread import make_thread, start_thread
-from xpra.net.common import ConnectionClosedException          #@UndefinedVariable (pydev false positive)
+from xpra.net.common import ConnectionClosedException,may_log_packet    #@UndefinedVariable (pydev false positive)
 from xpra.net.bytestreams import ABORT
 from xpra.net import compression
 from xpra.net.compression import (
@@ -23,6 +24,7 @@ from xpra.net.compression import (
     InvalidCompressionException, Compressed, LevelCompressed, Compressible, LargeStructure,
     )
 from xpra.net import packet_encoding
+from xpra.net.socket_util import guess_header_protocol
 from xpra.net.packet_encoding import (
     decode, sanity_checks as packet_encoding_sanity_checks,
     InvalidPacketEncodingException,
@@ -33,14 +35,6 @@ from xpra.log import Logger
 
 log = Logger("network", "protocol")
 cryptolog = Logger("network", "crypto")
-
-
-#stupid python version breakage:
-JOIN_TYPES = (str, bytes)
-if PYTHON3:
-    long = int              #@ReservedAssignment
-    unicode = str           #@ReservedAssignment
-    JOIN_TYPES = (bytes, )
 
 
 USE_ALIASES = envbool("XPRA_USE_ALIASES", True)
@@ -111,7 +105,7 @@ def do_verify_packet(tree, packet):
                 r = False
             if not do_verify_packet(new_tree("value for key='%s'" % str(k)), v):
                 r = False
-    elif isinstance(packet, (int, bool, str, bytes, unicode)):
+    elif isinstance(packet, (int, bool, str, bytes)):
         pass
     else:
         err("unsupported type: %s" % type(packet))
@@ -119,7 +113,7 @@ def do_verify_packet(tree, packet):
     return r
 
 
-class Protocol(object):
+class Protocol:
     """
         This class handles sending and receiving packets,
         it will encode and compress them before sending,
@@ -144,7 +138,7 @@ class Protocol(object):
         self.read_buffer_size = READ_BUFFER_SIZE
         self.hangup_delay = 1000
         self._conn = conn
-        if FAKE_JITTER>0:
+        if FAKE_JITTER>0:   # pragma: no cover
             from xpra.net.fake_jitter import FakeJitter
             fj = FakeJitter(self.timeout_add, process_packet_cb, FAKE_JITTER)
             self._process_packet_cb =  fj.process_packet_cb
@@ -168,15 +162,15 @@ class Protocol(object):
         #initial value which may get increased by client/server after handshake:
         self.max_packet_size = 4*1024*1024
         self.abs_max_packet_size = 256*1024*1024
-        self.large_packets = [b"hello", b"window-metadata", b"sound-data", b"notify_show", b"setting-change"]
+        self.large_packets = [b"hello", b"window-metadata", b"sound-data", b"notify_show", b"setting-change", b"shell-reply"]
         self.send_aliases = {}
         self.receive_aliases = {}
         self._log_stats = None          #None here means auto-detect
         self._closed = False
         self.encoder = "none"
-        self._encoder = self.noencode
+        self._encoder = packet_encoding.get_encoder("none")
         self.compressor = "none"
-        self._compress = compression.nocompress
+        self._compress = compression.get_compressor("none")
         self.compression_level = 0
         self.cipher_in = None
         self.cipher_in_name = None
@@ -214,7 +208,7 @@ class Protocol(object):
         self.enable_encoder(self.encoder)
 
 
-    def is_closed(self):
+    def is_closed(self) -> bool:
         return self._closed
 
 
@@ -266,25 +260,23 @@ class Protocol(object):
     def accept(self):
         pass
 
-    def parse_remote_caps(self, caps):
-        self.send_aliases = caps.dictget("aliases", {})
+    def parse_remote_caps(self, caps : typedict):
+        for k,v in caps.dictget("aliases", {}).items():
+            self.send_aliases[bytestostr(k)] = v
 
-    def get_info(self, alias_info=True):
+    def get_info(self, alias_info=True) -> dict:
         info = {
             "large_packets"         : tuple(bytestostr(x) for x in self.large_packets),
             "compression_level"     : self.compression_level,
             "max_packet_size"       : self.max_packet_size,
             "aliases"               : USE_ALIASES,
             }
-        c = self._compress
+        c = self.compressor
         if c:
-            info["compressor"] = compression.get_compressor_name(self._compress)
-        e = self._encoder
+            info["compressor"] = c
+        e = self.encoder
         if e:
-            if self._encoder==self.noencode:        #pylint: disable=comparison-with-callable
-                info["encoder"] = "noencode"
-            else:
-                info["encoder"] = packet_encoding.get_encoder_name(self._encoder)
+            info["encoder"] = e
         if alias_info:
             info["send_alias"] = self.send_aliases
             info["receive_alias"] = self.receive_aliases
@@ -331,7 +323,7 @@ class Protocol(object):
                 self._read_thread.start()
         self.idle_add(start_network_read_thread)
         if SEND_INVALID_PACKET:
-            self.timeout_add(SEND_INVALID_PACKET*1000, self.raw_write, SEND_INVALID_PACKET_DATA)
+            self.timeout_add(SEND_INVALID_PACKET*1000, self.raw_write, "invalid", SEND_INVALID_PACKET_DATA)
 
 
     def send_disconnect(self, reasons, done_callback=None):
@@ -361,12 +353,12 @@ class Protocol(object):
         shm.set()
         #start the format thread:
         if not self._write_format_thread and not self._closed:
-            self._write_format_thread = make_thread(self._write_format_thread_loop, "format", daemon=True)
+            self._write_format_thread = make_thread(self.write_format_thread_loop, "format", daemon=True)
             self._write_format_thread.start()
         #from now on, take shortcut:
         self.source_has_more = self._source_has_more.set
 
-    def _write_format_thread_loop(self):
+    def write_format_thread_loop(self):
         log("write_format_thread_loop starting")
         try:
             while not self._closed:
@@ -429,9 +421,9 @@ class Protocol(object):
             else:
                 #the xpra packet header:
                 #(WebSocketProtocol may also add a websocket header too)
-                header = self.make_chunk_header(packet_type, proto_flags, level, index, actual_size)
+                header = self.make_chunk_header(packet_type, proto_flags, level, index, payload_size)
                 if actual_size<PACKET_JOIN_SIZE:
-                    if not isinstance(data, JOIN_TYPES):
+                    if not isinstance(data, bytes):
                         data = memoryview_to_bytes(data)
                     items.append(header+data)
                 else:
@@ -442,14 +434,14 @@ class Protocol(object):
         if frame_header:
             item0 = items[0]
             if len(item0)<PACKET_JOIN_SIZE:
-                if not isinstance(item0, JOIN_TYPES):
+                if not isinstance(item0, bytes):
                     item0 = memoryview_to_bytes(item0)
                 items[0] = frame_header + item0
             else:
                 items.insert(0, frame_header)
-        self.raw_write(items, start_send_cb, end_send_cb, fail_cb, synchronous, more)
+        self.raw_write(packet_type, items, start_send_cb, end_send_cb, fail_cb, synchronous, more)
 
-    def make_xpra_header(self, _packet_type, proto_flags, level, index, payload_size):
+    def make_xpra_header(self, _packet_type, proto_flags, level, index, payload_size) -> bytes:
         return pack_header(proto_flags, level, index, payload_size)
 
     def noframe_header(self, _packet_type, _items):
@@ -459,7 +451,7 @@ class Protocol(object):
     def start_write_thread(self):
         self._write_thread = start_thread(self._write_thread_loop, "write", daemon=True)
 
-    def raw_write(self, items, start_cb=None, end_cb=None, fail_cb=None, synchronous=True, more=False):
+    def raw_write(self, packet_type, items, start_cb=None, end_cb=None, fail_cb=None, synchronous=True, more=False):
         """ Warning: this bypasses the compression and packet encoder! """
         if self._write_thread is None:
             self.start_write_thread()
@@ -513,20 +505,6 @@ class Protocol(object):
         log("enable_compressor(%s): %s", compressor, self._compress)
 
 
-    def noencode(self, data):
-        #just send data as a string for clients that don't understand xpra packet format:
-        if PYTHON3:
-            import codecs
-            def b(x):
-                if isinstance(x, bytes):
-                    return x
-                return codecs.latin_1_encode(x)[0]
-        else:
-            def b(x):               #@DuplicatedSignature
-                return x
-        return b(": ".join(str(x) for x in data)+"\n"), FLAGS_NOHEADER
-
-
     def encode(self, packet_in):
         """
         Given a packet (tuple or list of items), converts it for the wire.
@@ -551,18 +529,16 @@ class Protocol(object):
             if item is None:
                 raise TypeError("invalid None value in %s packet at index %s" % (packet[0], i))
             ti = type(item)
-            if ti in (int, long, bool, dict, list, tuple):
+            if ti in (int, bool, dict, list, tuple):
                 continue
             try:
                 l = len(item)
             except TypeError as e:
                 raise TypeError("invalid type %s in %s packet at index %s: %s" % (ti, packet[0], i, e))
             if ti==LargeStructure:
-                item = item.data
-                packet[i] = item
-                ti = type(item)
+                packet[i] = item.data
                 continue
-            elif ti==Compressible:
+            if ti==Compressible:
                 #this is a marker used to tell us we should compress it now
                 #(used by the client for clipboard data)
                 item = item.compress()
@@ -585,7 +561,7 @@ class Protocol(object):
                     packet[i] = item.data
                     min_comp_size += l
                     size_check += l
-            elif ti in (str, bytes) and level>0 and l>LARGE_PACKET_SIZE:
+            elif ti==bytes and level>0 and l>LARGE_PACKET_SIZE:
                 log.warn("Warning: found a large uncompressed item")
                 log.warn(" in packet '%s' at position %i: %s bytes", packet[0], i, len(item))
                 #add new binary packet with large item:
@@ -599,9 +575,13 @@ class Protocol(object):
         #now the main packet (or what is left of it):
         packet_type = packet[0]
         self.output_stats[packet_type] = self.output_stats.get(packet_type, 0)+1
-        if USE_ALIASES and self.send_aliases and packet_type in self.send_aliases:
-            #replace the packet type with the alias:
-            packet[0] = self.send_aliases[packet_type]
+        if USE_ALIASES:
+            alias = self.send_aliases.get(packet_type)
+            if alias:
+                #replace the packet type with the alias:
+                packet[0] = alias
+            else:
+                log("packet type send alias not found for '%s'", packet_type)
         try:
             main_packet, proto_flags = self._encoder(packet)
         except Exception:
@@ -617,7 +597,7 @@ class Protocol(object):
             log.warn(" '%s' packet is %s bytes: ", packet_type, len(main_packet))
             log.warn(" argument types: %s", csv(type(x) for x in packet[1:]))
             log.warn(" sizes: %s", csv(len(strtobytes(x)) for x in packet[1:]))
-            log.warn(" packet: %s", repr_ellipsized(str(packet)))
+            log.warn(" packet: %s", repr_ellipsized(packet))
         #compress, but don't bother for small packets:
         if level>0 and len(main_packet)>min_comp_size:
             try:
@@ -629,9 +609,10 @@ class Protocol(object):
             packets.append((proto_flags, 0, cl, cdata))
         else:
             packets.append((proto_flags, 0, 0, main_packet))
+        may_log_packet(True, packet_type, packet)
         return packets
 
-    def set_compression_level(self, level):
+    def set_compression_level(self, level : int):
         #this may be used next time encode() is called
         assert 0<=level<=10, "invalid compression level: %s (must be between 0 and 10" % level
         self.compression_level = level
@@ -648,7 +629,7 @@ class Protocol(object):
             if not self._closed:
                 #ConnectionClosedException means the warning has been logged already
                 self._connection_lost("%s connection %s closed" % (name, self._conn))
-        except (OSError, IOError, socket_error) as e:
+        except (OSError, socket_error) as e:
             if not self._closed:
                 self._internal_error("%s connection %s reset" % (name, self._conn), e, exc_info=e.args[0] not in ABORT)
         except Exception as e:
@@ -765,13 +746,19 @@ class Protocol(object):
     #delegates to invalid_header()
     #(so this can more easily be intercepted and overriden
     # see tcp-proxy)
-    def _invalid_header(self, data, msg=""):
-        self.invalid_header(self, data, msg)
+    def invalid_header(self, proto, data, msg="invalid packet header"):
+        self._invalid_header(proto, data, msg)
 
-    def invalid_header(self, _proto, data, msg="invalid packet header"):
-        err = "%s: '%s'" % (msg, hexstr(data[:HEADER_SIZE]))
-        if len(data)>1:
-            err += " read buffer=%s (%i bytes)" % (repr_ellipsized(data), len(data))
+    def _invalid_header(self, proto, data, msg=""):
+        log("invalid_header(%s, %s bytes: '%s', %s)",
+               proto, len(data or ""), msg, ellipsizer(data))
+        guess = guess_header_protocol(data)
+        if guess[0]:
+            err = "invalid packet format, %s" % guess[1]
+        else:
+            err = "%s: '%s'" % (msg, hexstr(data[:HEADER_SIZE]))
+            if len(data)>1:
+                err += " read buffer=%s (%i bytes)" % (repr_ellipsized(data), len(data))
         self.gibberish(err, data)
 
 
@@ -834,8 +821,8 @@ class Protocol(object):
                 if payload_size<0:
                     #try to handle the first buffer:
                     buf = read_buffers[0]
-                    if not header and buf[0] not in ("P", ord("P")):
-                        self._invalid_header(buf, "invalid packet header byte %s" % buf)
+                    if not header and buf[0]!=ord("P"):
+                        self.invalid_header(self, buf, "invalid packet header byte %s" % nonl(bytestostr(buf)))
                         return
                     #how much to we need to slice off to complete the header:
                     read = min(len(buf), HEADER_SIZE-len(header))
@@ -858,7 +845,7 @@ class Protocol(object):
 
                     #sanity check size (will often fail if not an xpra client):
                     if data_size>self.abs_max_packet_size:
-                        self._invalid_header(header, "invalid size in packet header: %s" % data_size)
+                        self.invalid_header(self, header, "invalid size in packet header: %s" % data_size)
                         return
 
                     if protocol_flags & FLAGS_CIPHER:
@@ -866,7 +853,7 @@ class Protocol(object):
                             cryptolog.warn("Warning: received cipher block,")
                             cryptolog.warn(" but we don't have a cipher to decrypt it with,")
                             cryptolog.warn(" not an xpra client?")
-                            self._invalid_header(header, "invalid encryption packet flag (no cipher configured)")
+                            self.invalid_header(self, header, "invalid encryption packet flag (no cipher configured)")
                             return
                         padding_size = self.cipher_in_block_size - (data_size % self.cipher_in_block_size)
                         payload_size = data_size + padding_size
@@ -928,7 +915,7 @@ class Protocol(object):
                     if padding_size > 0:
                         def debug_str(s):
                             try:
-                                return hexstr(bytearray(s))
+                                return hexstr(s)
                             except Exception:
                                 return csv(tuple(s))
                         # pad byte value is number of padding bytes added
@@ -938,10 +925,13 @@ class Protocol(object):
                         else:
                             actual_padding = data[-padding_size:]
                             cryptolog.warn("Warning: %s decryption failed: invalid padding", self.cipher_in_name)
-                            cryptolog(" data does not end with %s padding bytes %s",
-                                      self.cipher_in_padding, debug_str(padtext))
-                            cryptolog(" but with %s (%s)", debug_str(actual_padding), type(data))
-                            cryptolog(" decrypted data: %s", debug_str(data[:128]))
+                            cryptolog(" cipher block size=%i, data size=%i", self.cipher_in_block_size, data_size)
+                            cryptolog(" data does not end with %i %s padding bytes %s (%s)",
+                                      padding_size, self.cipher_in_padding, debug_str(padtext), type(padtext))
+                            cryptolog(" but with %i bytes: %s (%s)",
+                                      len(actual_padding), debug_str(actual_padding), type(data))
+                            cryptolog(" decrypted data (%i bytes): %r..", len(data), data[:128])
+                            cryptolog(" decrypted data (hex): %s..", debug_str(data[:128]))
                             self._internal_error("%s encryption padding error - wrong key?" % self.cipher_in_name)
                             return
                         data = data[:-padding_size]
@@ -982,7 +972,7 @@ class Protocol(object):
                     continue
                 #final packet (packet_index==0), decode it:
                 try:
-                    packet = decode(data, protocol_flags)
+                    packet = list(decode(data, protocol_flags))
                 except InvalidPacketEncodingException as e:
                     self.invalid("invalid packet encoding: %s" % e, data)
                     return
@@ -1010,9 +1000,10 @@ class Protocol(object):
                     raw_packets = {}
 
                 packet_type = packet[0]
-                if self.receive_aliases and isinstance(packet_type, int) and packet_type in self.receive_aliases:
+                if self.receive_aliases and isinstance(packet_type, int):
                     packet_type = self.receive_aliases.get(packet_type)
-                    packet[0] = packet_type
+                    if packet_type:
+                        packet[0] = packet_type
                 self.input_stats[packet_type] = self.output_stats.get(packet_type, 0)+1
                 if LOG_RAW_PACKET_SIZE:
                     log("%s: %i bytes", packet_type, HEADER_SIZE + payload_size)
@@ -1180,7 +1171,7 @@ class Protocol(object):
         self._write_lock = None
         self._source_has_more = None
         self._conn = None       #should be redundant
-        def noop():
+        def noop(): # pragma: no cover
             pass
         self.source_has_more = noop
 

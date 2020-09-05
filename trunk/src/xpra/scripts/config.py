@@ -1,21 +1,17 @@
 #!/usr/bin/env python
 # This file is part of Xpra.
-# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import sys
 import os
 
-#this is here so we can expose the python "platform" module
-#before we import xpra.platform
-import platform as python_platform
-assert python_platform
 from xpra.util import csv
 from xpra.os_util import (
-    WIN32, OSX, PYTHON2, POSIX,
+    WIN32, OSX, POSIX,
     osexpand, getuid, getgid, get_username_for_uid,
-    is_CentOS, is_RedHat, is_Fedora, is_Debian, is_Ubuntu, getUbuntuVersion,
+    is_Debian, is_Ubuntu, is_arm,
     )
 
 def warn(msg):
@@ -33,7 +29,7 @@ class InitInfo(Exception):
 class InitExit(Exception):
     def __init__(self, status, msg):
         self.status = status
-        Exception.__init__(self, msg)
+        super().__init__(msg)
 
 
 DEBUG_CONFIG_PROPERTIES = os.environ.get("XPRA_DEBUG_CONFIG_PROPERTIES", "").split()
@@ -43,10 +39,10 @@ DEFAULT_NET_WM_NAME = os.environ.get("XPRA_NET_WM_NAME", "Xpra")
 
 if POSIX:
     DEFAULT_POSTSCRIPT_PRINTER = os.environ.get("XPRA_POSTSCRIPT_PRINTER", "drv:///sample.drv/generic.ppd")
-else:
+else: # pragma: no cover
     DEFAULT_POSTSCRIPT_PRINTER = ""
 DEFAULT_PULSEAUDIO = None   #auto
-if OSX or WIN32:
+if OSX or WIN32: # pragma: no cover
     DEFAULT_PULSEAUDIO = False
 
 
@@ -64,7 +60,7 @@ def has_sound_support():
 
 def get_xorg_bin():
     # Detect Xorg Binary
-    if os.uname()[4].startswith("arm") and is_Debian() and os.path.exists("/usr/bin/Xorg"):
+    if is_arm() and is_Debian() and os.path.exists("/usr/bin/Xorg"):
         #Raspbian breaks if we use a different binary..
         return "/usr/bin/Xorg"
     for p in (
@@ -77,7 +73,7 @@ def get_xorg_bin():
         if os.path.exists(p):
             return p
     #look for it in $PATH:
-    for x in os.environ.get("PATH").split(os.pathsep):
+    for x in os.environ.get("PATH").split(os.pathsep): # pragma: no cover
         xorg = os.path.join(x, "Xorg")
         if os.path.isfile(xorg):
             return xorg
@@ -89,7 +85,7 @@ def get_Xdummy_confdir():
     xrd = get_runtime_dir()
     if xrd:
         base = "${XDG_RUNTIME_DIR}/xpra"
-    else:
+    else:   # pragma: no cover
         base = "${HOME}/.xpra"
     return base+"/xorg.conf.d/$PID"
 
@@ -110,27 +106,37 @@ def get_Xdummy_command(xorg_cmd="Xorg", log_dir="${XPRA_LOG_DIR}", xorg_conf="/e
           ]
     return cmd
 
-def get_Xvfb_command():
+def get_Xvfb_command(width=5760, height=2560, dpi=96):
     cmd = ["Xvfb",
            "+extension", "GLX",
            "+extension", "Composite",
-           "-screen", "0", "5760x2560x24+32",
+           "-screen", "0", "%ix%ix24+32" % (width, height),
            #better than leaving to vfb after a resize?
-           "-dpi", "96",
            "-nolisten", "tcp",
            "-noreset",
            "-auth", "$XAUTHORITY"
            ]
+    if dpi>0:
+        cmd += ["-dpi", str(dpi)]
     return cmd
 
-def detect_xvfb_command(conf_dir="/etc/xpra/", bin_dir=None, Xdummy_ENABLED=None, Xdummy_wrapper_ENABLED=None):
+def detect_xvfb_command(conf_dir="/etc/xpra/", bin_dir=None,
+                        Xdummy_ENABLED=None, Xdummy_wrapper_ENABLED=None, warn=warn):
     #returns the xvfb command to use
-    if WIN32:
+    if WIN32:   # pragma: no cover
         return ""
-    if OSX:
+    if OSX:     # pragma: no cover
         return get_Xvfb_command()
-    if sys.platform.find("bsd")>=0 and Xdummy_ENABLED is None:
-        warn("Warning: sorry, no support for Xdummy on %s" % sys.platform)
+    if sys.platform.find("bsd")>=0 and Xdummy_ENABLED is None:  # pragma: no cover
+        if warn:
+            warn("Warning: sorry, no support for Xdummy on %s" % sys.platform)
+        return get_Xvfb_command()
+    if is_arm():
+        #arm struggles to launch Xdummy, so use Xvfb:
+        return get_Xvfb_command()
+    if is_Ubuntu() or is_Debian():
+        #These distros do weird things and this can cause the real X11 server to crash
+        #see ticket #2834
         return get_Xvfb_command()
 
     xorg_bin = get_xorg_bin()
@@ -139,7 +145,8 @@ def detect_xvfb_command(conf_dir="/etc/xpra/", bin_dir=None, Xdummy_ENABLED=None
             #honour what was specified:
             use_wrapper = Xdummy_wrapper_ENABLED
         elif not xorg_bin:
-            warn("Warning: Xorg binary not found, assuming the wrapper is needed!")
+            if warn:
+                warn("Warning: Xorg binary not found, assuming the wrapper is needed!")
             use_wrapper = True
         else:
             #auto-detect
@@ -147,7 +154,8 @@ def detect_xvfb_command(conf_dir="/etc/xpra/", bin_dir=None, Xdummy_ENABLED=None
             xorg_stat = os.stat(xorg_bin)
             if (xorg_stat.st_mode & stat.S_ISUID)!=0:
                 if (xorg_stat.st_mode & stat.S_IROTH)==0:
-                    warn("%s is suid and not readable, Xdummy support unavailable" % xorg_bin)
+                    if warn:
+                        warn("%s is suid and not readable, Xdummy support unavailable" % xorg_bin)
                     return get_Xvfb_command()
                 debug("%s is suid and readable, using the xpra_Xdummy wrapper" % xorg_bin)
                 use_wrapper = True
@@ -169,13 +177,29 @@ def detect_xvfb_command(conf_dir="/etc/xpra/", bin_dir=None, Xdummy_ENABLED=None
     if Xdummy_ENABLED is True:
         return Xorg_suid_check()
     debug("Xdummy support unspecified, will try to detect")
-
-    if is_Ubuntu():
-        rnum = getUbuntuVersion()
-        if rnum<(16, 10):
-            debug("Warning: Ubuntu Xenial breaks Xorg/Xdummy usage - using Xvfb fallback")
-            return get_Xvfb_command()
     return Xorg_suid_check()
+
+
+def xvfb_cmd_str(xvfb):
+    xvfb_str = ""
+    while xvfb:
+        s = ""
+        while xvfb:
+            item = xvfb[0]
+            l = len(item)
+            if (item.startswith("-") or item.startswith("+")) and len(xvfb)>1:
+                l += len(xvfb[1])
+            if s and len(s)+l>55:
+                break
+            v = xvfb.pop(0)
+            if not s:
+                s += v
+            else:
+                s += " "+v
+        if xvfb_str:
+            xvfb_str += " \\\n    "
+        xvfb_str += s
+    return xvfb_str
 
 
 def OpenGL_safety_check():
@@ -183,24 +207,25 @@ def OpenGL_safety_check():
     #based on the code found here:
     #http://spth.virii.lu/eof2/articles/WarGame/vboxdetect.html
     #because it used to cause hard VM crashes when we probe the GL driver!
-    try:
-        from ctypes import cdll
-        if cdll.LoadLibrary("VBoxHook.dll"):
-            return "VirtualBox is present (VBoxHook.dll)"
-    except (ImportError, OSError):
-        pass
-    try:
+    if WIN32:   # pragma: no cover
         try:
-            f = None
-            f = open("\\\\.\\VBoxMiniRdrDN", "r")
-            return True, "VirtualBox is present (VBoxMiniRdrDN)"
-        finally:
-            if f:
-                f.close()
-    except Exception as e:
-        import errno
-        if e.args[0]==errno.EACCES:
-            return "VirtualBox is present (VBoxMiniRdrDN)"
+            from ctypes import cdll
+            if cdll.LoadLibrary("VBoxHook.dll"):
+                return "VirtualBox is present (VBoxHook.dll)"
+        except (ImportError, OSError):
+            pass
+        try:
+            try:
+                f = None
+                f = open("\\\\.\\VBoxMiniRdrDN", "r")
+                return True, "VirtualBox is present (VBoxMiniRdrDN)"
+            finally:
+                if f:
+                    f.close()
+        except Exception as e:
+            import errno
+            if e.args[0]==errno.EACCES:
+                return "VirtualBox is present (VBoxMiniRdrDN)"
     return None
 
 
@@ -223,9 +248,11 @@ def get_build_info():
             BUILD_DATE, BUILD_TIME, BUILD_BIT,
             CYTHON_VERSION, COMPILER_VERSION,
             )
+        info.insert(0, "")
+        einfo = "Python %i.%i" % sys.version_info[:2]
         if BUILD_BIT:
-            info.insert(0, "")
-            info.insert(0, BUILD_BIT)
+            einfo += ", "+BUILD_BIT
+        info.insert(0, einfo)
         try:
             from xpra.build_info import BUILT_BY, BUILT_ON
             info.append("built on %s by %s" % (BUILT_ON, BUILT_BY))
@@ -272,11 +299,7 @@ def read_config(conf_file):
     if not os.path.isfile(conf_file):
         debug("read_config(%s) is not a file!", conf_file)
         return d
-    if PYTHON2:
-        mode = "rU"
-    else:
-        mode = "r"
-    with open(conf_file, mode) as f:
+    with open(conf_file, "r") as f:
         lines = []
         no = 0
         for line in f:
@@ -523,6 +546,7 @@ OPTION_TYPES = {
                     "open-url"          : str,
                     "file-transfer"     : str,
                     "printing"          : str,
+                    "headerbar"         : str,
                     "challenge-handlers": list,
                     #ssl options:
                     "ssl"               : str,
@@ -547,7 +571,7 @@ OPTION_TYPES = {
                     "min-speed"         : int,
                     "compression_level" : int,
                     "dpi"               : int,
-                    "file-size-limit"   : int,
+                    "file-size-limit"   : str,
                     "idle-timeout"      : int,
                     "server-idle-timeout" : int,
                     "sync-xvfb"         : int,
@@ -562,9 +586,9 @@ OPTION_TYPES = {
                     "daemon"            : bool,
                     "start-via-proxy"   : bool,
                     "attach"            : bool,
-                    "use-display"       : bool,
+                    "use-display"       : str,
                     "fake-xinerama"     : str,
-                    "resize_display"    : bool,
+                    "resize_display"    : str,
                     "tray"              : bool,
                     "pulseaudio"        : bool,
                     "dbus-proxy"        : bool,
@@ -596,9 +620,11 @@ OPTION_TYPES = {
                     "modal-windows"     : bool,
                     "bandwidth-detection" : bool,
                     "ssh-upgrade"       : bool,
+                    "splash"            : bool,
                     #arrays of strings:
                     "pulseaudio-configure-commands" : list,
                     "socket-dirs"       : list,
+                    "client-socket-dirs" : list,
                     "remote-xpra"       : list,
                     "encodings"         : list,
                     "proxy-video-encoders" : list,
@@ -610,6 +636,8 @@ OPTION_TYPES = {
                     "compressors"       : list,
                     "packet-encoders"   : list,
                     "key-shortcut"      : list,
+                    "source"            : list,
+                    "source-start"      : list,
                     "start"             : list,
                     "start-child"       : list,
                     "start-after-connect"       : list,
@@ -652,7 +680,6 @@ NON_COMMAND_LINE_OPTIONS = [
     "pdf-printer",
     "postscript-printer",
     "add-printer-options",
-    "file-size-limit",
     ]
 
 START_COMMAND_OPTIONS = [
@@ -665,11 +692,8 @@ BIND_OPTIONS = ["bind", "bind-tcp", "bind-udp", "bind-ssl", "bind-ws", "bind-wss
 
 #keep track of the options added since v1,
 #so we can generate command lines that work with older supported versions:
-OPTIONS_ADDED_SINCE_V1 = [
-    "attach", "open-files", "open-url", "pixel-depth",
-    "uid", "gid", "chdir", "min-port", "rfb-upgrade", "bandwidth-limit",
-    "forward-xdg-open", "modal-windows", "bandwidth-detection",
-    "bind-ssh", "ssh-auth", "ssh-upgrade",
+OPTIONS_ADDED_SINCE_V3 = [
+    "source", "source-start",
     ]
 OPTIONS_COMPAT_NAMES = {
     "--compression_level=" : "-z"
@@ -681,10 +705,11 @@ CLIENT_OPTIONS = ["title", "username", "password", "session-name",
                   "remote-clipboard", "local-clipboard",
                   "tcp-encryption", "tcp-encryption-keyfile", "encryption",  "encryption-keyfile",
                   "systemd-run", "systemd-run-args",
-                  "socket-dir", "socket-dirs",
+                  "socket-dir", "socket-dirs", "client-socket-dirs",
                   "border", "window-close", "min-size", "max-size", "desktop-scaling",
                   "file-transfer", "file-size-limit", "download-path",
                   "open-command", "open-files", "printing", "open-url",
+                  "headerbar",
                   "challenge-handlers",
                   "dbus-proxy",
                   "remote-logging",
@@ -728,19 +753,21 @@ PROXY_START_OVERRIDABLE_OPTIONS = [
     "input-method",
     "microphone", "speaker", "sound-source", "pulseaudio",
     "idle-timeout", "server-idle-timeout",
-    "use-display", "fake-xinerama", "resize_display", "dpi", "pixel-depth",
+    "use-display",
+    "fake-xinerama", "resize_display", "dpi", "pixel-depth",
     "readonly", "keyboard-sync", "cursors", "bell", "notifications", "xsettings",
     "system-tray", "sharing", "lock", "windows", "webcam", "html",
     "terminate-children", "exit-with-children", "exit-with-client",
     "av-sync", "global-menus",
     "forward-xdg-open", "modal-windows", "bandwidth-detection",
     "ssh-upgrade",
+    "splash",
     "printing", "file-transfer", "open-command", "open-files", "open-url", "start-new-commands",
     "mmap", "mmap-group", "mdns",
     "auth", "vsock-auth", "tcp-auth", "udp-auth", "ws-auth", "wss-auth", "ssl-auth", "ssh-auth", "rfb-auth",
     "bind", "bind-vsock", "bind-tcp", "bind-udp", "bind-ssl", "bind-ws", "bind-wss", "bind-ssh", "bind-rfb",
     "rfb-upgrade", "bandwidth-limit",
-    "start", "start-child",
+    "start", "start-child", "source", "source-start",
     "start-after-connect", "start-child-after-connect",
     "start-on-connect", "start-child-on-connect",
     "start-on-last-client-exit", "start-child-on-last-client-exit",
@@ -761,10 +788,7 @@ def get_default_key_shortcuts():
                (True,   "#+F2:show_start_new_command"),
                (True,   "#+F3:show_bug_report"),
                (True,   "#+F4:quit"),
-               (True,   "#+F5:increase_quality"),
-               (True,   "#+F6:decrease_quality"),
-               (True,   "#+F7:increase_speed"),
-               (True,   "#+F8:decrease_speed"),
+               (True,   "#+F5:show_window_info"),
                (True,   "#+F10:magic_key"),
                (True,   "#+F11:show_session_info"),
                (True,   "#+F12:toggle_debug"),
@@ -779,21 +803,19 @@ def get_default_key_shortcuts():
                (True,   "#+bar:scalereset"),
                (True,   "#+question:scalingoff"),
                (OSX,    "#+degree:scalereset"),
+               (OSX,    "meta+grave:void"),
+               (OSX,    "meta+shift+asciitilde:void"),
                )
                  if e]
 
 def get_default_systemd_run():
     if WIN32 or OSX:
         return "no"
-    #don't use systemd-run on CentOS / RedHat
-    #(it causes failures with "Failed to create bus connection: No such file or directory")
-    if is_CentOS() or is_RedHat():
-        return "no"
-    if is_Fedora():
-        return "no"
     #systemd-run was previously broken in Fedora 26:
     #https://github.com/systemd/systemd/issues/3388
     #but with newer kernels, it is working again..
+    #now that we test it before using it,
+    #it should be safe to leave it on auto:
     return "auto"
 
 def get_default_pulseaudio_command():
@@ -809,10 +831,8 @@ def get_default_pulseaudio_command():
         "--load=module-x11-publish",
         "--log-level=2", "--log-target=stderr",
         ]
-    #we don't enable memfd on Ubuntu 16.04,
-    #we just don't disable it (because the option does not exist!):
     from xpra.util import envbool
-    MEMFD = envbool("XPRA_PULSEAUDIO_MEMFD", is_Ubuntu() and getUbuntuVersion()<=(16, 4))
+    MEMFD = envbool("XPRA_PULSEAUDIO_MEMFD", False)
     if not MEMFD:
         cmd.append("--enable-memfd=no")
     return cmd
@@ -829,7 +849,7 @@ def get_defaults():
         OPEN_COMMAND, DEFAULT_PULSEAUDIO_CONFIGURE_COMMANDS,
         DEFAULT_ENV, CAN_DAEMONIZE, SYSTEM_PROXY_SOCKET,
         )
-    from xpra.platform.paths import get_download_dir, get_remote_run_xpra_scripts
+    from xpra.platform.paths import get_download_dir, get_remote_run_xpra_scripts, get_socket_dirs, get_client_socket_dirs
     try:
         from xpra.platform.info import get_username
         username = get_username()
@@ -856,25 +876,20 @@ def get_defaults():
     for conf_dir in conf_dirs:
         if conf_dir and os.path.exists(conf_dir):
             break
-    xvfb = detect_xvfb_command(conf_dir, bin_dir)
-    if WIN32:
-        bind_dirs = ["Main"]
-    else:
-        bind_dirs = ["auto"]
+    xvfb = detect_xvfb_command(conf_dir, bin_dir, warn=None)
+    xvfb_str = xvfb_cmd_str(xvfb)
 
     ssl_protocol = "TLSv1_2"
-    if sys.version_info<(2, 7, 9):
-        ssl_protocol = "SSLv23"
 
     if POSIX and not OSX:
         from xpra.x11.fakeXinerama import find_libfakeXinerama
-        fake_xinerama = find_libfakeXinerama()
+        fake_xinerama = find_libfakeXinerama() or "no"
     else:
         fake_xinerama = "no"
 
     GLOBAL_DEFAULTS = {
                     "encoding"          : "auto",
-                    "title"             : "@title@ on @client-machine@",
+                    "title"             : "@title@ on @hostname@",
                     "username"          : username,
                     "password"          : "",
                     "wm-name"           : DEFAULT_NET_WM_NAME,
@@ -904,7 +919,7 @@ def get_defaults():
                     "systemd-run"       : get_default_systemd_run(),
                     "systemd-run-args"  : "",
                     "system-proxy-socket" : SYSTEM_PROXY_SOCKET,
-                    "xvfb"              : " ".join(xvfb),
+                    "xvfb"              : xvfb_str,
                     "chdir"             : "",
                     "socket-dir"        : "",
                     "log-dir"           : "auto",
@@ -931,7 +946,7 @@ def get_defaults():
                     "socket-permissions": "600",
                     "exec-wrapper"      : "",
                     "dbus-launch"       : "dbus-launch --sh-syntax --close-stderr",
-                    "webcam"            : ["auto", "no"][OSX],
+                    "webcam"            : ["auto", "no"][OSX or WIN32],
                     "mousewheel"        : "on",
                     "input-devices"     : "auto",
                     "shortcut-modifiers": "auto",
@@ -939,6 +954,7 @@ def get_defaults():
                     "open-url"          : "auto",
                     "file-transfer"     : "auto",
                     "printing"          : "yes",
+                    "headerbar"         : ["auto", "no"][OSX or WIN32],
                     "challenge-handlers": ["all"],
                     #ssl options:
                     "ssl"               : "auto",
@@ -960,7 +976,7 @@ def get_defaults():
                     "min-speed"         : 30,
                     "compression_level" : 1,
                     "dpi"               : 0,
-                    "file-size-limit"   : 100,
+                    "file-size-limit"   : "100M",
                     "idle-timeout"      : 0,
                     "server-idle-timeout" : 0,
                     "sync-xvfb"         : 0,
@@ -973,15 +989,15 @@ def get_defaults():
                     "daemon"            : CAN_DAEMONIZE,
                     "start-via-proxy"   : False,
                     "attach"            : None,
-                    "use-display"       : False,
+                    "use-display"       : "auto",
                     "fake-xinerama"     : fake_xinerama,
-                    "resize-display"    : not OSX and not WIN32,
+                    "resize-display"    : ["no", "yes"][not OSX and not WIN32],
                     "tray"              : True,
                     "pulseaudio"        : DEFAULT_PULSEAUDIO,
                     "dbus-proxy"        : not OSX and not WIN32,
                     "mmap"              : "yes",
                     "mmap-group"        : "auto",
-                    "speaker"           : ["disabled", "on"][has_sound_support()],
+                    "speaker"           : ["disabled", "on"][has_sound_support() and not is_arm()],
                     "microphone"        : ["disabled", "off"][has_sound_support()],
                     "video-scaling"     : "auto",
                     "readonly"          : False,
@@ -1011,11 +1027,13 @@ def get_defaults():
                     "desktop-fullscreen": False,
                     "global-menus"      : True,
                     "forward-xdg-open"  : True,
-                    "modal-windows"     : True,
+                    "modal-windows"     : False,
                     "bandwidth-detection" : True,
                     "ssh-upgrade"       : True,
+                    "splash"            : None,
                     "pulseaudio-configure-commands"  : [" ".join(x) for x in DEFAULT_PULSEAUDIO_CONFIGURE_COMMANDS],
-                    "socket-dirs"       : [],
+                    "socket-dirs"       : get_socket_dirs(),
+                    "client-socket-dirs" : get_client_socket_dirs(),
                     "remote-xpra"       : get_remote_run_xpra_scripts(),
                     "encodings"         : ["all"],
                     "proxy-video-encoders" : [],
@@ -1027,7 +1045,7 @@ def get_defaults():
                     "compressors"       : ["all"],
                     "packet-encoders"   : ["all"],
                     "key-shortcut"      : get_default_key_shortcuts(),
-                    "bind"              : bind_dirs,
+                    "bind"              : ["auto"],
                     "bind-vsock"        : [],
                     "bind-tcp"          : [],
                     "bind-udp"          : [],
@@ -1046,6 +1064,8 @@ def get_defaults():
                     "ssh-auth"          : [],
                     "rfb-auth"          : [],
                     "password-file"     : [],
+                    "source"            : [],
+                    "source-start"      : [],
                     "start"             : [],
                     "start-child"       : [],
                     "start-after-connect"       : [],
@@ -1113,7 +1133,7 @@ def parse_number(numtype, k, v, auto=0):
         return auto
     try:
         return numtype(v)
-    except ValueError as e:
+    except (ValueError, TypeError) as e:
         warn("Warning: cannot parse value '%s' for '%s' as a type %s: %s" % (v, k, numtype, e))
         return None
 
@@ -1123,6 +1143,8 @@ def print_number(i, auto_value=0):
     return str(i)
 
 def parse_with_unit(numtype, v, subunit="bps", min_value=250000):
+    if isinstance(v, int):
+        return v
     #special case for bandwidth-limit, which can be specified using units:
     try:
         v = str(v).lower().strip()
@@ -1149,7 +1171,7 @@ def parse_with_unit(numtype, v, subunit="bps", min_value=250000):
             assert f>=min_value, "value is too low"
         return int(f)
     except Exception as e:
-        raise InitException("invalid value for %s '%s': %s" % (numtype, v, e))
+        raise InitException("invalid value for %s '%s': %s" % (numtype, v, e)) from None
 
 
 def validate_config(d={}, discard=NO_FILE_OPTIONS, extras_types={}, extras_validation={}):
@@ -1235,7 +1257,7 @@ def dict_to_config(options):
     return config
 
 
-class XpraConfig(object):
+class XpraConfig:
     def __repr__(self):
         return "XpraConfig(%s)" % self.__dict__
 
@@ -1300,11 +1322,8 @@ def fixup_video_all_or_none(options):
     options.video_decoders  = getlist(vdstr,    "video decoders",   "ALL_VIDEO_DECODER_OPTIONS")
     options.proxy_video_encoders = getlist(pvestr, "proxy video encoders", "HARDWARE_ENCODER_OPTIONS")
 
-def fixup_socketdirs(options, defaults):
-    if not options.socket_dirs:
-        from xpra.platform.paths import get_socket_dirs
-        options.socket_dirs = getattr(defaults, "socket_dirs", get_socket_dirs())
-    elif isinstance(options.socket_dirs, str):
+def fixup_socketdirs(options):
+    if isinstance(options.socket_dirs, str):
         options.socket_dirs = options.socket_dirs.split(os.path.pathsep)
     else:
         assert isinstance(options.socket_dirs, (list, tuple))
@@ -1327,7 +1346,7 @@ def fixup_pings(options):
 
 def fixup_encodings(options):
     try:
-        from xpra.codecs.codec_constants import PREFERED_ENCODING_ORDER
+        from xpra.codecs.codec_constants import PREFERRED_ENCODING_ORDER
     except ImportError:
         return
     RENAME = {"jpg" : "jpeg"}
@@ -1336,7 +1355,7 @@ def fixup_encodings(options):
     estr = _csvstr(options.encodings)
     if estr=="all":
         #replace with an actual list
-        options.encodings = list(PREFERED_ENCODING_ORDER)
+        options.encodings = list(PREFERRED_ENCODING_ORDER)
         return
     encodings = [RENAME.get(x, x) for x in _nodupes(estr)]
     if "rgb" in encodings:
@@ -1421,13 +1440,15 @@ def abs_paths(options):
                 continue
             setattr(options, f, os.path.abspath(v))
 
-def fixup_options(options, defaults={}):
+
+def fixup_options(options, skip_encodings=False):
+    if not skip_encodings:
+        fixup_encodings(options)
     fixup_pings(options)
-    fixup_encodings(options)
     fixup_compression(options)
     fixup_packetencoding(options)
     fixup_video_all_or_none(options)
-    fixup_socketdirs(options, defaults)
+    fixup_socketdirs(options)
     fixup_clipboard(options)
     fixup_keyboard(options)
     abs_paths(options)

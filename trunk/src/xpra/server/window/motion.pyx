@@ -1,43 +1,33 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2016-2017 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2016-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-#!python
 #cython: auto_pickle=False, boundscheck=False, wraparound=False, cdivision=True, language_level=3
 
-from __future__ import absolute_import
-
-import os
-import time
 import struct
-import collections
 
 from xpra.util import envbool, repr_ellipsized, csv
 from xpra.log import Logger
 log = Logger("encoding", "scroll")
 
-from xpra.buffers.membuf cimport memalign, object_as_buffer, xxh64      #pylint: disable=syntax-error
+from xpra.buffers.membuf cimport memalign, object_as_buffer, xxh3      #pylint: disable=syntax-error
 from xpra.rectangle import rectangle
 
 
 cdef int DEBUG = envbool("XPRA_SCROLL_DEBUG", False)
 
 
-from libc.stdint cimport uint8_t, int16_t, uint16_t, int16_t, uint64_t, uintptr_t
+from libc.stdint cimport uint8_t, int16_t, uint16_t, uint32_t, uint64_t, uintptr_t
 from libc.stdlib cimport free, malloc
-from libc.string cimport memset, memcpy
+from libc.string cimport memset
 
 
-DEF MIN_LINE_COUNT = 5
-
-DEF MAXINT64 = 2**63
-DEF MAXUINT64 = 2**64
-DEF MASK64 = 2**64-1
+MIN_LINE_COUNT = 2
 
 def h(v):
-    return hex(v).lstrip("0x").rstrip("L")
+    return hex(v)[2:].rstrip("L")
 
 cdef inline uint64_t hashtoint64(s):
     return <uint64_t> struct.unpack(b"@L", s)[0]
@@ -46,7 +36,7 @@ cdef da(uint64_t *a, uint16_t l):
     return repr_ellipsized(csv(h(a[i]) for i in range(l)))
 
 cdef dd(uint16_t *d, uint16_t l):
-    return repr_ellipsized(csv(h(d[i]) for i in range(l)))
+    return csv(h(d[i]) for i in range(l))
 
 
 assert sizeof(uint64_t)==64//8, "uint64_t is not 64-bit: %i!" % sizeof(uint64_t)
@@ -75,7 +65,7 @@ cdef class ScrollData:
         return "ScrollDistances(%ix%i)" % (self.width, self.height)
 
     #only used by the unit tests:
-    def _test_update(self, arr):
+    def test_update(self, arr):
         if self.a1:
             free(self.a1)
             self.a1 = NULL
@@ -98,6 +88,16 @@ cdef class ScrollData:
         if DEBUG:
             log("%s.update%s a1=%#x, a2=%#x, distances=%#x, current size: %ix%i", self, (repr_ellipsized(pixels), x, y, width, height, rowstride, bpp), <uintptr_t> self.a1, <uintptr_t> self.a2, <uintptr_t> self.distances, self.width, self.height)
         assert width>0 and height>0, "invalid dimensions: %ix%i" % (width, height)
+        #scroll area can move within the window:
+        self.x = x
+        self.y = y
+        #but cannot change size (checksums would not match):
+        if height!=self.height or width!=self.width:
+            if self.a1!=NULL or self.a2!=NULL or self.distances!=NULL:
+                log("new image size: %ix%i (was %ix%i), clearing reference checksums", width, height, self.width, self.height)
+                self.free()
+            self.width = width
+            self.height = height
         #this is a new picture, shift a2 into a1 if we have it:
         if self.a1:
             free(self.a1)
@@ -105,20 +105,6 @@ cdef class ScrollData:
         if self.a2:
             self.a1 = self.a2
             self.a2 = NULL
-        #scroll area can move within the window:
-        self.x = x
-        self.y = y
-        #but cannot change size (checksums would not match):
-        if height!=self.height or width!=self.width:
-            log("new image size: %ix%i (was %ix%i), clearing reference checksums", width, height, self.width, self.height)
-            if self.a1:
-                free(self.a1)
-                self.a1 = NULL
-            if self.distances:
-                free(self.distances)
-                self.distances = NULL
-            self.width = width
-            self.height = height
         #allocate new checksum array:
         assert self.a2==NULL
         cdef size_t asize = height*(sizeof(uint64_t))
@@ -133,11 +119,10 @@ cdef class ScrollData:
         cdef size_t row_len = width*bpp
         assert row_len<=rowstride, "invalid row length: %ix%i=%i but rowstride is %i" % (width, bpp, width*bpp, rowstride)
         cdef uint64_t *a2 = self.a2
-        cdef unsigned long long seed = 0
         cdef uint16_t i
         with nogil:
             for i in range(height):
-                a2[i] = <uint64_t> xxh64(buf, row_len, seed)
+                a2[i] = <uint64_t> xxh3(buf, row_len)
                 buf += rowstride
 
     def calculate(self, uint16_t max_distance=1000):
@@ -160,7 +145,7 @@ cdef class ScrollData:
         if self.distances==NULL:
             self.distances = <uint16_t*> memalign(2*l*sizeof(uint16_t))
             assert self.distances!=NULL, "distance memory allocation failed"
-        cdef uint16_t matches = 0
+        cdef uint32_t matches = 0
         with nogil:
             memset(self.distances, 0, 2*l*sizeof(uint16_t))
             for y2 in range(l):
@@ -205,7 +190,7 @@ cdef class ScrollData:
         cdef int16_t matches
         cdef uint16_t* distances = self.distances
         cdef uint16_t l = self.height
-        cdef size_t asize = l*(sizeof(uint8_t))
+        cdef size_t asize = l*sizeof(uint8_t)
         #use a temporary buffer to track the lines we have already dealt with:
         cdef uint8_t *line_state = <uint8_t*> malloc(asize)
         assert line_state!=NULL, "state map memory allocation failed"
@@ -231,31 +216,31 @@ cdef class ScrollData:
                             low = m_arr[j]
                             if low==0:
                                 break
-        #first collect the list of distances sorted by highest number of matches:
+        #first collect the list of distances:
         #(there can be more than one distance value for each match count):
         scroll_hits = {}
         for i in range(MAX_MATCHES):
             if m_arr[i]>min_hits:
                 scroll_hits.setdefault(m_arr[i], []).append(s_arr[i])
         if DEBUG:
-            log("scroll hits=%s", scroll_hits)
+            log("scroll hits=%s", dict(reversed(sorted(scroll_hits.items()))))
         #return a dict with the scroll distance as key,
         #and the list of matching lines in a dictionary:
         # {line-start : count, ..}
         cdef uint16_t start = 0, count = 0
         try:
-            scrolls = collections.OrderedDict()
+            scrolls = {}
             #starting with the highest matches
             for i in reversed(sorted(scroll_hits.keys())):
                 v = scroll_hits[i]
                 for scroll in v:
                     #find matching lines:
-                    line_defs = self.match_distance(line_state, scroll)
+                    line_defs = self.match_distance(line_state, scroll, MIN_LINE_COUNT)
                     if line_defs:
                         scrolls[scroll] = line_defs
             #same for the unmatched lines:
             #all the lines in tmp which have not been set by match_distance()
-            line_defs = collections.OrderedDict()
+            line_defs = {}
             for i in range(l):
                 if line_state[i]==0:
                     if count==0:
@@ -270,7 +255,7 @@ cdef class ScrollData:
             free(line_state)
         return scrolls, line_defs
 
-    cdef match_distance(self, uint8_t *line_state, int16_t distance):
+    cdef match_distance(self, uint8_t *line_state, int16_t distance, const uint8_t min_line_count):
         """
             find the lines that match the given scroll distance,
             return a dictionary with the starting line as key
@@ -278,6 +263,7 @@ cdef class ScrollData:
         """
         cdef uint64_t *a1 = self.a1
         cdef uint64_t *a2 = self.a2
+        cdef uint64_t v
         assert abs(distance)<=self.height, "invalid distance %i for size %i" % (distance, self.height)
         cdef uint16_t rstart = 0
         cdef uint16_t rend = self.height-distance
@@ -285,33 +271,34 @@ cdef class ScrollData:
             rstart = -distance
             rend = self.height
         cdef uint16_t i1, i2, start = 0, count = 0
-        line_defs = collections.OrderedDict()
+        line_defs = {}
         for i1 in range(rstart, rend):
             i2 = i1+distance
-            if line_state[i2]:
-                #this target line has been marked as matched already
-                continue
+            v = a1[i1]
             #if DEBUG:
-            #    log("%i: a1=%i / a2=%i", i, a1[i], a2[i+distance])
-            if a1[i1]==a2[i2]:
+            #    log("%i: a1=%i / a2=%i", i, a1[i], a2[i2])
+            if v==a2[i2] and v!=0:
                 #if DEBUG:
                 #    log("match at %i: %i", i, a1[i])
                 if count==0:
+                    if line_state[i2]:
+                        #this line has been matched already,
+                        #we don't need to start here
+                        continue
                     start = i1
                 count += 1
-                #mark the target line as dealt with:
             elif count>0:
                 #we had a match
-                if count>MIN_LINE_COUNT:
+                if count>min_line_count:
                     line_defs[start] = count
                 count = 0
-        if count>0:
+        if count>min_line_count:
             #last few lines ended as a match:
             line_defs[start] = count
         #clear the ones we have matched:
         for start, count in line_defs.items():
-            for i in range(count):
-                line_state[start+distance+i] = 1
+            for i1 in range(count):
+                line_state[start+distance+i1] = 1
         #if DEBUG:
         #    log("match_distance(%i)=%s", distance, line_defs)
         return line_defs
@@ -343,8 +330,7 @@ cdef class ScrollData:
         #if more than half has already been invalidated, drop it completely:
         if nonzero<=rect.height//2:
             log("invalidating whole scroll data as only %i of it remains valid", 100*nonzero//rect.height)
-            free(self.a2)
-            self.a2 = NULL
+            self.free()
 
 
     def get_best_match(self):

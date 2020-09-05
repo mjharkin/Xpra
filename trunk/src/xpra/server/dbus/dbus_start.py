@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # This file is part of Xpra.
-# Copyright (C) 2016-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2016-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -8,7 +8,7 @@ import os
 from subprocess import Popen, PIPE
 
 from xpra.util import nonl
-from xpra.os_util import POSIX, bytestostr, close_fds
+from xpra.os_util import POSIX, bytestostr
 from xpra.scripts.server import _get_int, _get_str, _save_int, _save_str
 from xpra.scripts.config import FALSE_OPTIONS
 from xpra.log import Logger
@@ -21,15 +21,12 @@ def start_dbus(dbus_launch):
         log("start_dbus(%s) disabled", dbus_launch)
         return 0, {}
     bus_address = os.environ.get("DBUS_SESSION_BUS_ADDRESS")
-    log("dbus_launch=%s, current DBUS_SESSION_BUS_ADDRESS=%s", dbus_launch, bus_address)
+    log("dbus_launch=%s, current DBUS_SESSION_BUS_ADDRESS=%s", nonl(dbus_launch), bus_address)
     if bus_address:
         log("start_dbus(%s) disabled, found an existing DBUS_SESSION_BUS_ADDRESS=%s", dbus_launch, bus_address)
         return 0, {}
     assert POSIX
     try:
-        def preexec():
-            os.setsid()
-            close_fds()
         env = dict((k,v) for k,v in os.environ.items() if k in (
             "PATH",
             "SSH_CLIENT", "SSH_CONNECTION",
@@ -40,7 +37,7 @@ def start_dbus(dbus_launch):
         import shlex
         cmd = shlex.split(dbus_launch)
         log("start_dbus(%s) env=%s", dbus_launch, env)
-        proc = Popen(cmd, stdin=PIPE, stdout=PIPE, shell=False, env=env, preexec_fn=preexec)
+        proc = Popen(cmd, stdin=PIPE, stdout=PIPE, env=env, start_new_session=True)
         out = proc.communicate()[0]
         assert proc.poll()==0, "exit code is %s" % proc.poll()
         #parse and add to global env:

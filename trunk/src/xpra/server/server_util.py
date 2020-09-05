@@ -1,5 +1,5 @@
 # This file is part of Xpra.
-# Copyright (C) 2017-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2017-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -7,58 +7,75 @@ import sys
 import os.path
 
 from xpra.util import envbool
-from xpra.os_util import OSX, shellsub, getuid, get_util_logger, osexpand, umask_context
+from xpra.os_util import OSX, POSIX, shellsub, getuid, get_util_logger, osexpand, umask_context
 from xpra.platform.dotxpra import norm_makepath
 from xpra.scripts.config import InitException
 
 
+def source_env(source=()) -> dict:
+    log = get_util_logger()
+    env = {}
+    for f in source:
+        e = env_from_sourcing(f)
+        log("source_env %s=%s", f, e)
+        env.update(e)
+    return env
+
+
+# credit: https://stackoverflow.com/a/47080959/428751
+# returns a dictionary of the environment variables resulting from sourcing a file
+def env_from_sourcing(file_to_source_path, include_unexported_variables=False):
+    import json
+    import subprocess
+    source = '%ssource %s' % ("set -a && " if include_unexported_variables else "", file_to_source_path)
+    dump = '/usr/bin/python -c "import os, json;print(json.dumps(dict(os.environ)))"'
+    pipe = subprocess.Popen(['/bin/bash', '-c', '%s && %s' % (source, dump)], stdout=subprocess.PIPE)
+    return json.loads(pipe.stdout.read())
+
+
 def sh_quotemeta(s):
-    return "'" + s.replace("'", "'\\''") + "'"
+    return b"'" + s.replace(b"'", b"'\\''") + b"'"
 
 def xpra_runner_shell_script(xpra_file, starting_dir, socket_dir):
     script = []
-    script.append("#!/bin/sh\n")
-    for var, value in os.environ.items():
+    script.append(b"#!/bin/sh\n")
+    for var, value in os.environb.items():
         # these aren't used by xpra, and some should not be exposed
         # as they are either irrelevant or simply do not match
         # the new environment used by xpra
         # TODO: use a whitelist
-        if var in ["XDG_SESSION_COOKIE", "LS_COLORS", "DISPLAY"]:
+        if var in (b"XDG_SESSION_COOKIE", b"LS_COLORS", b"DISPLAY"):
             continue
         #XPRA_SOCKET_DIR is a special case, it is handled below
-        if var=="XPRA_SOCKET_DIR":
+        if var==b"XPRA_SOCKET_DIR":
             continue
-        if var=="XPRA_ALT_PYTHON_RETRY":
-            #the environment might have changed,
-            #and we may need to retry with a different interpreter
-            #different from the one that created this script
-            continue
-        if var.startswith("BASH_FUNC"):
+        if var.startswith(b"BASH_FUNC"):
             #some versions of bash will apparently generate functions
             #that cannot be reloaded using this script
             continue
         # :-separated envvars that people might change while their server is
         # going:
-        if var in ("PATH", "LD_LIBRARY_PATH", "PYTHONPATH"):
+        if var in (b"PATH", b"LD_LIBRARY_PATH", b"PYTHONPATH"):
             #prevent those paths from accumulating the same values multiple times,
             #only keep the first one:
-            pval = value.split(os.pathsep)      #ie: ["/usr/bin", "/usr/local/bin", "/usr/bin"]
+            pathsep = os.pathsep.encode()
+            pval = value.split(pathsep)      #ie: ["/usr/bin", "/usr/local/bin", "/usr/bin"]
             seen = set()
-            value = os.pathsep.join(x for x in pval if not (x in seen or seen.add(x)))
-            script.append("%s=%s:\"$%s\"; export %s\n"
+            value = pathsep.join(x for x in pval if not (x in seen or seen.add(x)))
+            script.append(b"%s=%s:\"$%s\"; export %s\n"
                           % (var, sh_quotemeta(value), var, var))
         else:
-            script.append("%s=%s; export %s\n"
+            script.append(b"%s=%s; export %s\n"
                           % (var, sh_quotemeta(value), var))
     #XPRA_SOCKET_DIR is a special case, we want to honour it
     #when it is specified, but the client may override it:
     if socket_dir:
-        script.append('if [ -z "${XPRA_SOCKET_DIR}" ]; then\n')
-        script.append('    XPRA_SOCKET_DIR=%s; export XPRA_SOCKET_DIR\n' % sh_quotemeta(os.path.expanduser(socket_dir)))
-        script.append('fi\n')
+        script.append(b'if [ -z "${XPRA_SOCKET_DIR}" ]; then\n')
+        script.append(b'    XPRA_SOCKET_DIR=%s; export XPRA_SOCKET_DIR\n' % sh_quotemeta(os.path.expanduser(socket_dir).encode()))
+        script.append(b'fi\n')
     # We ignore failures in cd'ing, b/c it's entirely possible that we were
     # started from some temporary directory and all paths are absolute.
-    script.append("cd %s\n" % sh_quotemeta(starting_dir))
+    script.append(b"cd %s\n" % sh_quotemeta(starting_dir.encode()))
     if OSX:
         #OSX contortions:
         #The executable is the python interpreter,
@@ -67,8 +84,8 @@ def xpra_runner_shell_script(xpra_file, starting_dir, socket_dir):
         bini = sexec.rfind("Resources/bin/")
         if bini>0:
             sexec = os.path.join(sexec[:bini], "Resources", "MacOS", "Xpra")
-        script.append("_XPRA_SCRIPT=%s\n" % (sh_quotemeta(sexec),))
-        script.append("""
+        script.append(b"_XPRA_SCRIPT=%s\n" % (sh_quotemeta(sexec.encode()),))
+        script.append(b"""
 if which "$_XPRA_SCRIPT" > /dev/null; then
     # Happypath:
     exec "$_XPRA_SCRIPT" "$@"
@@ -78,9 +95,9 @@ else
 fi
 """)
     else:
-        script.append("_XPRA_PYTHON=%s\n" % (sh_quotemeta(sys.executable),))
-        script.append("_XPRA_SCRIPT=%s\n" % (sh_quotemeta(xpra_file),))
-        script.append("""
+        script.append(b"_XPRA_PYTHON=%s\n" % (sh_quotemeta(sys.executable.encode()),))
+        script.append(b"_XPRA_SCRIPT=%s\n" % (sh_quotemeta(xpra_file.encode()),))
+        script.append(b"""
 if which "$_XPRA_PYTHON" > /dev/null && [ -e "$_XPRA_SCRIPT" ]; then
     # Happypath:
     exec "$_XPRA_PYTHON" "$_XPRA_SCRIPT" "$@"
@@ -93,9 +110,10 @@ END
     exec xpra "$@"
 fi
 """)
-    return "".join(script)
+    return b"".join(script)
 
 def write_runner_shell_scripts(contents, overwrite=True):
+    assert POSIX
     # This used to be given a display-specific name, but now we give it a
     # single fixed name and if multiple servers are started then the last one
     # will clobber the rest.  This isn't great, but the tradeoff is that it
@@ -127,7 +145,7 @@ def write_runner_shell_scripts(contents, overwrite=True):
             with umask_context(0o022):
                 h = os.open(scriptpath, os.O_WRONLY|os.O_CREAT|os.O_TRUNC, 0o700)
                 try:
-                    os.write(h, contents.encode())
+                    os.write(h, contents)
                 finally:
                     os.close(h)
         except Exception as e:
@@ -163,12 +181,12 @@ def open_log_file(logpath):
     if os.path.exists(logpath):
         try:
             os.rename(logpath, logpath + ".old")
-        except (OSError, IOError):
+        except OSError:
             pass
     try:
         return os.open(logpath, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
     except OSError as e:
-        raise InitException("cannot open log file '%s': %s" % (logpath, e))
+        raise InitException("cannot open log file '%s': %s" % (logpath, e)) from None
 
 def select_log_file(log_dir, log_file, display_name):
     """ returns the log file path we should be using given the parameters,
@@ -233,7 +251,7 @@ def write_pidfile(pidfile):
             f.write("%s\n" % pidstr)
             try:
                 inode = os.fstat(f.fileno()).st_ino
-            except (OSError, IOError):
+            except OSError:
                 inode = 0
         log.info("wrote pid %s to '%s'", pidstr, pidfile)
     except Exception as e:
@@ -251,11 +269,11 @@ def rm_pidfile(pidfile, inode):
             log("cleanuppidfile: current inode=%i", i)
             if i!=inode:
                 return 0
-        except (OSError, IOError):
+        except OSError:
             pass
     try:
         os.unlink(pidfile)
-    except (OSError, IOError):
+    except OSError:
         log("rm_pidfile(%s, %s)", pidfile, inode, exc_info=True)
     return 0
 

@@ -1,19 +1,14 @@
 # This file is part of Xpra.
 # Copyright (C) 2008, 2009 Nathaniel Smith <njs@pobox.com>
-# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 #cython: auto_pickle=False, language_level=3
 
-from __future__ import absolute_import
-
 import struct
 
-from libc.stdint cimport uintptr_t  #pylint: disable=syntax-error
-
 from xpra.gtk_common.error import XError
-from xpra.os_util import strtobytes
 
 from xpra.log import Logger
 log = Logger("x11", "bindings", "window")
@@ -95,38 +90,35 @@ cdef extern from "X11/Xlib.h":
     int ConfigureNotify
 
     int NoEventMask
-    int KeyPressMask  
+    int KeyPressMask
     int KeyReleaseMask
-    int ButtonPressMask  
-    int ButtonReleaseMask  
-    int EnterWindowMask  
-    int LeaveWindowMask  
-    int PointerMotionMask  
-    int PointerMotionHintMask  
-    int Button1MotionMask  
-    int Button2MotionMask  
-    int Button3MotionMask 
-    int Button4MotionMask 
-    int Button5MotionMask 
-    int ButtonMotionMask 
+    int ButtonPressMask
+    int ButtonReleaseMask
+    int EnterWindowMask
+    int LeaveWindowMask
+    int PointerMotionMask
+    int PointerMotionHintMask
+    int Button1MotionMask
+    int Button2MotionMask
+    int Button3MotionMask
+    int Button4MotionMask
+    int Button5MotionMask
+    int ButtonMotionMask
     int KeymapStateMask
-    int ExposureMask 
-    int VisibilityChangeMask 
-    int StructureNotifyMask 
-    int ResizeRedirectMask 
-    int SubstructureNotifyMask 
-    int SubstructureRedirectMask 
-    int FocusChangeMask 
-    int PropertyChangeMask 
-    int ColormapChangeMask 
-    int OwnerGrabButtonMask 
+    int ExposureMask
+    int VisibilityChangeMask
+    int StructureNotifyMask
+    int ResizeRedirectMask
+    int SubstructureNotifyMask
+    int SubstructureRedirectMask
+    int FocusChangeMask
+    int PropertyChangeMask
+    int ColormapChangeMask
+    int OwnerGrabButtonMask
 
     int CWBorderWidth
     int CWSibling
     int CWStackMode
-    int SubstructureNotifyMask
-    int SubstructureRedirectMask
-    int FocusChangeMask
     int AnyPropertyType
     int Success
     int PropModeReplace
@@ -619,6 +611,41 @@ cdef class X11WindowBindingsInstance(X11CoreBindingsInstance):
         XUnmapWindow(self.display, xwindow)
         return serial
 
+
+    def getWindowAttributes(self, Window xwindow):
+        self.context_check()
+        cdef XWindowAttributes attrs
+        cdef Status status = XGetWindowAttributes(self.display, xwindow, &attrs)
+        if status==0:
+            return None
+        return {
+            "geometry"  : (attrs.x, attrs.y, attrs.width, attrs.height, attrs.border_width),
+            "depth"     : attrs.depth,
+            "visual"    : {
+                "visual-id"     : attrs.visual.visualid,
+                #"class"         : attrs.visual.c_class,
+                "red-mask"      : attrs.visual.red_mask,
+                "green-mask"    : attrs.visual.green_mask,
+                "blue-mask"     : attrs.visual.blue_mask,
+                "bits-per-rgb"  : attrs.visual.bits_per_rgb,
+                "map_entries"   : attrs.visual.map_entries,
+                },
+            "bit-gravity" : attrs.bit_gravity,
+            "win-gravity" : attrs.win_gravity,
+            "backing-store" : attrs.backing_store,
+            "backing-planes" : attrs.backing_planes,
+            "backing-pixel" : attrs.backing_pixel,
+            "save-under"    : bool(attrs.save_under),
+            #"colormap"  : 0,
+            "map-installed" : attrs.map_installed,
+            "map-state" : attrs.map_state,
+            "all-events-mask" : attrs.all_event_masks,
+            "your_event_mask"   : attrs.your_event_mask,
+            "do-not-propagate-mask" : attrs.do_not_propagate_mask,
+            "override-redirect"     : attrs.override_redirect,
+            }
+
+
     # Mapped status
     def is_mapped(self, Window xwindow):
         self.context_check()
@@ -968,7 +995,6 @@ cdef class X11WindowBindingsInstance(X11CoreBindingsInstance):
         e.xselection.requestor = xwindow
         e.xselection.selection = self.xatom(selection)
         e.xselection.target = self.xatom(target)
-        e.xselection.property = self.xatom(property)
         e.xselection.time = time
         if property:
             e.xselection.property = self.xatom(property)

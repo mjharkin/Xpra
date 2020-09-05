@@ -20,7 +20,7 @@ log = Logger("rfb")
 """
     Adds RFB packet handler to a server.
 """
-class RFBServer(object):
+class RFBServer:
 
     def __init__(self):
         self._window_to_id = {}
@@ -71,7 +71,7 @@ class RFBServer(object):
                 auth = auths[0]
             return RFBProtocol(self, conn, auth,
                                self.process_rfb_packet, self.get_rfb_pixelformat, self.session_name or "Xpra Server")
-        p = self.do_make_protocol("rfb", conn, rfb_protocol_class)
+        p = self.do_make_protocol("rfb", conn, {}, rfb_protocol_class)
         p.send_protocol_handshake()
 
     def process_rfb_packet(self, proto, packet):
@@ -109,7 +109,7 @@ class RFBServer(object):
         log("rfb handle sharing: accepted=%s, share count=%s, disconnected=%s", accepted, share_count, disconnected)
         if not accepted:
             return
-        source = RFBSource(proto, self._get_rfb_desktop_model(), proto.share)
+        source = RFBSource(proto, proto.share)
         if server_features.input_devices:
             source.keyboard_config = self.get_keyboard_config()
             self.set_keymap(source)
@@ -157,10 +157,10 @@ class RFBServer(object):
             return
         modifiers = []
         keyval = 0
-        keycode = source.keyboard_config.get_keycode(0, keyname, modifiers)
-        log("rfb keycode(%s)=%s", keyname, keycode)
+        keycode, group = source.keyboard_config.get_keycode(0, keyname, pressed, modifiers, 0, 0)
+        log("rfb keycode(%s)=%s, %s", keyname, keycode, group)
         if keycode:
-            is_mod = source.is_modifier(keyname, keycode)
+            is_mod = source.keyboard_config.is_modifier(keycode)
             self._handle_key(wid, bool(pressed), keyname, keyval, keycode, modifiers, is_mod, True)
 
     def _process_rfb_SetEncodings(self, _proto, packet):

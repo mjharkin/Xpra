@@ -1,19 +1,18 @@
 #!/usr/bin/env python
 # This file is part of Xpra.
-# Copyright (C) 2016-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2016-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import os
-import sys
 import time
 import subprocess
 
 from unit.process_test_util import ProcessTestUtil
 from xpra.util import envint
-from xpra.os_util import pollwait, bytestostr, POSIX, WIN32
-from xpra.platform.dotxpra import DotXpra
-from xpra.platform.paths import get_xpra_command
+from xpra.os_util import pollwait, WIN32
+from xpra.exit_codes import EXIT_STR
+from xpra.platform.dotxpra import DotXpra, DISPLAY_PREFIX
 from xpra.log import Logger
 
 log = Logger("test")
@@ -22,13 +21,23 @@ SERVER_TIMEOUT = envint("XPRA_TEST_SERVER_TIMEOUT", 8)
 STOP_WAIT_TIMEOUT = envint("XPRA_STOP_WAIT_TIMEOUT", 20)
 
 
+def estr(r):
+    s = EXIT_STR.get(r)
+    if s:
+        return "%s : %s" % (r, s)
+    return str(r)
+
+
 class ServerTestUtil(ProcessTestUtil):
 
     @classmethod
     def displays(cls):
-        if not POSIX:
-            return []
         return cls.dotxpra.displays()
+
+    @classmethod
+    def find_free_display(cls):
+        dno = cls.find_free_display_no(cls.displays())
+        return "%s%i" % (DISPLAY_PREFIX, dno)
 
     @classmethod
     def setUpClass(cls):
@@ -70,22 +79,14 @@ class ServerTestUtil(ProcessTestUtil):
         assert pollwait(xpra_list, 15) is not None, "xpra list returned %s" % xpra_list.poll()
 
 
-    def run_xpra(self, xpra_args, env=None, **kwargs):
+    def run_xpra(self, xpra_args, **kwargs):
         cmd = self.get_xpra_cmd()+list(xpra_args)
-        return self.run_command(cmd, env, **kwargs)
+        return self.run_command(cmd, **kwargs)
+
 
     @classmethod
     def get_xpra_cmd(cls):
-        xpra_cmd = get_xpra_command()
-        if xpra_cmd==["xpra"]:
-            xpra_cmd = [bytestostr(cls.which("xpra"))]
-        cmd = xpra_cmd + cls.default_xpra_args
-        pyexename = "python%i" % sys.version_info[0]
-        exe = bytestostr(xpra_cmd[0]).rstrip(".exe")
-        if not (exe.endswith("python") or exe.endswith(pyexename)):
-            #prepend python2 / python3:
-            cmd = [pyexename] + xpra_cmd + cls.default_xpra_args
-        return cmd
+        return ProcessTestUtil.get_xpra_cmd() + cls.default_xpra_args
 
 
     def run_server(self, *args):
@@ -141,16 +142,41 @@ class ServerTestUtil(ProcessTestUtil):
         return server_proc
 
     def stop_server(self, server_proc, subcommand, *connect_args):
-        assert subcommand in ("stop", "exit")
+        assert subcommand in ("stop", "exit"), "invalid stop subcommand '%s'" % subcommand
         if server_proc.poll() is not None:
-            return
+            raise Exception("cannot stop server, it has already exited, returncode=%i" % server_proc.poll())
         cmd = [subcommand]+list(connect_args)
         stopit = self.run_xpra(cmd)
+        log("stop_server%s stopit=%s", (server_proc, subcommand, connect_args), stopit)
         if pollwait(stopit, STOP_WAIT_TIMEOUT) is None:
-            self.show_proc_error(stopit, "stop server error")
-        assert pollwait(server_proc, STOP_WAIT_TIMEOUT) is not None, "server process %s failed to exit" % server_proc
+            log("failed to '%s' server: %s", subcommand, getattr(server_proc, "command", server_proc))
+            self.show_proc_pipes(server_proc)
+            self.show_proc_error(stopit, "%s server error" % subcommand)
+            raise Exception("server process %s failed to '%s'" % (server_proc, subcommand))
 
     def check_stop_server(self, server_proc, subcommand="stop", display=":99999"):
+        log("check_stop_server%s", (server_proc, subcommand, display))
         self.stop_server(server_proc, subcommand, display)
-        if display and display in self.dotxpra.displays():
-            raise Exception("server socket for display %s should have been removed" % display)
+        if not display:
+            return
+        for _ in range(10):
+            displays = self.dotxpra.displays()
+            log("check_stop_server: display=%s, displays=%s", display, displays)
+            if display not in displays:
+                return
+            time.sleep(1)
+        raise Exception("server socket for display %s should have been removed, but it is still found in %s" % (display, displays))
+
+    @classmethod
+    def get_server_info(cls, display):
+        #wait for client to own the clipboard:
+        cmd = cls.get_xpra_cmd()+["info", display]
+        out = cls.get_command_output(cmd)
+        #print("info=%s" % (out,))
+        info = {}
+        for line in out.decode().splitlines():
+            if line.find("=")>0:
+                k,v = line.split("=", 1)
+                info[k] = v
+        #print("info=%s" % (info,))
+        return info

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # This file is part of Xpra.
-# Copyright (C) 2017-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2017-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -13,9 +13,7 @@ from ctypes import (
 from ctypes.wintypes import (
     HWND, DWORD, WPARAM, LPARAM, HDC, HMONITOR, HMODULE,
     SHORT, ATOM, RECT, POINT, MAX_PATH, WCHAR, BYTE,
-    )
-from ctypes.wintypes import (
-    HANDLE, LPCWSTR, UINT, INT, BOOL, WORD, HGDIOBJ,
+    HANDLE, LPSTR, LPCWSTR, UINT, INT, BOOL, WORD, HGDIOBJ,
     LONG, LPVOID, HBITMAP, LPCSTR, LPWSTR, HWINSTA,
     HINSTANCE, HMENU, ULONG,
     )
@@ -102,6 +100,29 @@ class CIEXYZTRIPLE(Structure):
         ('ciexyzGreen', CIEXYZ),
     ]
 
+class BITMAPINFOHEADER(Structure):
+    _fields_ = [
+        ("biSize",          DWORD),
+        ("biWidth",         LONG),
+        ("biHeight",        LONG),
+        ("biPlanes",        WORD),
+        ("biBitCount",      WORD),
+        ("biCompression",   DWORD),
+        ("biSizeImage",     DWORD),
+        ("biXPelsPerMeter", LONG),
+        ("biYPelsPerMeter", LONG),
+        ("biClrUsed",       DWORD),
+        ("biClrImportant",  DWORD),
+        ]
+PBITMAPINFOHEADER = POINTER(BITMAPINFOHEADER)
+
+class BITMAPINFO(Structure):
+    _fields_ = [
+        ("bmiHeader",       BITMAPINFOHEADER),
+        ("bmiColors",       DWORD),
+        ]
+PBITMAPINFO = POINTER(BITMAPINFO)
+
 class BITMAPV5HEADER(Structure):
     _fields_ = [
         ('bV5Size',             DWORD),
@@ -129,6 +150,7 @@ class BITMAPV5HEADER(Structure):
         ('bV5ProfileSize',      DWORD),
         ('bV5Reserved',         DWORD),
     ]
+PBITMAPV5HEADER = POINTER(BITMAPV5HEADER)
 
 CCHDEVICENAME = 32
 class MONITORINFOEX(Structure):
@@ -139,6 +161,14 @@ class MONITORINFOEX(Structure):
         ('dwFlags', DWORD),
         ('szDevice', WCHAR * CCHDEVICENAME),
         ]
+
+class SECURITY_ATTRIBUTES(Structure):
+    _fields_ = [
+        ("nLength",                 c_int),
+        ("lpSecurityDescriptor",    c_void_p),
+        ("bInheritHandle",          c_int),
+        ]
+LPSECURITY_ATTRIBUTES = POINTER(SECURITY_ATTRIBUTES)
 
 def GetMonitorInfo(hmonitor):
     info = MONITORINFOEX()
@@ -156,6 +186,8 @@ def GetMonitorInfo(hmonitor):
         }
 
 kernel32 = WinDLL("kernel32", use_last_error=True)
+LocalFree = kernel32.LocalFree
+FormatMessageW = kernel32.FormatMessageW
 SetConsoleTitleA = kernel32.SetConsoleTitleA
 SetConsoleTitleA.restype = INT
 SetConsoleTitleA.argtypes = [LPCTSTR]
@@ -197,6 +229,9 @@ GlobalFree.argtypes = [HGLOBAL]
 GlobalLock = kernel32.GlobalLock
 GlobalLock.restype = LPVOID
 GlobalLock.argtypes = [HGLOBAL]
+GlobalSize = kernel32.GlobalSize
+GlobalSize.argtypes = [HGLOBAL]
+GlobalSize.restype = c_size_t
 GlobalUnlock = kernel32.GlobalUnlock
 GlobalUnlock.restype = BOOL
 GlobalUnlock.argtypes = [HGLOBAL]
@@ -206,6 +241,15 @@ WideCharToMultiByte.argtypes = [UINT, DWORD, LPCWSTR, c_int, c_void_p, c_int, LP
 MultiByteToWideChar = kernel32.MultiByteToWideChar
 MultiByteToWideChar.restype = c_int
 MultiByteToWideChar.argtypes =  [UINT, DWORD, LPCSTR, c_int, LPWSTR, c_int]
+WTSGetActiveConsoleSessionId = kernel32.WTSGetActiveConsoleSessionId
+WTSGetActiveConsoleSessionId.restype = DWORD
+WTSGetActiveConsoleSessionId.argtypes = []
+QueryFullProcessImageNameA = kernel32.QueryFullProcessImageNameA
+QueryFullProcessImageNameA.restype = BOOL
+QueryFullProcessImageNameA.argtypes = [HANDLE, DWORD, LPSTR, PDWORD]
+OpenProcess = kernel32.OpenProcess
+OpenProcess.restype = HANDLE
+OpenProcess.argtypes = [DWORD, BOOL, DWORD]
 
 user32 = WinDLL("user32", use_last_error=True)
 RegisterClassExA = user32.RegisterClassExA
@@ -229,7 +273,11 @@ DestroyWindow = user32.DestroyWindow
 DestroyWindow.restype = BOOL
 DestroyWindow.argtypes = [HWND]
 DefWindowProcA = user32.DefWindowProcA
+DefWindowProcA.argtypes = [HWND, UINT, WPARAM, LPARAM]
+DefWindowProcA.restype = INT
 DefWindowProcW = user32.DefWindowProcW
+DefWindowProcW.argtypes = [HWND, UINT, WPARAM, LPARAM]
+DefWindowProcW.restype = INT
 MessageBoxA = user32.MessageBoxA
 MessageBoxA.restype = INT
 MessageBoxA.argtypes = [HWND, LPCTSTR, LPCTSTR, UINT]
@@ -289,6 +337,9 @@ GetKeyState.restype = SHORT
 GetKeyboardLayout = user32.GetKeyboardLayout
 GetKeyboardLayoutList = user32.GetKeyboardLayoutList
 GetKeyboardLayoutList.argtypes = [c_int, POINTER(HANDLE*32)]
+GetKeyboardLayoutName = user32.GetKeyboardLayoutNameA
+GetKeyboardLayoutName.restype = BOOL
+GetKeyboardLayoutName.argtypes = [LPSTR]
 SystemParametersInfoA = user32.SystemParametersInfoA
 EnumWindows = user32.EnumWindows
 EnumWindowsProc = WINFUNCTYPE(BOOL, HWND, LPARAM)
@@ -296,6 +347,7 @@ IsWindowVisible = user32.IsWindowVisible
 GetWindowTextLengthW = user32.GetWindowTextLengthW
 GetWindowTextW = user32.GetWindowTextW
 GetWindowThreadProcessId = user32.GetWindowThreadProcessId
+GetWindowThreadProcessId.argtypes = [HWND, LPDWORD]
 GetWindowThreadProcessId.restype = DWORD
 GetDesktopWindow = user32.GetDesktopWindow
 GetDesktopWindow.restype = HWND
@@ -351,16 +403,34 @@ OpenWindowStationW = user32.OpenWindowStationW
 OpenWindowStationW.restype = HWINSTA
 ACCESS_MASK = DWORD
 OpenWindowStationW.argtypes = [LPWSTR, BOOL, ACCESS_MASK]
+OpenWindowStationA = user32.OpenWindowStationA
+OpenWindowStationA.restype = HWINSTA
+OpenWindowStationA.argtypes = [LPCSTR, BOOL, ACCESS_MASK]
 GetProcessWindowStation = user32.GetProcessWindowStation
 GetProcessWindowStation.restype = HWINSTA
 GetProcessWindowStation.argtypes = []
 SetProcessWindowStation = user32.SetProcessWindowStation
 SetProcessWindowStation.restype = BOOL
 SetProcessWindowStation.argtypes = [HWINSTA]
+CreateWindowStationA = user32.CreateWindowStationA
+CreateWindowStationA.restype = HWINSTA
+CreateWindowStationA.argtypes = [LPCSTR, DWORD, ACCESS_MASK, LPSECURITY_ATTRIBUTES]
 CloseWindowStation = user32.CloseWindowStation
 CloseWindowStation.restype = BOOL
 CloseWindowStation.argtypes = [HWINSTA]
+WINSTAENUMPROCA = WINFUNCTYPE(BOOL, LPSTR, LPARAM)
+EnumWindowStationsA = user32.EnumWindowStationsA
+EnumWindowStationsA.restype = BOOL
+EnumWindowStationsA.argtypes = [WINSTAENUMPROCA, LPARAM]
 HDESK = HANDLE
+CreateDesktopA = user32.CreateDesktopA
+CreateDesktopA.restype = HDESK
+DEVMODEA = c_void_p
+CreateDesktopA.argtypes = [LPCSTR, LPCSTR, DEVMODEA, DWORD, ACCESS_MASK, LPSECURITY_ATTRIBUTES]
+CreateDesktopExA = user32.CreateDesktopExA
+CreateDesktopExA.argtypes = [LPCSTR, LPCSTR, DEVMODEA, DWORD, ACCESS_MASK, LPSECURITY_ATTRIBUTES, ULONG, LPVOID]
+CreateDesktopExA = user32.CreateDesktopExA
+CreateDesktopExA.restype = HDESK
 OpenDesktopW = user32.OpenDesktopW
 OpenDesktopW.restype = HDESK
 OpenDesktopW.argtypes = [LPWSTR, DWORD, BOOL, ACCESS_MASK]
@@ -370,6 +440,10 @@ CloseDesktop.argtypes = [HDESK]
 OpenInputDesktop = user32.OpenInputDesktop
 OpenInputDesktop.restype = HDESK
 OpenInputDesktop.argtypes = [DWORD, BOOL, ACCESS_MASK]
+DESKTOPENUMPROCA = WINFUNCTYPE(BOOL, LPCSTR, LPARAM)
+EnumDesktopsA = user32.EnumDesktopsA
+EnumDesktopsA.restype = BOOL
+EnumDesktopsA.argtypes = [HWINSTA, DESKTOPENUMPROCA, LPARAM]
 GetUserObjectInformationA = user32.GetUserObjectInformationA
 GetUserObjectInformationA.restype = BOOL
 GetUserObjectInformationA.argtypes = [HANDLE, INT, LPVOID, DWORD, LPDWORD]
@@ -398,12 +472,6 @@ EmptyClipboard.argtypes = []
 SetClipboardData = user32.SetClipboardData
 SetClipboardData.restype = HANDLE
 SetClipboardData.argtypes = [UINT, HANDLE]
-RegisterClipboardFormatA = user32.RegisterClipboardFormatA
-RegisterClipboardFormatA.restype = UINT
-RegisterClipboardFormatA.argtypes = [LPCSTR]
-GetClipboardFormatNameA = user32.GetClipboardFormatNameA
-GetClipboardFormatNameA.restype = c_int
-GetClipboardFormatNameA.argtypes = [UINT, LPCTSTR, c_int]
 RegisterClipboardFormatA = user32.RegisterClipboardFormatA
 RegisterClipboardFormatA.restype = UINT
 RegisterClipboardFormatA.argtypes = [LPCSTR]
@@ -446,7 +514,56 @@ EnumClipboardFormats.argtypes = [UINT]
 CountClipboardFormats = user32.CountClipboardFormats
 CountClipboardFormats.restype = c_int
 CountClipboardFormats.argtypes = []
+GetWindowTextA = user32.GetWindowTextA
+GetWindowTextA.restype = c_int
+GetWindowTextA.argtypes = [HWND, LPSTR, c_int]
+GetWindowTextW = user32.GetWindowTextW
+GetWindowTextW.restype = c_int
+GetWindowTextW.argtypes = [HWND, LPWSTR, c_int]
+GetWindowTextLengthA = user32.GetWindowTextLengthA
+GetWindowTextLengthA.restype = c_int
+GetWindowTextLengthA.argtypes = [HWND]
+GetWindowTextLengthW = user32.GetWindowTextLengthW
+GetWindowTextLengthW.restype = c_int
+GetWindowTextLengthW.argtypes = [HWND]
 
+
+class PROCESS_INFORMATION(Structure):
+    _fields_ = (
+        ('_hProcess',   HANDLE),
+        ('_hThread',    HANDLE),
+        ('dwProcessId', DWORD),
+        ('dwThreadId',  DWORD),
+        )
+PPROCESS_INFORMATION = POINTER(PROCESS_INFORMATION)
+class STARTUPINFOA(Structure):
+    _fields_ = (
+        ('cb',              DWORD),
+        ('lpReserved',      LPWSTR),
+        ('lpDesktop',       LPWSTR),
+        ('lpTitle',         LPWSTR),
+        ('dwX',             DWORD),
+        ('dwY',             DWORD),
+        ('dwXSize',         DWORD),
+        ('dwYSize',         DWORD),
+        ('dwXCountChars',   DWORD),
+        ('dwYCountChars',   DWORD),
+        ('dwFillAttribute', DWORD),
+        ('dwFlags',         DWORD),
+        ('wShowWindow',     WORD),
+        ('cbReserved2',     WORD),
+        ('lpReserved2',     c_void_p),
+        ('hStdInput',       HANDLE),
+        ('hStdOutput',      HANDLE),
+        ('hStdError',       HANDLE),
+        )
+PSTARTUPINFOA = POINTER(STARTUPINFOA)
+advapi32 = WinDLL("advapi32")
+CreateProcessAsUserA = advapi32.CreateProcessAsUserA
+CreateProcessAsUserA.restype = BOOL
+CreateProcessAsUserA.argtypes = [HANDLE, LPCSTR, LPSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, BOOL, DWORD, LPVOID, LPCSTR, LPCSTR, PSTARTUPINFOA, PPROCESS_INFORMATION]
+GetUserNameA = advapi32.GetUserNameA
+GetUserNameA.restype = BOOL
 
 gdi32 = WinDLL("gdi32", use_last_error=True)
 CreateCompatibleDC = gdi32.CreateCompatibleDC
@@ -479,6 +596,9 @@ DeleteDC = gdi32.DeleteDC
 CreateDIBSection = gdi32.CreateDIBSection
 CreateDIBSection.restype = HBITMAP
 CreateDIBSection.argtypes = [HANDLE, POINTER(BITMAPV5HEADER), UINT, POINTER(c_void_p), HANDLE, DWORD]
+CreateDIBitmap = gdi32.CreateDIBitmap
+CreateDIBitmap.restype = HBITMAP
+CreateDIBitmap.argtypes = [HDC, PBITMAPINFOHEADER, DWORD, c_void_p, PBITMAPINFO, UINT]
 DeleteObject = gdi32.DeleteObject
 DeleteObject.argtypes = [HGDIOBJ]
 DeleteObject.restype = BOOL
@@ -609,3 +729,31 @@ IO_ERROR_STR = {
     ERROR_COUNTER_TIMEOUT       : "COUNTER_TIMEOUT",
     ERROR_PIPE_BUSY             : "PIPE_BUSY",
     }
+
+#https://gist.github.com/EBNull/6135237
+LANG_NEUTRAL = 0x00
+SUBLANG_NEUTRAL = 0x00
+SUBLANG_DEFAULT = 0x01
+
+LANG_ENGLISH = 0x09
+SUBLANG_ENGLISH_US = 0x01
+
+def MAKELANGID(primary, sublang):
+    return (primary & 0xFF) | (sublang & 0xFF) << 16
+
+LCID_ENGLISH = MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US)
+LCID_DEFAULT = MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT)
+LCID_NEUTRAL = MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL)
+
+def FormatMessageSystem(message_id, langid=LCID_ENGLISH):
+    from xpra.platform.win32.constants import FORMAT_MESSAGE_ALLOCATE_BUFFER, FORMAT_MESSAGE_FROM_SYSTEM, FORMAT_MESSAGE_IGNORE_INSERTS
+    sys_flag = FORMAT_MESSAGE_ALLOCATE_BUFFER|FORMAT_MESSAGE_FROM_SYSTEM|FORMAT_MESSAGE_IGNORE_INSERTS
+    bufptr = LPWSTR()
+    chars = kernel32.FormatMessageW(sys_flag, None, message_id, langid, byref(bufptr), 0, None)
+    if not chars:
+        chars = FormatMessageW(sys_flag, None, message_id, LCID_NEUTRAL, byref(bufptr), 0, None)
+        if not chars:
+            return str(message_id)
+    val = bufptr.value[:chars]
+    LocalFree(bufptr)
+    return val

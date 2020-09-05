@@ -1,29 +1,24 @@
 # This file is part of Xpra.
 # Copyright (C) 2011 Serviware (Arthur Huillet, <ahuillet@serviware.com>)
-# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008, 2010 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-#pylint: disable=ungrouped-imports
-#pylint: disable=wrong-import-order
-
-from xpra.gtk_common import gi_init
-from gi.repository import GObject               #@UnresolvedImport @UnusedImport
-from gi.repository import Gtk                   #@UnresolvedImport @UnusedImport
-from gi.repository import Gdk                   #@UnresolvedImport @UnusedImport
+from gi.repository import Gdk, Gtk, Gio, GdkPixbuf
 
 from xpra.client.gtk_base.gtk_client_window_base import GTKClientWindowBase, HAS_X11_BINDINGS
-from xpra.gtk_common.gtk_util import WINDOW_NAME_TO_HINT, BUTTON_MASK
-from xpra.os_util import bytestostr
+from xpra.client.gtk3.window_menu import WindowMenuHelper
+from xpra.gtk_common.gtk_util import WINDOW_NAME_TO_HINT, scaled_image
+from xpra.scripts.config import TRUE_OPTIONS, FALSE_OPTIONS
+from xpra.util import envbool, typedict
+from xpra.os_util import bytestostr, is_gnome
 from xpra.log import Logger
 
-log = Logger("gtk", "window")
 paintlog = Logger("paint")
 metalog = Logger("metadata")
+geomlog = Logger("geometry")
 
-
-assert gi_init
 GTK3_OR_TYPE_HINTS = (Gdk.WindowTypeHint.DIALOG,
                       Gdk.WindowTypeHint.MENU,
                       Gdk.WindowTypeHint.TOOLBAR,
@@ -39,30 +34,105 @@ GTK3_OR_TYPE_HINTS = (Gdk.WindowTypeHint.DIALOG,
                       Gdk.WindowTypeHint.DND)
 
 
+WINDOW_ICON = envbool("XPRA_WINDOW_ICON", True)
+WINDOW_XPRA_MENU = envbool("XPRA_WINDOW_XPRA_MENU", is_gnome())
+WINDOW_MENU = envbool("XPRA_WINDOW_MENU", True)
+
+
 """
 GTK3 version of the ClientWindow class
 """
 class GTK3ClientWindow(GTKClientWindowBase):
 
-    BUTTON_MASK         = BUTTON_MASK
     OR_TYPE_HINTS       = GTK3_OR_TYPE_HINTS
     NAME_TO_HINT        = WINDOW_NAME_TO_HINT
 
-    WINDOW_STATE_FULLSCREEN = Gdk.WindowState.FULLSCREEN
-    WINDOW_STATE_MAXIMIZED  = Gdk.WindowState.MAXIMIZED
-    WINDOW_STATE_ICONIFIED  = Gdk.WindowState.ICONIFIED
-    WINDOW_STATE_ABOVE      = Gdk.WindowState.ABOVE
-    WINDOW_STATE_BELOW      = Gdk.WindowState.BELOW
-    WINDOW_STATE_STICKY     = Gdk.WindowState.STICKY
-    WINDOW_STATE_FOCUSED    = Gdk.WindowState.FOCUSED
+    def init_window(self, metadata):
+        super().init_window(metadata)
+        self.header_bar_image = None
+        if self.can_use_header_bar(metadata):
+            self.add_header_bar()
+
+    def _icon_size(self):
+        tb = self.get_titlebar()
+        try:
+            h = tb.get_preferred_size()[-1]-8
+        except Exception:
+            h = 24
+        return min(128, max(h, 24))
+
+    def set_icon(self, pixbuf):
+        super().set_icon(pixbuf)
+        hbi = self.header_bar_image
+        if hbi and WINDOW_ICON:
+            h = self._icon_size()
+            pixbuf = pixbuf.scale_simple(h, h, GdkPixbuf.InterpType.HYPER)
+            hbi.set_from_pixbuf(pixbuf)
+
+    def can_use_header_bar(self, metadata):
+        if self.is_OR() or not self.get_decorated():
+            return False
+        hbl = (self.headerbar or "").lower().strip()
+        if hbl in FALSE_OPTIONS:
+            return False
+        if hbl in TRUE_OPTIONS:
+            sc = metadata.dictget("size-constraints")
+            if sc is None:
+                return True
+            tsc = typedict(sc)
+            maxs = tsc.intpair("maximum-size")
+            if maxs:
+                return False
+            mins = tsc.intpair("minimum-size")
+            if mins and mins!=(0, 0):
+                return False
+            if tsc.intpair("increment", (0, 0))!=(0, 0):
+                return False
+            return True
+        if hbl=="force":
+            return True
+        return False
+
+    def add_header_bar(self):
+        self.menu_helper = WindowMenuHelper(self._client, self)
+        hb = Gtk.HeaderBar()
+        hb.set_has_subtitle(False)
+        hb.set_show_close_button(True)
+        hb.props.title = self.get_title()
+        if WINDOW_MENU:
+            #the icon 'open-menu-symbolic' will be replaced with the window icon
+            #when we receive it
+            icon = Gio.ThemedIcon(name="preferences-system-windows")
+            self.header_bar_image = Gtk.Image.new_from_gicon(icon, Gtk.IconSize.BUTTON)
+            button = Gtk.Button()
+            button.add(self.header_bar_image)
+            button.connect("clicked", self.show_window_menu)
+            hb.pack_start(button)
+        elif WINDOW_ICON:
+            #just the icon, no menu:
+            pixbuf = self._client.get_pixbuf("transparent.png")
+            self.header_bar_image = scaled_image(pixbuf, self._icon_size())
+            hb.pack_start(self.header_bar_image)
+        if WINDOW_XPRA_MENU:
+            icon = Gio.ThemedIcon(name="open-menu-symbolic")
+            image = Gtk.Image.new_from_gicon(icon, Gtk.IconSize.BUTTON)
+            button = Gtk.Button()
+            button.add(image)
+            button.connect("clicked", self.show_xpra_menu)
+            hb.pack_end(button)
+        self.set_titlebar(hb)
 
 
-    def do_init_window(self, window_type):
-        Gtk.Window.__init__(self, type = window_type)
+    def show_xpra_menu(self, *_args):
+        mh = getattr(self._client, "menu_helper", None)
+        if not mh:
+            from xpra.client.gtk3.tray_menu import GTK3TrayMenu
+            mh = GTK3TrayMenu(self._client)
+        mh.popup(0, 0)
 
-    def init_widget_events(self, widget):
-        GTKClientWindowBase.init_widget_events(self, widget)
-        widget.connect("draw", self.drawing_area_draw)
+    def show_window_menu(self, *_args):
+        self.menu_helper.build()
+        self.menu_helper.popup(0, 0)
 
     def get_backing_class(self):
         raise NotImplementedError()
@@ -83,28 +153,25 @@ class GTK3ClientWindow(GTKClientWindowBase):
         except Exception as e:
             metalog.error("xget_u32_property error on %s / %s: %s", target, name, e)
 
-    def is_mapped(self):
-        return self.get_mapped()
-
     def get_drawing_area_geometry(self):
         gdkwindow = self.drawing_area.get_window()
-        x, y = gdkwindow.get_origin()[1:]
+        if gdkwindow:
+            x, y = gdkwindow.get_origin()[1:]
+        else:
+            x, y = self.get_position()
         w, h = self.get_size()
         return (x, y, w, h)
 
     def apply_geometry_hints(self, hints):
         """ we convert the hints as a dict into a gdk.Geometry + gdk.WindowHints """
         wh = Gdk.WindowHints
-        name_to_hint = {"maximum-size"  : wh.MAX_SIZE,
+        name_to_hint = {
                         "max_width"     : wh.MAX_SIZE,
                         "max_height"    : wh.MAX_SIZE,
-                        "minimum-size"  : wh.MIN_SIZE,
                         "min_width"     : wh.MIN_SIZE,
                         "min_height"    : wh.MIN_SIZE,
-                        "base-size"     : wh.BASE_SIZE,
                         "base_width"    : wh.BASE_SIZE,
                         "base_height"   : wh.BASE_SIZE,
-                        "increment"     : wh.RESIZE_INC,
                         "width_inc"     : wh.RESIZE_INC,
                         "height_inc"    : wh.RESIZE_INC,
                         "min_aspect_ratio"  : wh.ASPECT,
@@ -119,6 +186,14 @@ class GTK3ClientWindow(GTKClientWindowBase):
                         "min_aspect_ratio"  : "min_aspect",
                         "max_aspect_ratio"  : "max_aspect",
                          }
+        thints = typedict(hints)
+        if self.drawing_area:
+            #apply min size to the drawing_area:
+            #(for CSD mode, ie: headerbar)
+            minw = thints.intget("min_width", 0)
+            minh = thints.intget("min_width", 0)
+            self.drawing_area.set_size_request(minw, minh)
+
         geom = Gdk.Geometry()
         mask = 0
         for k,v in hints.items():
@@ -131,33 +206,32 @@ class GTK3ClientWindow(GTKClientWindowBase):
                 setattr(geom, field, float(v))
                 mask |= int(name_to_hint.get(k, 0))
         gdk_hints = Gdk.WindowHints(mask)
-        metalog("apply_geometry_hints(%s) geometry=%s, hints=%s", hints, geom, gdk_hints)
-        self.set_geometry_hints(None, geom, gdk_hints)
+        geomlog("apply_geometry_hints(%s) geometry=%s, hints=%s", hints, geom, gdk_hints)
+        self.set_geometry_hints(self.drawing_area, geom, gdk_hints)
 
-    def queue_draw_area(self, x, y, width, height):
-        window = self.get_window()
-        if not window:
-            log.warn("Warning: ignoring draw packet,")
-            log.warn(" received for a window which is not realized yet or gone already")
-            return
-        rect = Gdk.Rectangle()
-        rect.x = x
-        rect.y = y
-        rect.width = width
-        rect.height = height
-        self.drawing_area.get_window().invalidate_rect(rect, False)
+    def can_maximize(self):
+        hints = self.geometry_hints
+        if not hints:
+            return True
+        maxw = hints.intget(b"max_width", 32768)
+        maxh = hints.intget(b"max_height", 32768)
+        if maxw>32000 and maxh>32000:
+            return True
+        geom = self.get_drawing_area_geometry()
+        dw, dh = geom[2], geom[3]
+        return dw<maxw and dh<maxh 
 
-    def do_draw(self, context):
-        paintlog("do_draw(%s)", context)
-        Gtk.Window.do_draw(self, context)
-
-    def drawing_area_draw(self, widget, context):
-        paintlog("drawing_area_draw(%s, %s)", widget, context)
+    def draw_widget(self, widget, context):
+        paintlog("draw_widget(%s, %s)", widget, context)
+        if not self.get_mapped():
+            return False
         backing = self._backing
-        if self.get_mapped() and backing:
-            self.paint_backing_offset_border(backing, context)
-            self.clip_to_backing(backing, context)
-            backing.cairo_draw(context)
+        if not backing:
+            return False
+        self.paint_backing_offset_border(backing, context)
+        self.clip_to_backing(backing, context)
+        backing.cairo_draw(context)
         self.cairo_paint_border(context, None)
         if not self._client.server_ok():
             self.paint_spinner(context)
+        return True

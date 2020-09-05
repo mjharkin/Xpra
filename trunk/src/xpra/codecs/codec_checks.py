@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2015-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2015-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 #pylint: disable=line-too-long
 
-import sys
 import binascii
 
-from xpra.util import csv
+from xpra.util import csv, typedict, roundup
 from xpra.log import Logger
-log = Logger("util")
+log = Logger("encoding")
 
 #Warning: many systems will fail above 8k because of memory constraints
 # encoders can allocate many times more memory to hold the frames..
@@ -34,14 +33,8 @@ TEST_COMPRESSED_DATA = {
         },
 }
 
-def makebuf(size):
-    numpy = sys.modules.get("numpy")
-    if numpy is None and size<64*1024:
-        #small enough, don't bother importing numpy
-        return b"\0"*size
-    import numpy
-    a = numpy.empty(size, dtype=numpy.byte)
-    return a.data
+def makebuf(size, b=0x20):
+    return (chr(b).encode())*size
 
 
 def make_test_image(pixel_format, w, h):
@@ -49,18 +42,32 @@ def make_test_image(pixel_format, w, h):
     from xpra.codecs.codec_constants import get_subsampling_divs
     #import time
     #start = monotonic_time()
-    if pixel_format.startswith("YUV") or pixel_format=="GBRP":
+    if pixel_format.startswith("YUV") or pixel_format.startswith("GBRP") or pixel_format=="NV12":
         divs = get_subsampling_divs(pixel_format)
+        try:
+            depth = int(pixel_format.split("P")[1])   #ie: YUV444P10 -> 10
+        except (IndexError, ValueError):
+            depth = 8
+        Bpp = roundup(depth, 8)//8
+        nplanes = len(divs)
         ydiv = divs[0]  #always (1, 1)
-        y = makebuf(w//ydiv[0]*h//ydiv[1])
+        y = makebuf(w//ydiv[0]*h//ydiv[1]*Bpp)
         udiv = divs[1]
-        u = makebuf(w//udiv[0]*h//udiv[1])
-        vdiv = divs[2]
-        v = makebuf(w//vdiv[0]*h//vdiv[1])
-        image = ImageWrapper(0, 0, w, h, (y, u, v), pixel_format, 32, (w//ydiv[0], w//udiv[0], w//vdiv[0]), planes=ImageWrapper.PLANAR_3, thread_safe=True)
+        u = makebuf(w//udiv[0]*h//udiv[1]*Bpp)
+        planes = [y, u]
+        strides = [w//ydiv[0]*Bpp, w//udiv[0]*Bpp]
+        if nplanes==3:
+            vdiv = divs[2]
+            v = makebuf(w//vdiv[0]*h//vdiv[1]*Bpp)
+            planes.append(v)
+            strides.append(w//vdiv[0]*Bpp)
+        image = ImageWrapper(0, 0, w, h, planes, pixel_format, 32, strides, planes=nplanes, thread_safe=True)
         #l = len(y)+len(u)+len(v)
-    elif pixel_format in ("RGB", "BGR", "RGBX", "BGRX", "XRGB", "BGRA", "RGBA", "r210"):
-        stride = w*len(pixel_format)
+    elif pixel_format in ("RGB", "BGR", "RGBX", "BGRX", "XRGB", "BGRA", "RGBA", "r210", "BGR48"):
+        if pixel_format=="BGR48":
+            stride = w*6
+        else:
+            stride = w*len(pixel_format)
         rgb_data = makebuf(stride*h)
         image = ImageWrapper(0, 0, w, h, rgb_data, pixel_format, 32, stride, planes=ImageWrapper.PACKED, thread_safe=True)
         #l = len(rgb_data)
@@ -207,7 +214,7 @@ def do_testencoding(encoder_module, encoding, W, H, full=False, limit_w=TEST_LIM
         for cs_out in encoder_module.get_output_colorspaces(encoding, cs_in):
             e = encoder_module.Encoder()
             try:
-                options = {"b-frames" : True}
+                options = typedict({"b-frames" : True})
                 e.init_context(W, H, cs_in, [cs_out], encoding, 0, 100, (1, 1), options)
                 for i in range(2):
                     image = make_test_image(cs_in, W, H)

@@ -15,15 +15,11 @@ import os.path
 import re
 import sys
 
-if sys.version > '3':
-    unicode = str           #@ReservedAssignment
-    def bytestostr(x):
-        if isinstance(x, bytes):
-            return x.decode("latin1")
-        return str(x)
-else:
-    def bytestostr(x):
-        return str(x)
+
+def bytestostr(x):
+    if isinstance(x, bytes):
+        return x.decode("latin1")
+    return str(x)
 
 
 def update_properties(props, filename):
@@ -36,7 +32,7 @@ def save_properties(props, filename):
     if os.path.exists(filename):
         try:
             os.unlink(filename)
-        except (OSError, IOError):
+        except OSError:
             print("WARNING: failed to delete %s" % filename)
     def u(v):
         try:
@@ -123,7 +119,7 @@ def get_status_output(*args, **kwargs):
 
 def get_output_lines(cmd, valid_exit_code=0):
     try:
-        returncode, stdout, stderr = get_status_output(cmd, stdin=None, shell=True)
+        returncode, stdout, stderr = get_status_output(cmd, shell=True)
         if returncode!=valid_exit_code:
             print("'%s' failed with return code %s" % (cmd, returncode))
             print("stderr: %s" % stderr)
@@ -264,13 +260,18 @@ def record_build_info(is_build=True):
         #record pkg-config versions:
         PKG_CONFIG = os.environ.get("PKG_CONFIG", "pkg-config")
         for pkg in ("libc",
-                    "vpx", "libvpx", "x264", "x265", "webp",
+                    "vpx", "x264", "x265", "webp", "yuv", "nvenc", "nvfbc",
                     "avcodec", "avutil", "swscale",
                     "nvenc",
                     "x11", "xrandr", "xtst", "xfixes", "xkbfile", "xcomposite", "xdamage", "xext",
-                    "gtk+-3.0", "pycairo", "pygobject-2.0", "pygtk-2.0", ):
+                    "gobject-introspection-1.0",
+                    "gtk+-3.0", "py3cairo", "pygobject-3.0", "gtk+-x11-3.0",
+                    "python3",
+                    ):
             #fugly magic for turning the package atom into a legal variable name:
-            pkg_name = pkg.lstrip("lib").replace("+", "").split("-")[0]
+            pkg_name = pkg.lstrip("lib").replace("+", "").replace("-", "_")
+            if pkg_name.split("_")[-1].rstrip("0123456789.")=="":
+                pkg_name = "_".join(pkg_name.split("_")[:-1])
             cmd = [PKG_CONFIG, "--modversion", pkg]
             returncode, out, _ = get_status_output(cmd)
             if returncode==0:
@@ -318,7 +319,7 @@ def get_svn_props():
                 "LOCAL_MODIFICATIONS" : "unknown"
             }
     #find revision:
-    proc = subprocess.Popen("svnversion -n ..", stdin=None, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+    proc = subprocess.Popen("svnversion -n ..", stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
     (out, _) = proc.communicate()
     if proc.returncode!=0:
         print("'svnversion -n' failed with return code %s" % proc.returncode)
@@ -345,7 +346,7 @@ def get_svn_props():
     props["REVISION"] = rev
     #find number of local files modified:
     changes = 0
-    proc = subprocess.Popen("svn status", stdin=None, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+    proc = subprocess.Popen("svn status", stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
     (out, _) = proc.communicate()
     if proc.poll()!=0:
         print("could not get status of local files")
@@ -359,25 +360,9 @@ def get_svn_props():
         if len(parts)!=2:
             continue
         filename = parts[1].strip()
-        ignore = False
-        for x in load_ignored_changed_files():
-            #use a normalized path ("/") that does not interfere with regexp:
-            norm_path = filename.replace(os.path.sep, "/")
-            if norm_path==x:
-                print("'%s' matches ignore list entry: '%s' exactly," % (filename, x))
-                print(" not counting it as a modified file")
-                ignore = True
-                break
-            rstr = r"^%s$" % x.replace("*", ".*")
-            regexp = re.compile(rstr)
-            if regexp.match(norm_path):
-                print("'%s' matches ignore list regexp: '%s', not counting it as a modified file" % (filename, x))
-                ignore = True
-                break
-        if ignore:
-            continue
         changes += 1
-        print("WARNING: found modified file: %s" % filename)
+        if warn:
+            print("WARNING: found modified file: %s" % filename)
     props["LOCAL_MODIFICATIONS"] = changes
     return props
 

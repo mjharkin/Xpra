@@ -21,6 +21,8 @@ log = Logger("x11", "xsettings")
 
 
 DEBUG_XSETTINGS = os.environ.get("XPRA_XSETTINGS_DEBUG", "0")=="1"
+BLACKLISTED_XSETTINGS = os.environ.get("XPRA_BLACKLISTED_XSETTINGS",
+                                       "Gdk/WindowScalingFactor,Gtk/SessionBusId,Gtk/IMModule").split(",")
 
 
 if sys.version > '3':
@@ -138,7 +140,7 @@ def set_settings(disp, d):
                 x += '\0'*pad_len
             elif setting_type==XSettingsTypeColor:
                 red, blue, green, alpha = value
-                x = struct.pack("=HHHH", red, blue, green, alpha)
+                x += struct.pack("=HHHH", red, blue, green, alpha)
             else:
                 log.error("invalid xsetting type: %s, skipped %s", setting_type, prop_name)
                 continue

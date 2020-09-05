@@ -7,7 +7,6 @@
 #cython: language_level=3
 
 # This module can be used to open the local $DISPLAY and hook it into the X11 bindings
-from __future__ import absolute_import
 
 import os
 from xpra.os_util import strtobytes
@@ -47,7 +46,7 @@ def close_display_source(uintptr_t ptr):
     return v
 
 
-class X11DisplayContext(object):
+class X11DisplayContext:
     """
         Ensures that there is an X11 display source available
         so the X11 bindings will work as expected.
@@ -55,7 +54,7 @@ class X11DisplayContext(object):
         a temporary posix display source will be used.
     """
 
-    def __init__(self, display_name):
+    def __init__(self, display_name=os.environ.get("DISPLAY")):
         self.close = False
         self.display_name = display_name
         self.display = 0

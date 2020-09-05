@@ -17,11 +17,10 @@ log = Logger("rfb")
 counter = AtomicInteger()
 
 
-class RFBSource(object):
+class RFBSource:
 
-    def __init__(self, protocol, desktop, share=False):
+    def __init__(self, protocol, share=False):
         self.protocol = protocol
-        self.desktop = desktop
         self.close_event = Event()
         self.log_disconnect = True
         self.ui_client = True
@@ -31,7 +30,7 @@ class RFBSource(object):
         self.lock = False
         self.keyboard_config = None
 
-    def get_info(self):
+    def get_info(self) -> dict:
         return {
             "protocol"  : "rfb",
             "uuid"      : self.uuid,
@@ -45,7 +44,7 @@ class RFBSource(object):
         return self.close_event.isSet()
 
     def close(self):
-        pass
+        self.close_event.set()
 
     def ping(self):
         pass

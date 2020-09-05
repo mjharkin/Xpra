@@ -183,7 +183,7 @@ class PRINTER_NOTIFY_OPTIONS_TYPE(ctypes.Structure):
                 ('Count',     wintypes.DWORD),
                 ('_pFields',  wintypes.PWORD))
     def __init__(self, Type=JOB_NOTIFY_TYPE, pFields=None):
-        super(PRINTER_NOTIFY_OPTIONS_TYPE, self).__init__(Type)
+        super().__init__(Type)
         if pFields is not None:
             self.pFields = pFields
     @property
@@ -203,7 +203,7 @@ class PRINTER_NOTIFY_OPTIONS(ctypes.Structure):
                 ('Count',   wintypes.DWORD),
                 ('_pTypes', PPRINTER_NOTIFY_OPTIONS_TYPE))
     def __init__(self, Flags=0, pTypes=None):
-        super(PRINTER_NOTIFY_OPTIONS, self).__init__(2, Flags)
+        super().__init__(2, Flags)
         if pTypes is not None:
             self.pTypes = pTypes
     @property
@@ -237,7 +237,7 @@ class PRINTER_NOTIFY_INFO_DATA(ctypes.Structure):
     def _data_as_string(self):
         if self._NotifyData.Data.pBuf:
             return ctypes.c_wchar_p(self._NotifyData.Data.pBuf).value
-        return u""
+        return ""
     @property
     def _data_as_datetime(self):
         if self._NotifyData.Data.pBuf:
@@ -301,17 +301,17 @@ class PPRINTER_NOTIFY_INFO_GC(PPRINTER_NOTIFY_INFO):
             FreePrinterNotifyInfo(self)
             self._freed = True
 
-def check_bool(result, func, args):
+def check_bool(result, _func, args):
     if not result:
         raise ctypes.WinError(ctypes.get_last_error())
     return args
 
-def check_ihv(result, func, args):
+def check_ihv(result, _func, args):
     if result == INVALID_HANDLE_VALUE:
         raise ctypes.WinError(ctypes.get_last_error())
     return args
 
-def check_idv(result, func, args):
+def check_idv(result, _func, args):
     if result == WAIT_FAILED:
         raise ctypes.WinError(ctypes.get_last_error())
     return args
@@ -355,7 +355,7 @@ kernel32.WaitForSingleObject.argtypes = (
     wintypes.HANDLE, # _In_ hHandle
     wintypes.DWORD)  # _In_ dwMilliseconds
 
-def wait_for_print_job(filter=PRINTER_CHANGE_ADD_JOB,
+def wait_for_print_job(printer_filter=PRINTER_CHANGE_ADD_JOB,
                        timeout=INFINITE,
                        printer_name=None):
     if timeout != INFINITE:
@@ -365,10 +365,10 @@ def wait_for_print_job(filter=PRINTER_CHANGE_ADD_JOB,
     winspool.OpenPrinterW(printer_name, ctypes.byref(hPrinter), None)
     try:
         hChange = winspool.FindFirstPrinterChangeNotification(
-                    hPrinter, filter, 0, None)
+                    hPrinter, printer_filter, 0, None)
         try:
-            if (kernel32.WaitForSingleObject(hChange, timeout) !=
-                WAIT_OBJECT_0): return
+            if kernel32.WaitForSingleObject(hChange, timeout) != WAIT_OBJECT_0:
+                return None
             winspool.FindNextPrinterChangeNotification(
                 hChange, ctypes.byref(dwChange), None, None)
             return dwChange.value

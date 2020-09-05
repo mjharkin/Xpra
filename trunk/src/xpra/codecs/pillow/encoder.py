@@ -1,18 +1,18 @@
 # This file is part of Xpra.
-# Copyright (C) 2014-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2014-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import os
 import time
 from io import BytesIO
+import PIL
 from PIL import Image, ImagePalette     #@UnresolvedImport
 
 from xpra.util import envbool
 from xpra.os_util import bytestostr
 from xpra.net.compression import Compressed
 from xpra.log import Logger
-from xpra.codecs.pillow import PIL_VERSION
 
 log = Logger("encoder", "pillow")
 
@@ -21,9 +21,9 @@ ENCODE_FORMATS = os.environ.get("XPRA_PILLOW_ENCODE_FORMATS", "png,png/L,png/P,j
 
 
 def get_version():
-    return PIL_VERSION
+    return PIL.__version__
 
-def get_type():
+def get_type() -> str:
     return "pillow"
 
 def do_get_encodings():
@@ -42,15 +42,17 @@ def get_encodings():
 
 ENCODINGS = do_get_encodings()
 
-def get_info():
+def get_info() -> dict:
     return  {
             "version"       : get_version(),
             "encodings"     : get_encodings(),
             }
 
 
-def encode(coding, image, quality, speed, supports_transparency):
-    log("pillow.encode%s", (coding, image, quality, speed, supports_transparency))
+def encode(coding : str, image, quality : int, speed : int, supports_transparency : bool, grayscale : bool=False, resize=None):
+    log("pillow.encode%s", (coding, image, quality, speed, supports_transparency, grayscale, resize))
+    assert coding in ("jpeg", "webp", "png", "png/P", "png/L"), "unsupported encoding: %s" % coding
+    assert image, "no image to encode"
     pixel_format = bytestostr(image.get_pixel_format())
     palette = None
     w = image.get_width()
@@ -71,14 +73,15 @@ def encode(coding, image, quality, speed, supports_transparency):
         pixels = image.get_pixels()
         assert pixels, "failed to get pixels from %s" % image
         if pixel_format=="r210":
+            stride = image.get_rowstride()
             from xpra.codecs.argb.argb import r210_to_rgba, r210_to_rgb #@UnresolvedImport
             if supports_transparency:
-                pixels = r210_to_rgba(pixels)
+                pixels = r210_to_rgba(pixels, w, h, stride, w*4)
                 pixel_format = "RGBA"
                 rgb = "RGBA"
             else:
                 image.set_rowstride(image.get_rowstride()*3//4)
-                pixels = r210_to_rgb(pixels)
+                pixels = r210_to_rgb(pixels, w, h, stride, w*3)
                 pixel_format = "RGB"
                 rgb = "RGB"
                 bpp = 24
@@ -105,6 +108,8 @@ def encode(coding, image, quality, speed, supports_transparency):
                 palette.append((g>>8) & 0xFF)
                 palette.append((b>>8) & 0xFF)
             bpp = 8
+        else:
+            assert pixel_format in ("RGBA", "RGBX", "BGRA", "BGRX", "BGR", "RGB"), "invalid pixel format '%s'" % pixel_format
         #PIL cannot use the memoryview directly:
         if isinstance(pixels, memoryview):
             pixels = pixels.tobytes()
@@ -115,7 +120,14 @@ def encode(coding, image, quality, speed, supports_transparency):
         if palette:
             im.putpalette(palette)
             im.palette = ImagePalette.ImagePalette("RGB", palette = palette, size = len(palette))
-        if coding.startswith("png") and not supports_transparency and rgb=="RGBA":
+        if coding!="png/L" and grayscale:
+            if rgb.find("A")>=0 and supports_transparency and coding!="jpeg":
+                im = im.convert("LA")
+            else:
+                im = im.convert("L")
+            rgb = "L"
+            bpp = 8
+        elif coding.startswith("png") and not supports_transparency and rgb=="RGBA":
             im = im.convert("RGB")
             rgb = "RGB"
             bpp = 24
@@ -124,6 +136,18 @@ def encode(coding, image, quality, speed, supports_transparency):
                   (w, h, coding, "%s bytes" % image.get_size(), pixel_format, image.get_rowstride()), type(pixels), pixel_format, rgb, exc_info=True)
         raise
     client_options = {}
+    if resize:
+        if speed>=95:
+            resample = "NEAREST"
+        elif speed>80:
+            resample = "BILINEAR"
+        elif speed>=30:
+            resample = "BICUBIC"
+        else:
+            resample = "LANCZOS"
+        resample_value = getattr(Image, resample, 0)
+        im = im.resize(resize, resample=resample_value)
+        client_options["resample"] = resample
     if coding in ("jpeg", "webp"):
         #newer versions of pillow require explicit conversion to non-alpha:
         if pixel_format.find("A")>=0:
@@ -193,7 +217,7 @@ def encode(coding, image, quality, speed, supports_transparency):
         pil_fmt = "PNG"
     buf = BytesIO()
     im.save(buf, pil_fmt, **kwargs)
-    if SAVE_TO_FILE:
+    if SAVE_TO_FILE:    # pragma: no cover
         filename = "./%s.%s" % (time.time(), pil_fmt)
         im.save(filename, pil_fmt)
         log.info("saved %s to %s", coding, filename)
@@ -216,11 +240,11 @@ def selftest(full=False):
             for q in vrange:
                 for s in vrange:
                     for alpha in (True, False):
-                        v = encode(encoding, img, q, s, alpha)
+                        v = encode(encoding, img, q, s, False, alpha)
                         assert v, "encode output was empty!"
                         cdata = v[1].data
                         log("encode(%s)=%s", (encoding, img, q, s, alpha), hexstr(cdata))
-        except Exception as e:
+        except Exception as e:  # pragma: no cover
             l = log.warn
             l("Pillow error saving %s with quality=%s, speed=%s, alpha=%s", encoding, q, s, alpha)
             l(" %s", e, exc_info=True)

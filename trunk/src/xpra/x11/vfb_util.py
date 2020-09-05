@@ -1,5 +1,5 @@
 # This file is part of Xpra.
-# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -14,22 +14,27 @@ import os.path
 from xpra.scripts.config import InitException, get_Xdummy_confdir
 from xpra.util import envbool, envint
 from xpra.os_util import (
-    setsid, shellsub, close_fds,
+    shellsub,
     setuidgid, getuid, getgid,
     strtobytes, bytestostr, osexpand, monotonic_time,
-    POSIX, OSX, PYTHON3,
+    pollwait,
+    POSIX, OSX,
     )
 from xpra.platform.displayfd import read_displayfd, parse_displayfd
 
 
 VFB_WAIT = envint("XPRA_VFB_WAIT", 3)
-def parse_resolution(envkey="XPRA_DEFAULT_VFB_RESOLUTION", default_res="8192x4096"):
-    s = os.environ.get(envkey, default_res)
+
+def parse_resolution(s):
     res = tuple(int(x) for x in s.replace(",", "x").split("x", 1))
     assert len(res)==2, "invalid resolution string '%s'" % s
     return res
-DEFAULT_VFB_RESOLUTION = parse_resolution()
-DEFAULT_DESKTOP_VFB_RESOLUTION = parse_resolution("XPRA_DEFAULT_DESKTOP_VFB_RESOLUTION", "1280x1024")
+def parse_env_resolution(envkey="XPRA_DEFAULT_VFB_RESOLUTION", default_res="8192x4096"):
+    s = os.environ.get(envkey, default_res)
+    return parse_resolution(s)
+
+DEFAULT_VFB_RESOLUTION = parse_env_resolution()
+DEFAULT_DESKTOP_VFB_RESOLUTION = parse_env_resolution("XPRA_DEFAULT_DESKTOP_VFB_RESOLUTION", "1280x1024")
 PRIVATE_XAUTH = envbool("XPRA_PRIVATE_XAUTH", False)
 XAUTH_PER_DISPLAY = envbool("XPRA_XAUTH_PER_DISPLAY", True)
 
@@ -39,13 +44,13 @@ def get_vfb_logger():
     global vfb_logger
     if not vfb_logger:
         from xpra.log import Logger
-        vfb_logger = Logger("server", "x11")
+        vfb_logger = Logger("server", "x11", "screen")
     return vfb_logger
 
 def osclose(fd):
     try:
         os.close(fd)
-    except (OSError, IOError):
+    except OSError:
         pass
 
 def create_xorg_device_configs(xorg_conf_dir, device_uuid, uid, gid):
@@ -135,7 +140,7 @@ def get_xauthority_path(display_name, username, uid, gid):
         filename = ".Xauthority"
     return os.path.join(pathexpand(d), filename)
 
-def start_Xvfb(xvfb_str, pixel_depth, display_name, cwd, uid, gid, username, xauth_data, uinput_uuid=None):
+def start_Xvfb(xvfb_str, vfb_geom, pixel_depth, display_name, cwd, uid, gid, username, xauth_data, uinput_uuid=None):
     if not POSIX:
         raise InitException("starting an Xvfb is not supported on %s" % os.name)
     if OSX:
@@ -145,7 +150,7 @@ def start_Xvfb(xvfb_str, pixel_depth, display_name, cwd, uid, gid, username, xau
 
     cleanups = []
     log = get_vfb_logger()
-    log("start_Xvfb%s", (xvfb_str, pixel_depth, display_name, cwd, uid, gid, username, xauth_data, uinput_uuid))
+    log("start_Xvfb%s", (xvfb_str, vfb_geom, pixel_depth, display_name, cwd, uid, gid, username, xauth_data, uinput_uuid))
     xauthority = get_xauthority_path(display_name, username, uid, gid)
     os.environ["XAUTHORITY"] = xauthority
     if not os.path.exists(xauthority):
@@ -179,6 +184,22 @@ def start_Xvfb(xvfb_str, pixel_depth, display_name, cwd, uid, gid, username, xau
     #make sure all path values are expanded:
     xvfb_cmd = [pathexpand(s) for s in xvfb_cmd]
 
+    #try to honour initial geometries if specified:
+    if vfb_geom and xvfb_cmd[0].endswith("Xvfb"):
+        #find the '-screen' arguments:
+        #"-screen 0 8192x4096x24+32"
+        try:
+            no_arg = xvfb_cmd.index("0")
+        except ValueError:
+            no_arg = -1
+        geom_str = "%sx%s" % ("x".join(str(x) for x in vfb_geom), pixel_depth)
+        if no_arg>0 and xvfb_cmd[no_arg-1]=="-screen" and len(xvfb_cmd)>(no_arg+1):
+            #found an existing "-screen" argument for this screen number,
+            #replace it:
+            xvfb_cmd[no_arg+1] = geom_str
+        else:
+            #append:
+            xvfb_cmd += ["-screen", "0", geom_str]
     try:
         logfile_argindex = xvfb_cmd.index('-logfile')
         if logfile_argindex+1>=len(xvfb_cmd):
@@ -200,10 +221,10 @@ def start_Xvfb(xvfb_str, pixel_depth, display_name, cwd, uid, gid, username, xau
                 if POSIX and uid!=getuid() or gid!=getgid():
                     try:
                         os.lchown(xorg_log_dir, uid, gid)
-                    except (OSError, IOError):
+                    except OSError:
                         log("lchown(%s, %i, %i)", xorg_log_dir, uid, gid, exc_info=True)
             except OSError as e:
-                raise InitException("failed to create the Xorg log directory '%s': %s" % (xorg_log_dir, e))
+                raise InitException("failed to create the Xorg log directory '%s': %s" % (xorg_log_dir, e)) from None
 
     if uinput_uuid:
         #use uinput:
@@ -237,21 +258,19 @@ def start_Xvfb(xvfb_str, pixel_depth, display_name, cwd, uid, gid, username, xau
                 raise InitException("%s: %s" % (xvfb_executable, msg))
             r_pipe, w_pipe = os.pipe()
             try:
-                if PYTHON3:
-                    os.set_inheritable(w_pipe, True)        #@UndefinedVariable
+                os.set_inheritable(w_pipe, True)        #@UndefinedVariable
                 xvfb_cmd += ["-displayfd", str(w_pipe)]
                 xvfb_cmd[0] = "%s-for-Xpra-%s" % (xvfb_executable, display_name)
                 def preexec():
-                    setsid()
+                    os.setpgrp()
                     if getuid()==0 and uid:
                         setuidgid(uid, gid)
-                    close_fds([0, 1, 2, r_pipe, w_pipe])
                 try:
-                    xvfb = Popen(xvfb_cmd, executable=xvfb_executable, close_fds=False,
-                                            stdin=PIPE, preexec_fn=preexec, cwd=cwd)
+                    xvfb = Popen(xvfb_cmd, executable=xvfb_executable,
+                                 preexec_fn=preexec, cwd=cwd, pass_fds=(w_pipe,))
                 except OSError as e:
                     log("Popen%s", (xvfb_cmd, xvfb_executable, cwd), exc_info=True)
-                    raise InitException("failed to execute xvfb command %s: %s" % (xvfb_cmd, e))
+                    raise InitException("failed to execute xvfb command %s: %s" % (xvfb_cmd, e)) from None
                 assert xvfb.poll() is None, "xvfb command failed"
                 # Read the display number from the pipe we gave to Xvfb
                 try:
@@ -287,9 +306,9 @@ def start_Xvfb(xvfb_str, pixel_depth, display_name, cwd, uid, gid, username, xau
                 if getuid()==0 and (uid!=0 or gid!=0):
                     setuidgid(uid, gid)
                 else:
-                    setsid()
+                    os.setsid()
             log("xvfb_cmd=%s", xvfb_cmd)
-            xvfb = Popen(xvfb_cmd, executable=xvfb_executable, close_fds=True,
+            xvfb = Popen(xvfb_cmd, executable=xvfb_executable,
                          stdin=PIPE, preexec_fn=preexec)
 
         xauth_add(xauthority, display_name, xauth_data, uid, gid)
@@ -331,7 +350,12 @@ def set_initial_resolution(res=DEFAULT_VFB_RESOLUTION):
         sizes = randr.get_xrr_screen_sizes()
         size = randr.get_screen_size()
         log("RandR available, current size=%s, sizes available=%s", size, sizes)
-        if res in sizes:
+        if res not in sizes:
+            log.warn("Warning: cannot set resolution to %s", res)
+            log.warn(" (this resolution is not available)")
+        elif res==size:
+            log("initial resolution already set: %s", res)
+        else:
             log("RandR setting new screen size to %s", res)
             randr.set_screen_size(*res)
     except Exception as e:
@@ -344,12 +368,12 @@ def xauth_add(filename, display_name, xauth_data, uid, gid):
     xauth_args = ["-f", filename, "add", display_name, "MIT-MAGIC-COOKIE-1", xauth_data]
     try:
         def preexec():
-            setsid()
+            os.setsid()
             if getuid()==0 and uid:
                 setuidgid(uid, gid)
         xauth_cmd = ["xauth"]+xauth_args
         start = monotonic_time()
-        code = call(xauth_cmd, preexec_fn=preexec, close_fds=True)
+        code = call(xauth_cmd, preexec_fn=preexec)
         end = monotonic_time()
         if code!=0 and (end-start>=10):
             log = get_vfb_logger()
@@ -359,7 +383,7 @@ def xauth_add(filename, display_name, xauth_data, uid, gid):
             if glob.glob("%s-*" % filename):
                 log.warn("Warning: trying to clean some stale xauth locks")
                 xauth_cmd = ["xauth", "-b"]+xauth_args
-                code = call(xauth_cmd, preexec_fn=preexec, close_fds=True)
+                code = call(xauth_cmd, preexec_fn=preexec)
         if code!=0:
             raise OSError("non-zero exit code: %s" % code)
     except OSError as e:
@@ -369,11 +393,11 @@ def xauth_add(filename, display_name, xauth_data, uid, gid):
         log.error(" using command \"%s\":" % (" ".join(xauth_cmd)))
         log.error(" %s" % (e,))
 
-def check_xvfb_process(xvfb=None, cmd="Xvfb"):
+def check_xvfb_process(xvfb=None, cmd="Xvfb", timeout=0):
     if xvfb is None:
         #we don't have a process to check
         return True
-    if xvfb.poll() is None:
+    if pollwait(xvfb, timeout) is None:
         #process is running
         return True
     log = get_vfb_logger()
@@ -384,7 +408,7 @@ def check_xvfb_process(xvfb=None, cmd="Xvfb"):
     log.error("")
     return False
 
-def verify_display_ready(xvfb, display_name, shadowing_check=True):
+def verify_display_ready(xvfb, display_name, shadowing_check=True, log_errors=True):
     from xpra.x11.bindings.wait_for_x_server import wait_for_x_server        #@UnresolvedImport
     # Whether we spawned our server or not, it is now running -- or at least
     # starting.  First wait for it to start up:
@@ -393,16 +417,34 @@ def verify_display_ready(xvfb, display_name, shadowing_check=True):
     except Exception as e:
         log = get_vfb_logger()
         log("verify_display_ready%s", (xvfb, display_name, shadowing_check), exc_info=True)
-        log.error("Error: failed to connect to display %s" % display_name)
-        log.error(" %s", e)
+        if log_errors:
+            log.error("Error: failed to connect to display %s" % display_name)
+            log.error(" %s", e)
         return False
     if shadowing_check and not check_xvfb_process(xvfb):
         #if we're here, there is an X11 server, but it isn't the one we started!
         log = get_vfb_logger()
-        log.error("There is an X11 server already running on display %s:" % display_name)
-        log.error("You may want to use:")
-        log.error("  'xpra upgrade %s' if an instance of xpra is still connected to it" % display_name)
-        log.error("  'xpra --use-display start %s' to connect xpra to an existing X11 server only" % display_name)
-        log.error("")
+        log("verify_display_ready%s display exists, but the vfb process has terminated",
+                (xvfb, display_name, shadowing_check, log_errors))
+        if log_errors:
+            log.error("There is an X11 server already running on display %s:" % display_name)
+            log.error("You may want to use:")
+            log.error("  'xpra upgrade %s' if an instance of xpra is still connected to it" % display_name)
+            log.error("  'xpra --use-display start %s' to connect xpra to an existing X11 server only" % display_name)
+            log.error("")
         return False
     return True
+
+
+def main():
+    import sys
+    display = None
+    if len(sys.argv)>1:
+        display = strtobytes(sys.argv[1])
+    from xpra.x11.bindings.wait_for_x_server import wait_for_x_server        #@UnresolvedImport
+    wait_for_x_server(display, VFB_WAIT)
+    print("OK")
+
+
+if __name__ == "__main__":
+    main()

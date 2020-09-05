@@ -5,9 +5,9 @@
 # later version. See the file COPYING for details.
 
 import unittest
+from gi.repository import GLib
 
 from xpra.util import typedict, AdHocStruct
-from xpra.gtk_common.gobject_compat import import_glib
 
 
 class ClientMixinTest(unittest.TestCase):
@@ -15,13 +15,14 @@ class ClientMixinTest(unittest.TestCase):
 	@classmethod
 	def setUpClass(cls):
 		super(ClientMixinTest, cls).setUpClass()
-		cls.glib = import_glib()
+		cls.glib = GLib
 		cls.main_loop = cls.glib.MainLoop()
 
 	def setUp(self):
 		self.packets = []
 		self.mixin = None
 		self.packet_handlers = {}
+		self.exit_codes = []
 
 	def tearDown(self):
 		unittest.TestCase.tearDown(self)
@@ -75,12 +76,16 @@ class ClientMixinTest(unittest.TestCase):
 		ph(packet)
 
 
+	def fake_quit(self, code):
+		self.exit_codes.append(code)
+
 	def _test_mixin_class(self, mclass, opts, caps=None):
 		x = self.mixin = mclass()
+		x.quit = self.fake_quit
 		fake_protocol = AdHocStruct()
 		fake_protocol.get_info = lambda : {}
 		fake_protocol.set_compression_level = lambda _x : None
-		x._protocol = fake_protocol
+		x._protocol = fake_protocol  #pylint: disable=protected-access
 		x.add_packet_handlers = self.add_packet_handlers
 		x.add_packet_handler = self.add_packet_handler
 		x.idle_add = self.glib.idle_add
@@ -92,14 +97,13 @@ class ClientMixinTest(unittest.TestCase):
 		x.setup_connection(conn)
 		x.send = self.send
 		x.send_now = self.send
-		x.add_packet_handlers = self.add_packet_handlers
-		x.add_packet_handler = self.add_packet_handler
 		x.init_authenticated_packet_handlers()
-		x.server_capabilities = typedict(caps or {})
-		x.parse_server_capabilities()
-		x.process_ui_capabilities()
+		caps = self.make_caps(caps)
+		x.parse_server_capabilities(caps)
+		x.process_ui_capabilities(caps)
 		assert x.get_caps() is not None
+		assert x.get_info() is not None
 		return x
 
-	def make_caps(self, caps):
+	def make_caps(self, caps=None):
 		return typedict(caps or {})

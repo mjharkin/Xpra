@@ -1,16 +1,15 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 from collections import deque
 
-from xpra.net.compression import Compressible, compressed_wrapper
 from xpra.server.source.stub_source_mixin import StubSourceMixin
 from xpra.platform.features import CLIPBOARDS
-from xpra.util import envint, XPRA_CLIPBOARD_NOTIFICATION_ID
+from xpra.util import envint, typedict
 from xpra.os_util import monotonic_time
 from xpra.log import Logger
 
@@ -22,48 +21,48 @@ MAX_CLIPBOARD_LIMIT_DURATION = envint("XPRA_CLIPBOARD_LIMIT_DURATION", 3)
 
 class ClipboardConnection(StubSourceMixin):
 
-    def init_from(self, _protocol, _server):
-        pass
+    @classmethod
+    def is_needed(cls, caps : typedict) -> bool:
+        return caps.boolget("clipboard")
+
 
     def init_state(self):
         self.clipboard_enabled = False
         self.clipboard_notifications = False
         self.clipboard_notifications_current = 0
         self.clipboard_notifications_pending = 0
-        self.clipboard_set_enabled = False
         self.clipboard_progress_timer = None
         self.clipboard_stats = deque(maxlen=MAX_CLIPBOARD_LIMIT*MAX_CLIPBOARD_LIMIT_DURATION)
         self.clipboard_greedy = False
         self.clipboard_want_targets = False
         self.clipboard_client_selections = CLIPBOARDS
         self.clipboard_preferred_targets = ()
+        self.clipboard_contents_slice_fix = False
 
     def cleanup(self):
         self.cancel_clipboard_progress_timer()
 
-    def parse_client_caps(self, c):
+    def parse_client_caps(self, c : typedict):
         self.clipboard_enabled = c.boolget("clipboard", False)
         self.clipboard_notifications = c.boolget("clipboard.notifications")
-        self.clipboard_set_enabled = c.boolget("clipboard.set_enabled")
-        log("client clipboard: enabled=%s, notifications=%s, set-enabled=%s",
-            self.clipboard_enabled, self.clipboard_notifications, self.clipboard_set_enabled)
+        log("client clipboard: enabled=%s, notifications=%s",
+            self.clipboard_enabled, self.clipboard_notifications)
         self.clipboard_greedy = c.boolget("clipboard.greedy")
         self.clipboard_want_targets = c.boolget("clipboard.want_targets")
-        self.clipboard_client_selections = c.strlistget("clipboard.selections", CLIPBOARDS)
+        self.clipboard_client_selections = c.strtupleget("clipboard.selections", CLIPBOARDS)
         self.clipboard_contents_slice_fix = c.boolget("clipboard.contents-slice-fix")
-        self.clipboard_preferred_targets = c.strlistget("clipboard.preferred-targets", ())
+        self.clipboard_preferred_targets = c.strtupleget("clipboard.preferred-targets", ())
         log("client clipboard: greedy=%s, want_targets=%s, client_selections=%s, contents_slice_fix=%s",
             self.clipboard_greedy, self.clipboard_want_targets,
             self.clipboard_client_selections, self.clipboard_contents_slice_fix)
         if self.clipboard_enabled and not self.clipboard_contents_slice_fix:
             log.info("client clipboard does not include contents slice fix")
 
-    def get_info(self):
+    def get_info(self) -> dict:
         return {
             "clipboard" : {
                 "enabled"               : self.clipboard_enabled,
                 "notifications"         : self.clipboard_notifications,
-                "set-enabled"           : self.clipboard_set_enabled,
                 "greedy"                : self.clipboard_greedy,
                 "want-targets"          : self.clipboard_want_targets,
                 "preferred-targets"     : self.clipboard_preferred_targets,
@@ -84,7 +83,7 @@ class ClipboardConnection(StubSourceMixin):
             self.clipboard_progress_timer = None
             self.source_remove(cpt)
 
-    def send_clipboard_progress(self, count):
+    def send_clipboard_progress(self, count : int):
         if not self.clipboard_notifications or not self.hello_sent or self.clipboard_progress_timer:
             return
         #always set "pending" to the latest value:
@@ -118,19 +117,12 @@ class ClipboardConnection(StubSourceMixin):
                 log("%i events in the last %i seconds: %s", len(events), MAX_CLIPBOARD_LIMIT_DURATION, events)
                 if len(events)>=MAX_CLIPBOARD_LIMIT*MAX_CLIPBOARD_LIMIT_DURATION:
                     log.warn(" limit sustained for more than %i seconds,", MAX_CLIPBOARD_LIMIT_DURATION)
-                    log.warn(" the clipboard is now disabled")
-                    self.clipboard_enabled = False
-                    body = "Too many clipboard requests,\n"+\
-                           "a clipboard synchronization loop may be causing this problem,\n"+\
-                           "or an overly aggressive clipboard manager perhaps?"
-                    self.send_clipboard_enabled(msg)
-                    self.may_notify(XPRA_CLIPBOARD_NOTIFICATION_ID,
-                                    "Clipboard synchronization is now disabled", body, icon_name="clipboard")
                 return
         #call compress_clibboard via the encode work queue:
         self.queue_encode((True, self.compress_clipboard, packet))
 
     def compress_clipboard(self, packet):
+        from xpra.net.compression import Compressible, compressed_wrapper
         #Note: this runs in the 'encode' thread!
         packet = list(packet)
         for i, item in enumerate(packet):

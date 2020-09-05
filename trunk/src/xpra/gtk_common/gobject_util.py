@@ -1,36 +1,27 @@
 # This file is part of Xpra.
 # Copyright (C) 2008, 2009 Nathaniel Smith <njs@pobox.com>
-# Copyright (C) 2013 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2013-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 
-from xpra.gtk_common.gobject_compat import import_gobject
-
-gobject = import_gobject()
-try:
-    SIGNAL_RUN_LAST = gobject.SignalFlags.RUN_LAST
-except AttributeError:
-    SIGNAL_RUN_LAST = gobject.SIGNAL_RUN_LAST
+from gi.repository import GObject
+SIGNAL_RUN_LAST = GObject.SignalFlags.RUN_LAST
 def n_arg_signal(n):
-    return (SIGNAL_RUN_LAST, gobject.TYPE_NONE, (gobject.TYPE_PYOBJECT,) * n)
+    return (SIGNAL_RUN_LAST, GObject.TYPE_NONE, (GObject.TYPE_PYOBJECT,) * n)
 no_arg_signal = n_arg_signal(0)
 one_arg_signal = n_arg_signal(1)
 
 
-class AutoPropGObjectMixin(object):
+class AutoPropGObjectMixin:
     """Mixin for automagic property support in GObjects.
 
     Make sure this is the first entry on your parent list, so super().__init__
     will work right."""
     def __init__(self):
-        super(AutoPropGObjectMixin, self).__init__()
         self._gproperties = {}
 
     def do_get_property(self, pspec):
-        getter = "do_get_property_" + pspec.name.replace("-", "_")
-        if hasattr(self, getter):
-            return getattr(self, getter)(pspec.name)
         return self._gproperties.get(pspec.name)
 
     def do_set_property(self, pspec, value):

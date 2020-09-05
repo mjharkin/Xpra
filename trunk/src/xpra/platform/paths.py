@@ -12,7 +12,6 @@ import sys
 from xpra.platform import platform_import
 
 
-
 def valid_dir(path):
     try:
         return bool(path) and os.path.exists(path) and os.path.isdir(path)
@@ -74,6 +73,13 @@ def get_socket_dirs():
 def do_get_socket_dirs():
     return ["~/.xpra"]
 
+
+def get_client_socket_dirs():
+    return envaslist_or_delegate("XPRA_CLIENT_SOCKET_DIRS", do_get_client_socket_dirs)
+def do_get_client_socket_dirs():
+    return []
+
+
 def get_default_log_dirs():
     return envaslist_or_delegate("XPRA_LOG_DIRS", do_get_default_log_dirs)
 def do_get_default_log_dirs():
@@ -116,7 +122,7 @@ def do_get_script_bin_dirs():
 def get_remote_run_xpra_scripts():
     return envaslist_or_delegate("XPRA_REMOTE_RUN_XPRA_SCRIPTS", do_get_remote_run_xpra_scripts)
 def do_get_remote_run_xpra_scripts():
-    return ["$XDG_RUNTIME_DIR/xpra/run-xpra", "xpra", "/usr/local/bin/xpra", "~/.xpra/run-xpra"]
+    return ["$XDG_RUNTIME_DIR/xpra/run-xpra", "xpra", "/usr/local/bin/xpra", "~/.xpra/run-xpra", "Xpra_cmd.exe"]
 
 
 def get_sshpass_command():
@@ -157,7 +163,7 @@ def default_get_app_dir():
             adir = os.path.join(prefix, "share", "xpra")
             if valid_dir(adir):
                 return adir
-    adir = os.path.dirname(inspect.getfile(sys._getframe(1)))
+    adir = os.path.dirname(inspect.getfile(sys._getframe(1)))  #pylint: disable=protected-access
     def root_module(d):
         for psep in (os.path.sep, "/", "\\"):
             pos = d.find("xpra%splatform" % psep)
@@ -254,6 +260,15 @@ def get_sound_command():
 def do_get_sound_command():
     return get_xpra_command()
 
+def get_python_execfile_command():
+    envvalue = os.environ.get("XPRA_PYTHON_COMMAND")
+    if envvalue:
+        import shlex
+        return shlex.split(envvalue)
+    return do_get_python_execfile_command()
+def do_get_python_execfile_command():
+    return ["python3"]
+
 
 platform_import(globals(), "paths", True,
                 "do_get_resources_dir",
@@ -271,6 +286,7 @@ platform_import(globals(), "paths", False,
                 "do_get_ssh_known_hosts_files",
                 "do_get_user_conf_dirs",
                 "do_get_socket_dirs",
+                "do_get_client_socket_dirs",
                 "do_get_default_log_dirs",
                 "do_get_download_dir",
                 "do_get_libexec_dir",
@@ -278,6 +294,7 @@ platform_import(globals(), "paths", False,
                 "do_get_xpra_tmp_dir",
                 "do_get_script_bin_dirs",
                 "do_get_desktop_background_paths",
+                "do_get_python_execfile_command",
                 )
 
 def get_info():
@@ -296,6 +313,7 @@ def get_info():
         "ssh_conf"          : {"dirs"   : get_ssh_conf_dirs()},
         "user_conf"         : {"dirs"   : get_user_conf_dirs()},
         "socket"            : {"dirs"   : get_socket_dirs()},
+        "client-socket"     : {"dirs"   : get_client_socket_dirs()},
         "log"               : {"dirs"   : get_default_log_dirs()},
         "download"          : {"dir"    : get_download_dir()},
         "libexec"           : {"dir"    : get_libexec_dir()},
@@ -304,6 +322,7 @@ def get_info():
         "xpra-module"       : XPRA_MODULE_PATH,
         "app"               : {"default" : {"dir"   : default_get_app_dir()}},
         "desktop-background": get_desktop_background_paths(),
+        "ssh-known-hosts"   : get_ssh_known_hosts_files(),
         "resources"         : get_resources_dir(),
         "icons"             : get_icon_dir(),
         "home"              : os.path.expanduser("~"),
@@ -311,6 +330,7 @@ def get_info():
         "nodock_command"    : get_nodock_command(),
         "sound_command"     : get_sound_command(),
         "sshpass_command"   : get_sshpass_command(),
+        "python-execfile"   : get_python_execfile_command(),
         }
 
 

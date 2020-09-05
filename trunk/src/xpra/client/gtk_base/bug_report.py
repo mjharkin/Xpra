@@ -1,34 +1,31 @@
 #!/usr/bin/env python
 # This file is part of Xpra.
-# Copyright (C) 2014-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2014-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import os.path
 import sys
 import time
+from gi.repository import Gtk, Gdk
 
-from xpra.gtk_common.gobject_compat import import_gtk, import_gdk, import_pango, is_gtk3
 from xpra.gtk_common.gtk_util import (
-    window_defaults, gtk_main, add_close_accel, scaled_image,
-    pixbuf_new_from_file, get_display_info, get_default_root_window,
+    add_close_accel, scaled_image, get_icon_pixbuf,
+    get_display_info, get_default_root_window,
     choose_file, get_gtk_version_info,
-    JUSTIFY_LEFT, WIN_POS_CENTER, FILE_CHOOSER_ACTION_SAVE,
     )
-from xpra.util import nonl, envint, repr_ellipsized
-from xpra.os_util import strtobytes
+from xpra.os_util import hexstr
+from xpra.platform.gui import force_focus
+from xpra.util import nonl, envint, envbool, repr_ellipsized
 from xpra.log import Logger
 
 log = Logger("util")
 
-gtk = import_gtk()
-gdk = import_gdk()
-pango = import_pango()
-
 STEP_DELAY = envint("XPRA_BUG_REPORT_STEP_DELAY", 0)
+OBFUSCATE = envbool("XPRA_OBFUSCATE_BUG_REPORT", True)
 
 
-class BugReport(object):
+class BugReport:
 
     def init(self, show_about=True, get_server_info=None, opengl_info=None, includes=None):
         self.show_about = show_about
@@ -38,62 +35,57 @@ class BugReport(object):
         self.setup_window()
 
     def setup_window(self):
-        self.window = gtk.Window()
-        window_defaults(self.window)
-        self.window.connect("destroy", self.close)
+        self.window = Gtk.Window()
+        self.window.set_border_width(20)
+        self.window.connect("delete-event", self.close)
         self.window.set_default_size(400, 300)
         self.window.set_title("Xpra Bug Report")
 
-        icon_pixbuf = self.get_icon("bugs.png")
+        icon_pixbuf = get_icon_pixbuf("bugs.png")
         if icon_pixbuf:
             self.window.set_icon(icon_pixbuf)
-        self.window.set_position(WIN_POS_CENTER)
+        self.window.set_position(Gtk.WindowPosition.CENTER)
 
-        vbox = gtk.VBox(False, 0)
+        vbox = Gtk.VBox(False, 0)
         vbox.set_spacing(15)
 
         # Title
-        hbox = gtk.HBox(False, 0)
-        icon_pixbuf = self.get_icon("xpra.png")
+        hbox = Gtk.HBox(False, 0)
+        icon_pixbuf = get_icon_pixbuf("xpra.png")
         if icon_pixbuf and self.show_about:
             from xpra.gtk_common.about import about
-            logo_button = gtk.Button("")
+            logo_button = Gtk.Button("")
             settings = logo_button.get_settings()
             settings.set_property('gtk-button-images', True)
             logo_button.connect("clicked", about)
             logo_button.set_tooltip_text("About")
-            image = gtk.Image()
+            image = Gtk.Image()
             image.set_from_pixbuf(icon_pixbuf)
             logo_button.set_image(image)
             hbox.pack_start(logo_button, expand=False, fill=False)
 
-        label = gtk.Label("Xpra Bug Report Tool")
-        label.modify_font(pango.FontDescription("sans 14"))
-        hbox.pack_start(label, expand=True, fill=True)
-        vbox.pack_start(hbox)
-
         #the box containing all the input:
-        ibox = gtk.VBox(False, 0)
+        ibox = Gtk.VBox(False, 0)
         ibox.set_spacing(3)
         vbox.pack_start(ibox)
 
         # Description
-        al = gtk.Alignment(xalign=0, yalign=0.5, xscale=0.0, yscale=0)
-        al.add(gtk.Label("Please describe the problem:"))
+        al = Gtk.Alignment(xalign=0, yalign=0.5, xscale=0.0, yscale=0)
+        al.add(Gtk.Label("Please describe the problem:"))
         ibox.pack_start(al)
-        #self.description = gtk.Entry(max=128)
+        #self.description = Gtk.Entry(max=128)
         #self.description.set_width_chars(40)
-        self.description = gtk.TextView()
+        self.description = Gtk.TextView()
         self.description.set_accepts_tab(True)
-        self.description.set_justification(JUSTIFY_LEFT)
+        self.description.set_justification(Gtk.Justification.LEFT)
         self.description.set_border_width(2)
         self.description.set_size_request(300, 80)
-        #self.description.modify_bg(STATE_NORMAL, gdk.Color(red=32768, green=32768, blue=32768))
+        #self.description.modify_bg(Gtk.StateType.NORMAL, Gdk.Color(red=32768, green=32768, blue=32768))
         ibox.pack_start(self.description, expand=False, fill=False)
 
         # Toggles:
-        al = gtk.Alignment(xalign=0, yalign=0.5, xscale=0.0, yscale=0)
-        al.add(gtk.Label("Include:"))
+        al = Gtk.Alignment(xalign=0, yalign=0.5, xscale=0.0, yscale=0)
+        al.add(Gtk.Label("Include:"))
         ibox.pack_start(al)
         #generic toggles:
         from xpra.gtk_common.keymap import get_gtk_keymap
@@ -108,11 +100,6 @@ class BugReport(object):
         def get_gl_info():
             if self.opengl_info:
                 return self.opengl_info
-            try:
-                from xpra.client.gl.gtk_base.gtkgl_check import check_support
-                return check_support(force_enable=True)
-            except Exception as e:
-                return {"error" : str(e)}
         from xpra.net.net_util import get_info as get_net_info
         from xpra.platform.paths import get_info as get_path_info
         from xpra.platform.gui import get_info as get_gui_info
@@ -127,7 +114,7 @@ class BugReport(object):
                     "executable"    : sys.executable,
                     "version"       : get_version_info(),
                     "platform"      : get_platform_info(),
-                    "host"          : get_host_info(),
+                    "host"          : get_host_info(OBFUSCATE),
                     "paths"         : get_path_info(),
                     "gtk"           : get_gtk_version_info(),
                     "gui"           : get_gui_info(),
@@ -174,7 +161,7 @@ class BugReport(object):
             get_screenshot = _get_screenshot
         self.toggles = (
                    ("system",       "txt",  "System",           get_sys_info,
-                    "Xpra version, platform and host information"),
+                    "Xpra version, platform and host information - including hostname and account information"),
                    ("network",      "txt",  "Network",          get_net_info,
                     "Compression, packet encoding and encryption"),
                    ("encoding",     "txt",  "Encodings",        codec_versions,
@@ -191,7 +178,7 @@ class BugReport(object):
                     ""),
                    )
         for name, _, title, value_cb, tooltip in self.toggles:
-            cb = gtk.CheckButton(title+[" (not available)", ""][bool(value_cb)])
+            cb = Gtk.CheckButton(title+[" (not available)", ""][bool(value_cb)])
             cb.set_active(self.includes.get(name, True))
             cb.set_sensitive(bool(value_cb))
             cb.set_tooltip_text(tooltip)
@@ -199,22 +186,20 @@ class BugReport(object):
             setattr(self, name, cb)
 
         # Buttons:
-        hbox = gtk.HBox(False, 20)
+        hbox = Gtk.HBox(False, 20)
         vbox.pack_start(hbox)
         def btn(label, tooltip, callback, icon_name=None):
-            btn = gtk.Button(label)
+            btn = Gtk.Button(label)
             btn.set_tooltip_text(tooltip)
             btn.connect("clicked", callback)
             if icon_name:
-                icon = self.get_icon(icon_name)
+                icon = get_icon_pixbuf(icon_name)
                 if icon:
                     btn.set_image(scaled_image(icon, 24))
             hbox.pack_start(btn)
             return btn
 
-        if not is_gtk3():
-            #clipboard does not work in gtk3..
-            btn("Copy to clipboard", "Copy all data to clipboard", self.copy_clicked, "clipboard.png")
+        btn("Copy to clipboard", "Copy all data to clipboard", self.copy_clicked, "clipboard.png")
         btn("Save", "Save Bug Report", self.save_clicked, "download.png")
         btn("Cancel", "", self.close, "quit.png")
 
@@ -230,17 +215,21 @@ class BugReport(object):
         log("show()")
         if not self.window:
             self.setup_window()
+        force_focus()
         self.window.show_all()
         self.window.present()
 
     def hide(self):
         log("hide()")
-        self.window.hide()
+        if self.window:
+            self.window.hide()
 
     def close(self, *args):
         log("close%s", args)
-        self.hide()
-        self.window = None
+        if self.window:
+            self.hide()
+            self.window = None
+        return True
 
     def destroy(self, *args):
         log("destroy%s", args)
@@ -251,25 +240,17 @@ class BugReport(object):
 
     def run(self):
         log("run()")
-        gtk_main()
-        log("run() gtk_main done")
+        Gtk.main()
+        log("run() Gtk.main done")
 
     def quit(self, *args):
         log("quit%s", args)
         self.destroy()
-        gtk.main_quit()
+        Gtk.main_quit()
 
 
-    def get_icon(self, icon_name):
-        from xpra.platform.paths import get_icon_dir
-        icon_filename = os.path.join(get_icon_dir(), icon_name)
-        if os.path.exists(icon_filename):
-            return pixbuf_new_from_file(icon_filename)
-        return None
-
-
-    def get_text_data(self):
-        log("get_text_data() collecting bug report data")
+    def get_data(self):
+        log("get_data() collecting bug report data")
         data = []
         tb = self.description.get_buffer()
         buf = tb.get_text(*tb.get_bounds(), include_hidden_chars=False)
@@ -303,42 +284,74 @@ class BugReport(object):
             elif isinstance(value, (list, tuple)):
                 s = os.linesep.join(str(x) for x in value)
             else:
-                s = str(value)
+                s = value
             log("%s (%s) %s: %s", title, tooltip, dtype, repr_ellipsized(s))
             data.append((title, tooltip, dtype, s))
             time.sleep(STEP_DELAY)
         return data
 
     def copy_clicked(self, *_args):
-        data = self.get_text_data()
-        text = os.linesep.join("%s: %s%s%s%s" % (title, tooltip, os.linesep, v, os.linesep)
+        data = self.get_data()
+        def cdata(v):
+            if isinstance(v, bytes):
+                return hexstr(v)
+            return str(v)
+        text = os.linesep.join("%s: %s%s%s%s" % (title, tooltip, os.linesep, cdata(v), os.linesep)
                                for (title,tooltip,dtype,v) in data if dtype=="txt")
-        clipboard = gtk.clipboard_get(gdk.SELECTION_CLIPBOARD)
-        clipboard.set_text(text)
+        clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        clipboard.set_text(text, len(text))
         log.info("%s characters copied to clipboard", len(text))
 
     def save_clicked(self, *_args):
-        file_filter = gtk.FileFilter()
+        file_filter = Gtk.FileFilter()
         file_filter.set_name("ZIP")
         file_filter.add_pattern("*.zip")
-        choose_file(self.window, "Save Bug Report Data", FILE_CHOOSER_ACTION_SAVE, gtk.STOCK_SAVE, self.do_save)
+        choose_file(self.window, "Save Bug Report Data",  Gtk.FileChooserAction.SAVE, Gtk.STOCK_SAVE, self.do_save)
 
     def do_save(self, filename):
         log("do_save(%s)", filename)
         if not filename.lower().endswith(".zip"):
             filename = filename+".zip"
         basenoext = os.path.splitext(os.path.basename(filename))[0]
-        data = self.get_text_data()
+        data = self.get_data()
         import zipfile
-        zf = zipfile.ZipFile(filename, mode='w', compression=zipfile.ZIP_DEFLATED)
+        zf = None
         try:
+            zf = zipfile.ZipFile(filename, mode='w', compression=zipfile.ZIP_DEFLATED)
             for title, tooltip, dtype, s in data:
                 cfile = os.path.join(basenoext, title.replace(" ", "_")+"."+dtype)
                 info = zipfile.ZipInfo(cfile, date_time=time.localtime(time.time()))
                 info.compress_type = zipfile.ZIP_DEFLATED
                 #very poorly documented:
                 info.external_attr = 0o644 << 16
-                info.comment = strtobytes(tooltip)
-                zf.writestr(info, s)
+                info.comment = str(tooltip).encode("utf8")
+                if isinstance(s, bytes):
+                    try:
+                        try:
+                            import tempfile
+                            temp = tempfile.NamedTemporaryFile(prefix="xpra.", suffix=".screenshot", delete=False)
+                            with temp:
+                                temp.write(s)
+                                temp.flush()
+                        except OSError as e:
+                            log.error("Error: cannot create mmap file:")
+                            log.error(" %s", e)
+                        else:
+                            zf.write(temp.name, cfile, zipfile.ZIP_STORED)
+                    finally:
+                        if temp:
+                            os.unlink(temp.name)
+                else:
+                    zf.writestr(info, str(s))
+        except OSError as e:
+            log("do_save(%s) failed to save zip file", filename, exc_info=True)
+            dialog = Gtk.MessageDialog(self.window, 0, Gtk.MessageType.WARNING,
+                                       Gtk.ButtonsType.CLOSE, "Failed to save ZIP file")
+            dialog.format_secondary_text("%s" % e)
+            def close(*_args):
+                dialog.destroy()
+            dialog.connect("response", close)
+            dialog.show_all()
         finally:
-            zf.close()
+            if zf:
+                zf.close()

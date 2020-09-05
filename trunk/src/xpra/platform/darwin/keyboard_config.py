@@ -23,13 +23,13 @@ class KeyboardConfig(KeyboardConfigBase):
         return []
 
 
-    def do_get_keycode(self, client_keycode, keyname, pressed, modifiers):
+    def do_get_keycode(self, client_keycode, keyname, pressed, modifiers, keyval, group):
         global KEYCODES
         keycode = KEYCODES.get(keyname, -1)
         if keycode==-1:
             keycode = KEYCODES.get(keyname.upper(), -1)
-        log("get_keycode%s=%s", (client_keycode, keyname, pressed, modifiers), keycode)
-        return keycode
+        log("get_keycode%s=%s, %s", (client_keycode, keyname, pressed, modifiers, keyval, group), keycode, group)
+        return keycode, group
 
 #we currently assume that all key events are sent using X11 names,
 #so we need to translate them to osx keys

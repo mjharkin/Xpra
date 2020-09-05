@@ -10,10 +10,8 @@
 
 #cython: language_level=3
 
-from __future__ import absolute_import
 
-
-__version__ = (b"Cython", 3, 0)
+__version__ = (b"Cython", 4, 0)
 
 from xpra.buffers.membuf cimport object_as_buffer  #pylint: disable=syntax-error
 
@@ -22,12 +20,6 @@ def b(x):
     if type(x)==bytes:
         return x
     return codecs.latin_1_encode(x)[0]
-import sys
-if sys.version_info[0]==2:
-    LongType = long
-else:
-    LongType = int
-    unicode = str
 
 
 cdef int find(const unsigned char *p, char c, unsigned int start, size_t len):
@@ -45,7 +37,7 @@ cdef decode_int(const unsigned char *x, unsigned int f, int l):
     f += 1
     cdef int newf = find(x, b'e', f, l)
     cdef object n
-    assert newf>=0, "end of int not found"
+    assert newf>(<int> f), "end of int not found"
     cdef unsigned int unewf = newf
     try:
         n = int(x[f:unewf])
@@ -61,14 +53,14 @@ cdef decode_int(const unsigned char *x, unsigned int f, int l):
 cdef decode_string(const unsigned char *x, unsigned int f, int l):
     cdef int colon = find(x, b':', f, l)
     cdef int slen
-    assert colon>=0, "colon not found in string size header"
+    assert colon>=(<int> f), "colon not found in string size header"
     lenstr = x[f:colon]
     cdef unsigned int ucolon = colon
     try:
         slen = int(lenstr)
     except (OverflowError, ValueError):
         try:
-            slen = LongType(lenstr)
+            slen = int(lenstr)
         except:
             raise ValueError("cannot parse length '%s' (f=%s, colon=%s, string=%s)" % (lenstr, f, ucolon, x))
     if x[f] == b'0' and ucolon != f+1:
@@ -106,7 +98,8 @@ cdef decode_dict(const unsigned char *x, unsigned int f, int l):
 
 #cdef const char *DIGITS = '0123456789'
 cdef decode(const unsigned char *x, unsigned int f, size_t l, unsigned char *what):
-    assert f<l, "cannot decode past the end of the string!"
+    if f>=l:
+        raise IndexError("cannot decode past the end of the string!")
     cdef char c = x[f]
     if c==b'l':
         return decode_list(x, f, l)
@@ -130,8 +123,6 @@ def bdecode(x):
     try:
         return decode(s, f, l, "bencoded string")
     except (IndexError, KeyError):
-        import traceback
-        traceback.print_exc()
         raise ValueError
 
 # Encoding functions:
@@ -169,11 +160,9 @@ cdef int encode(object v, r) except -1:
     cdef object t = type(v)
     if t==int:
         return encode_int(v, r)
-    elif t==LongType:
-        return encode_int(v, r)
     elif t==bytes:
         return encode_string(v, r)
-    elif t in (str, unicode):
+    elif t==str:
         return encode_unicode(v, r)
     elif t==list:
         return encode_list(v, r)

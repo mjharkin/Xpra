@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
 # Copyright (C) 2011 Serviware (Arthur Huillet, <ahuillet@serviware.com>)
-# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -9,18 +9,18 @@
 import os
 import signal
 import math
-from collections import deque, namedtuple
+from collections import deque
+from gi.repository import GObject, Gtk, Gdk, GdkX11
 
 from xpra.version_util import XPRA_VERSION
-from xpra.util import updict, rindex, envbool, envint, typedict
+from xpra.util import updict, rindex, envbool, envint, typedict, AdHocStruct, WORKSPACE_NAMES
 from xpra.os_util import memoryview_to_bytes, strtobytes, bytestostr, monotonic_time
+from xpra.common import CLOBBER_UPGRADE, MAX_WINDOW_SIZE
 from xpra.server import server_features
+from xpra.server.source.windows_mixin import WindowsMixin
 from xpra.gtk_common.gobject_util import one_arg_signal
-from xpra.gtk_common.gtk_util import (
-    get_default_root_window, get_xwindow, pixbuf_new_from_data, is_realized,
-    SUBSTRUCTURE_MASK, GDKWINDOW_TEMP,
-    )
-from xpra.x11.common import Unmanageable, MAX_WINDOW_SIZE
+from xpra.gtk_common.gtk_util import get_default_root_window, get_pixbuf_from_data
+from xpra.x11.common import Unmanageable
 from xpra.x11.gtk_x11.prop import prop_set
 from xpra.x11.gtk_x11.tray import get_tray_window, SystemTray
 from xpra.x11.gtk_x11.gdk_bindings import (
@@ -31,7 +31,6 @@ from xpra.x11.bindings.window_bindings import X11WindowBindings #@UnresolvedImpo
 from xpra.x11.bindings.keyboard_bindings import X11KeyboardBindings #@UnresolvedImport
 from xpra.x11.x11_server_base import X11ServerBase
 from xpra.gtk_common.error import xsync, xswallow, xlog, XError
-from xpra.gtk_common.gobject_compat import import_gtk, import_gdk, import_glib, import_gobject, is_gtk3
 from xpra.log import Logger
 
 log = Logger("server")
@@ -45,14 +44,10 @@ metadatalog = Logger("x11", "metadata")
 framelog = Logger("x11", "frame")
 eventlog = Logger("x11", "events")
 mouselog = Logger("x11", "mouse")
+screenlog = Logger("x11", "screen")
 
 X11Window = X11WindowBindings()
 X11Keyboard = X11KeyboardBindings()
-
-gtk = import_gtk()
-gdk = import_gdk()
-glib = import_glib()
-gobject = import_gobject()
 
 REPARENT_ROOT = envbool("XPRA_REPARENT_ROOT", True)
 CONFIGURE_DAMAGE_RATE = envint("XPRA_CONFIGURE_DAMAGE_RATE", 250)
@@ -63,7 +58,7 @@ ALWAYS_RAISE_WINDOW = envbool("XPRA_ALWAYS_RAISE_WINDOW", False)
 WINDOW_SIGNALS = os.environ.get("XPRA_WINDOW_SIGNALS", "SIGINT,SIGTERM,SIGQUIT,SIGCONT,SIGUSR1,SIGUSR2").split(",")
 
 
-class DesktopState(object):
+class DesktopState:
     def __init__(self, geom, resize_counter=0, shown=False):
         self.geom = geom
         self.resize_counter = resize_counter
@@ -71,15 +66,12 @@ class DesktopState(object):
     def __repr__(self):
         return "DesktopState(%s, %i, %s)" % (self.geom, self.resize_counter, self.shown)
 
-class DesktopManager(gtk.Widget):
+class DesktopManager(Gtk.Widget):
     def __init__(self):
         self._models = {}
-        gtk.Widget.__init__(self)
+        Gtk.Widget.__init__(self)
         self.set_property("can-focus", True)
-        if is_gtk3():
-            self.realize()
-        else:
-            self.set_flags(gtk.NO_WINDOW)
+        self.realize()
 
     def __repr__(self):
         return "DesktopManager(%s)" % len(self._models)
@@ -87,8 +79,6 @@ class DesktopManager(gtk.Widget):
     ## For communicating with the main WM:
 
     def add_window(self, model, x, y, w, h):
-        if not is_gtk3():
-            assert is_realized(self)
         self._models[model] = DesktopState([x, y, w, h])
         model.managed_connect("unmanaged", self._unmanaged)
         model.managed_connect("ownership-election", self._elect_me)
@@ -161,8 +151,7 @@ class DesktopManager(gtk.Widget):
 
     def take_window(self, _model, window):
         #log.info("take_window(%s, %s)", model, window)
-        if not is_realized(self):
-            assert is_gtk3()
+        if not self.get_realized():
             #with GTK3, the widget is never realized??
             return
         gdkwin = self.get_window()
@@ -185,10 +174,10 @@ class DesktopManager(gtk.Widget):
                      "%sx%s vs %sx%s", w0, h0, w, h)
         return x, y
 
-gobject.type_register(DesktopManager)
+GObject.type_register(DesktopManager)
 
 
-class XpraServer(gobject.GObject, X11ServerBase):
+class XpraServer(GObject.GObject, X11ServerBase):
     __gsignals__ = {
         "xpra-child-map-event"  : one_arg_signal,
         "xpra-cursor-event"     : one_arg_signal,
@@ -205,7 +194,7 @@ class XpraServer(gobject.GObject, X11ServerBase):
         self._wm = None
         self.last_raised = None
         self.system_tray = False
-        gobject.GObject.__init__(self)
+        GObject.GObject.__init__(self)
         X11ServerBase.__init__(self, clobber)
         self.session_type = "seamless"
 
@@ -213,7 +202,7 @@ class XpraServer(gobject.GObject, X11ServerBase):
         self.wm_name = opts.wm_name
         self.sync_xvfb = int(opts.sync_xvfb)
         self.system_tray = opts.system_tray
-        X11ServerBase.init(self, opts)
+        super().init(opts)
         self.fake_xinerama = opts.fake_xinerama
         def log_server_event(_, event):
             eventlog("server-event: %s", event)
@@ -221,10 +210,12 @@ class XpraServer(gobject.GObject, X11ServerBase):
 
     def server_init(self):
         X11ServerBase.server_init(self)
-        if not self.clobber and self.randr:
+        screenlog("server_init() clobber=%s, randr=%s, initial_resolution=%s",
+                  self.clobber, self.randr, self.initial_resolution)
+        if self.randr and (self.initial_resolution or not self.clobber):
             from xpra.x11.vfb_util import set_initial_resolution, DEFAULT_VFB_RESOLUTION
             with xlog:
-                set_initial_resolution(DEFAULT_VFB_RESOLUTION)
+                set_initial_resolution(self.initial_resolution or DEFAULT_VFB_RESOLUTION)
 
     def server_ready(self):
         if not X11Window.displayHasXComposite():
@@ -233,9 +224,7 @@ class XpraServer(gobject.GObject, X11ServerBase):
             return False
         #check for an existing window manager:
         from xpra.x11.gtk_x11.wm_check import wm_check
-        if not wm_check(self.wm_name, self.clobber):
-            return False
-        return True
+        return wm_check(self.wm_name, self.clobber & CLOBBER_UPGRADE)
 
     def setup(self):
         X11ServerBase.setup(self)
@@ -249,19 +238,21 @@ class XpraServer(gobject.GObject, X11ServerBase):
         # Do this before creating the Wm object, to avoid clobbering its
         # selecting SubstructureRedirect.
         root = get_default_root_window()
-        root.set_events(root.get_events() | SUBSTRUCTURE_MASK)
+        root.set_events(root.get_events() | Gdk.EventMask.SUBSTRUCTURE_MASK)
         prop_set(root, "XPRA_SERVER", "latin1", strtobytes(XPRA_VERSION).decode())
         add_event_receiver(root, self)
         if self.sync_xvfb>0:
-            xid = get_xwindow(root)
+            xid = root.get_xid()
             try:
                 with xsync:
                     self.root_overlay = X11Window.XCompositeGetOverlayWindow(xid)
                     if self.root_overlay:
-                        #ugly: API expects a window object with a ".xid"
-                        X11WindowModel = namedtuple("X11WindowModel", "xid")
-                        root_overlay = X11WindowModel(xid=self.root_overlay)
-                        prop_set(root_overlay, "WM_TITLE", "latin1", u"RootOverlay")
+                        #ugly: API expects a window object with a ".get_xid()" method
+                        window = AdHocStruct()
+                        def get_xid():
+                            return self.root_overlay
+                        window.get_xid = root.get_xid
+                        prop_set(window, "WM_TITLE", "latin1", "RootOverlay")
                         X11Window.AllowInputPassthrough(self.root_overlay)
             except Exception as e:
                 log("XCompositeGetOverlayWindow(%#x)", xid, exc_info=True)
@@ -273,8 +264,9 @@ class XpraServer(gobject.GObject, X11ServerBase):
                     self.root_overlay = None
 
         ### Create the WM object
-        from xpra.x11.gtk_x11.wm import Wm
-        self._wm = Wm(self.clobber, self.wm_name)
+        with xsync:
+            from xpra.x11.gtk_x11.wm import Wm
+            self._wm = Wm(self.clobber, self.wm_name)
         if server_features.windows:
             self._wm.connect("new-window", self._new_window_signaled)
         self._wm.connect("quit", lambda _: self.clean_quit(True))
@@ -330,27 +322,21 @@ class XpraServer(gobject.GObject, X11ServerBase):
 
 
     def get_server_mode(self):
-        if is_gtk3():
-            return "GTK3 X11"
-        return "GTK2 X11"
+        return "GTK3 X11"
 
 
     def server_event(self, *args):
-        X11ServerBase.server_event(self, *args)
+        super().server_event(*args)
         self.emit("server-event", args)
 
 
     def make_hello(self, source):
-        capabilities = X11ServerBase.make_hello(self, source)
+        capabilities = super().make_hello(source)
         if source.wants_features:
             capabilities["pointer.grabs"] = True
             updict(capabilities, "window", {
-                "decorations"            : True,
+                "decorations"            : True,        #v4 clients assume this is enabled
                 "frame-extents"          : True,
-                "raise"                  : True,
-                "resize-counter"         : True,
-                "configure.skip-geometry": True,
-                "configure.pointer"      : True,
                 "configure.delta"        : True,
                 "signals"                : WINDOW_SIGNALS,
                 "dragndrop"              : True,
@@ -367,7 +353,7 @@ class XpraServer(gobject.GObject, X11ServerBase):
     # info:
     #
     def do_get_info(self, proto, server_sources):
-        info = X11ServerBase.do_get_info(self, proto, server_sources)
+        info = super().do_get_info(proto, server_sources)
         info.setdefault("state", {}).update({
                                              "focused"  : self._has_focus,
                                              "grabbed"  : self._has_grab,
@@ -375,7 +361,7 @@ class XpraServer(gobject.GObject, X11ServerBase):
         return info
 
     def get_ui_info(self, proto, wids=None, *args):
-        info = X11ServerBase.get_ui_info(self, proto, wids, *args)
+        info = super().get_ui_info(proto, wids, *args)
         #_NET_WM_NAME:
         wm = self._wm
         if wm:
@@ -383,7 +369,7 @@ class XpraServer(gobject.GObject, X11ServerBase):
         return info
 
     def get_window_info(self, window):
-        info = X11ServerBase.get_window_info(self, window)
+        info = super().get_window_info(window)
         info.update({
                      "focused"  : self._has_focus and self._window_to_id.get(window, -1)==self._has_focus,
                      "grabbed"  : self._has_grab and self._window_to_id.get(window, -1)==self._has_grab,
@@ -405,7 +391,7 @@ class XpraServer(gobject.GObject, X11ServerBase):
         #when we have clients, this should have been done already
         #in the code that synchonizes the screen resolution
         if not self._server_sources:
-            super(XpraServer, self).set_screen_geometry_attributes(w, h)
+            super().set_screen_geometry_attributes(w, h)
 
     def set_desktops(self, names):
         wm = self._wm
@@ -462,10 +448,14 @@ class XpraServer(gobject.GObject, X11ServerBase):
 
         root = get_default_root_window()
         with xsync:
-            for window in get_children(root):
-                xid = get_xwindow(window)
-                if X11Window.is_override_redirect(xid) and X11Window.is_mapped(xid):
-                    self._add_new_or_window(window)
+            children = get_children(root)
+        for window in children:
+            xid = window.get_xid()
+            can_add = False
+            with xlog:
+                can_add = X11Window.is_override_redirect(xid) and X11Window.is_mapped(xid)
+            if can_add:
+                self._add_new_or_window(window)
 
     def _lookup_window(self, wid):
         assert isinstance(wid, int), "window id value '%s' is a %s and not a number" % (wid, type(wid))
@@ -476,14 +466,14 @@ class XpraServer(gobject.GObject, X11ServerBase):
         log("get_transient_for window=%s, transient_for=%s", window, transient_for)
         if transient_for is None:
             return 0
-        xid = get_xwindow(transient_for)
+        xid = transient_for.get_xid()
         log("transient_for.xid=%#x", xid)
         for w,wid in self._window_to_id.items():
             if w.get_property("xid")==xid:
                 log("found match, window id=%s", wid)
                 return wid
         root = get_default_root_window()
-        if get_xwindow(root)==xid:
+        if root.get_xid()==xid:
             log("transient-for using root")
             return -1       #-1 is the backwards compatible marker for root...
         log("not found transient_for=%s, xid=%#x", transient_for, xid)
@@ -491,10 +481,13 @@ class XpraServer(gobject.GObject, X11ServerBase):
 
 
     def parse_hello_ui_window_settings(self, ss, _caps):
-        framelog("parse_hello_ui_window_settings: client window_frame_sizes=%s", ss.window_frame_sizes)
+        #FIXME: with multiple users, don't set any frame size?
         frame = None
-        if ss.window_frame_sizes:
-            frame = ss.window_frame_sizes.intlistget("frame", (0, 0, 0, 0), 4, 4)
+        if isinstance(ss, WindowsMixin):
+            window_frame_sizes = ss.window_frame_sizes
+            framelog("parse_hello_ui_window_settings: client window_frame_sizes=%s", window_frame_sizes)
+            if window_frame_sizes:
+                frame = window_frame_sizes.inttupleget("frame", (0, 0, 0, 0), 4, 4)
         if self._wm:
             self._wm.set_default_frame_extents(frame)
 
@@ -549,7 +542,7 @@ class XpraServer(gobject.GObject, X11ServerBase):
 
     def _add_new_window_common(self, window):
         windowlog("adding window %s", window)
-        wid = super(XpraServer, self)._add_new_window_common(window)
+        wid = super()._add_new_window_common(window)
         window.managed_connect("client-contents-changed", self._contents_changed)
         window.managed_connect("unmanaged", self._lost_window)
         window.managed_connect("grab", self._window_grab)
@@ -604,12 +597,12 @@ class XpraServer(gobject.GObject, X11ServerBase):
             self.size_notify_clients(window)
             return
         if self.snc_timer>0:
-            glib.source_remove(self.snc_timer)
+            self.source_remove(self.snc_timer)
         #TODO: find a better way to choose the timer delay:
         #for now, we wait at least 100ms, up to 250ms if the client has just sent us a resize:
         #(lcce should always be in the past, so min(..) should be redundant here)
         delay = max(100, min(250, 250 + 1000 * (lcce-monotonic_time())))
-        self.snc_timer = glib.timeout_add(int(delay), self.size_notify_clients, window, lcce)
+        self.snc_timer = self.timeout_add(int(delay), self.size_notify_clients, window, lcce)
 
     def size_notify_clients(self, window, lcce=-1):
         geomlog("size_notify_clients(%s, %s) last_client_configure_event=%s",
@@ -624,7 +617,8 @@ class XpraServer(gobject.GObject, X11ServerBase):
             return
         x, y, nw, nh = self._desktop_manager.window_geometry(window)
         resize_counter = self._desktop_manager.get_resize_counter(window, 1)
-        for ss in self._server_sources.values():
+        wsources = [ss for ss in self._server_sources.values() if isinstance(ss, WindowsMixin)]
+        for ss in wsources:
             ss.move_resize_window(wid, window, x, y, nw, nh, resize_counter)
             #refresh to ensure the client gets the new window contents:
             #TODO: to save bandwidth, we should compare the dimensions and skip the refresh
@@ -632,13 +626,13 @@ class XpraServer(gobject.GObject, X11ServerBase):
             ss.damage(wid, window, 0, 0, nw, nh)
 
     def _add_new_or_window(self, raw_window):
-        xid = get_xwindow(raw_window)
+        xid = raw_window.get_xid()
         if self.root_overlay and self.root_overlay==xid:
             windowlog("ignoring root overlay window %#x", self.root_overlay)
             return
-        if raw_window.get_window_type()==GDKWINDOW_TEMP:
+        if raw_window.get_window_type()==Gdk.WindowType.TEMP:
             #ignoring one of gtk's temporary windows
-            #all the windows we manage should be gdk.WINDOW_FOREIGN
+            #all the windows we manage should be Gdk.WINDOW_FOREIGN
             windowlog("ignoring TEMP window %#x", xid)
             return
         WINDOW_MODEL_KEY = "_xpra_window_model_"
@@ -705,7 +699,7 @@ class XpraServer(gobject.GObject, X11ServerBase):
 
 
     def add_control_commands(self):
-        super(XpraServer, self).add_control_commands()
+        super().add_control_commands()
         from xpra.server.control_command import ArgsControlCommand
         cmd = ArgsControlCommand("show-all-windows", "make all the windows visible", validation=[])
         def control_cb():
@@ -733,12 +727,13 @@ class XpraServer(gobject.GObject, X11ServerBase):
             #nothing to do!
             return
         self._focus_history.append(wid)
-        had_focus = self._id_to_window.get(self._has_focus)
+        hfid = self._has_focus
+        had_focus = self._id_to_window.get(hfid)
         def reset_focus():
             toplevel = None
             if self._wm:
                 toplevel = self._wm.get_property("toplevel")
-            focuslog("reset_focus() %s / %s had focus (toplevel=%s)", self._has_focus, had_focus, toplevel)
+            focuslog("reset_focus() %s / %s had focus (toplevel=%s)", hfid, had_focus, toplevel)
             #this will call clear_keys_pressed() if the server is an InputServer:
             self.reset_focus()
             # FIXME: kind of a hack:
@@ -828,8 +823,17 @@ class XpraServer(gobject.GObject, X11ServerBase):
         assert len(event.data)==5
         #x_root, y_root, direction, button, source_indication = event.data
         wid = self._window_to_id[window]
-        for ss in self._server_sources.values():
-            ss.initiate_moveresize(wid, window, *event.data)
+        #find clients that handle windows:
+        wsources = [ss for ss in self._server_sources.values() if isinstance(ss, WindowsMixin)]
+        if not wsources:
+            return
+        #prefer the "UI driver" if we find it:
+        driversources = [ss for ss in wsources if self.ui_driver==ss.uuid]
+        if driversources:
+            driversources[0].initiate_moveresize(wid, window, *event.data)
+            return
+        #otherwise, fallback to the first one:
+        wsources[0].initiate_moveresize(wid, window, *event.data)
 
 
     def _raised_window(self, window, event):
@@ -840,7 +844,8 @@ class XpraServer(gobject.GObject, X11ServerBase):
         if self._has_focus==wid:
             return
         for ss in self._server_sources.values():
-            ss.raise_window(wid, window)
+            if isinstance(ss, WindowsMixin):
+                ss.raise_window(wid, window)
 
 
     def _set_window_state(self, proto, wid, window, new_window_state):
@@ -852,10 +857,10 @@ class XpraServer(gobject.GObject, X11ServerBase):
         changes = []
         if "frame" in new_window_state:
             #the size of the window frame may have changed
-            frame = nws.intlistget("frame", (0, 0, 0, 0))
+            frame = nws.inttupleget("frame", (0, 0, 0, 0))
             window.set_property("frame", frame)
         #boolean: but not a wm_state and renamed in the model... (iconic vs inconified!)
-        iconified = nws.boolget("iconified")
+        iconified = nws.boolget("iconified", None)
         if iconified is not None:
             if window.is_OR():
                 log("ignoring iconified=%s on OR window %s", iconified, window)
@@ -896,7 +901,9 @@ class XpraServer(gobject.GObject, X11ServerBase):
         if not window:
             windowlog("cannot map window %i: not found, already removed?", wid)
             return
-        assert not window.is_OR()
+        if window.is_OR():
+            windowlog.warn("Warning: received map event on OR window %s", wid)
+            return
         ss = self.get_server_source(proto)
         if ss is None:
             return
@@ -935,7 +942,8 @@ class XpraServer(gobject.GObject, X11ServerBase):
         if self._desktop_manager.is_shown(window):
             geomlog("client %s unmapped window %s - %s", ss, wid, window)
             for ss in self._server_sources.values():
-                ss.unmap_window(wid, window)
+                if isinstance(ss, WindowsMixin):
+                    ss.unmap_window(wid, window)
             window.unmap()
             iconified = len(packet)>=3 and bool(packet[2])
             if iconified and not window.get_property("iconic"):
@@ -992,6 +1000,11 @@ class XpraServer(gobject.GObject, X11ServerBase):
                 pwid = packet[10]
                 pointer = packet[11]
                 modifiers = packet[12]
+                if pwid==wid and window.is_OR():
+                    #some clients may send the OR window wid
+                    #this causes focus issues (see #1999)
+                    pwid = -1
+                mouselog("configure pointer data: %s", (pwid, pointer, modifiers))
                 if self._process_mouse_common(proto, pwid, pointer):
                     #only update modifiers if the window is in focus:
                     if self._has_focus==wid:
@@ -1022,7 +1035,7 @@ class XpraServer(gobject.GObject, X11ServerBase):
                         #try to ensure this won't trigger a resizing loop:
                         counter = max(0, resize_counter-1)
                         for s in self._server_sources.values():
-                            if s!=ss:
+                            if s!=ss and isinstance(s, WindowsMixin):
                                 s.resize_window(wid, window, aw, ah, resize_counter=counter)
                     damage |= owx!=ax or owy!=ay or resized
             if not shown and not skip_geometry:
@@ -1070,14 +1083,19 @@ class XpraServer(gobject.GObject, X11ServerBase):
         Override so we can update the workspace on the window directly,
         instead of storing it as a client property
         """
-        workspace = new_client_properties.get("workspace")
-        workspacelog("workspace from client properties %s: %s", new_client_properties, workspace)
+        workspace = typedict(new_client_properties).intget("workspace", None)
+        def wn(w):
+            return WORKSPACE_NAMES.get(w, w)
+        workspacelog("workspace from client properties %s: %s", new_client_properties, wn(workspace))
         if workspace is not None:
             window.move_to_workspace(workspace)
             #we have handled it on the window directly, so remove it from client properties
-            del new_client_properties["workspace"]
+            try:
+                del new_client_properties[b"workspace"]
+            except KeyError:
+                del new_client_properties["workspace"]
         #handle the rest as normal:
-        X11ServerBase._set_client_properties(self, proto, wid, window, new_client_properties)
+        super()._set_client_properties(proto, wid, window, new_client_properties)
 
 
     """ override so we can raise the window under the cursor
@@ -1092,7 +1110,7 @@ class XpraServer(gobject.GObject, X11ServerBase):
                 mouselog("raising %s", window)
                 with xswallow:
                     window.raise_window()
-        X11ServerBase._move_pointer(self, wid, pos, *args)
+        super()._move_pointer(wid, pos, *args)
 
 
     def _process_close_window(self, proto, packet):
@@ -1134,7 +1152,7 @@ class XpraServer(gobject.GObject, X11ServerBase):
 
 
     def refresh_window_area(self, window, x, y, width, height, options=None):
-        super(XpraServer, self).refresh_window_area(window, x, y, width, height, options)
+        super().refresh_window_area(window, x, y, width, height, options)
         if self.root_overlay:
             image = window.get_image(x, y, width, height)
             if image:
@@ -1147,8 +1165,8 @@ class XpraServer(gobject.GObject, X11ServerBase):
     #
 
     def update_root_overlay(self, window, x, y, image):
-        overlaywin = gdk.window_foreign_new(self.root_overlay)
-        gc = overlaywin.new_gc()
+        display = Gdk.Display.get_default()
+        overlaywin = GdkX11.X11Window.foreign_new_for_display(display, self.root_overlay)
         wx, wy = window.get_property("geometry")[:2]
         #FIXME: we should paint the root overlay directly
         # either using XCopyArea or XShmPutImage,
@@ -1157,29 +1175,39 @@ class XpraServer(gobject.GObject, X11ServerBase):
         height = image.get_height()
         rowstride = image.get_rowstride()
         img_data = image.get_pixels()
-        if image.get_pixel_format().startswith("BGR"):
-            try:
-                from xpra.codecs.argb.argb import unpremultiply_argb, bgra_to_rgba  #@UnresolvedImport
-                if image.get_pixel_format()=="BGRA":
-                    img_data = unpremultiply_argb(img_data)
-                img_data = bgra_to_rgba(img_data)
-            except:
-                pass
-        img_data = memoryview_to_bytes(img_data)
-        has_alpha = image.get_pixel_format().find("A")>=0
-        log("update_root_overlay%s painting rectangle %s", (window, x, y, image), (wx+x, wy+y, width, height))
-        if has_alpha:
-            import cairo
-            pixbuf = pixbuf_new_from_data(img_data, gdk.COLORSPACE_RGB, True, 8, width, height, rowstride)
-            cr = overlaywin.cairo_create()
-            cr.new_path()
-            cr.rectangle(wx+x, wy+y, width, height)
-            cr.clip()
-            cr.set_source_pixbuf(pixbuf, wx+x, wy+y)
-            cr.set_operator(cairo.OPERATOR_OVER)
-            cr.paint()
+        rgb_format = image.get_pixel_format()
+        from xpra.codecs.argb.argb import ( #@UnresolvedImport
+            unpremultiply_argb, bgra_to_rgba, bgra_to_rgbx, r210_to_rgbx, bgr565_to_rgbx  #@UnresolvedImport
+            )
+        from cairo import OPERATOR_OVER, OPERATOR_SOURCE  #pylint: disable=no-name-in-module
+        log("update_root_overlay%s rgb_format=%s, img_data=%i (%s)",
+                 (window, x, y, image), rgb_format, len(img_data), type(img_data))
+        operator = OPERATOR_SOURCE
+        if rgb_format=="BGRA":
+            img_data = unpremultiply_argb(img_data)
+            img_data = bgra_to_rgba(img_data)
+            operator = OPERATOR_OVER
+        elif rgb_format=="BGRX":
+            img_data = bgra_to_rgbx(img_data)
+        elif rgb_format=="r210":
+            #lossy...
+            img_data = r210_to_rgbx(img_data, width, height, rowstride, width*4)
+            rowstride = width*4
+        elif rgb_format=="BGR565":
+            img_data = bgr565_to_rgbx(img_data)
+            rowstride *= 2
         else:
-            overlaywin.draw_rgb_32_image(gc, wx+x, wy+y, width, height, gdk.RGB_DITHER_NONE, img_data, rowstride)
+            raise Exception("xync-xvfb root overlay paint code does not handle %s pixel format" % image.get_pixel_format())
+        img_data = memoryview_to_bytes(img_data)
+        log("update_root_overlay%s painting rectangle %s", (window, x, y, image), (wx+x, wy+y, width, height))
+        pixbuf = get_pixbuf_from_data(img_data, True, width, height, rowstride)
+        cr = overlaywin.cairo_create()
+        cr.new_path()
+        cr.rectangle(wx+x, wy+y, width, height)
+        cr.clip()
+        Gdk.cairo_set_source_pixbuf(cr, pixbuf, wx+x, wy+y)
+        cr.set_operator(operator)
+        cr.paint()
         image.free()
 
     def repaint_root_overlay(self):
@@ -1200,7 +1228,8 @@ class XpraServer(gobject.GObject, X11ServerBase):
     def do_repaint_root_overlay(self):
         self.repaint_root_overlay_timer = None
         root_width, root_height = self.get_root_window_size()
-        overlaywin = gdk.window_foreign_new(self.root_overlay)
+        display = Gdk.Display.get_default()
+        overlaywin = GdkX11.X11Window.foreign_new_for_display(display, self.root_overlay)
         log("overlaywin: %s", overlaywin.get_geometry())
         cr = overlaywin.cairo_create()
         def fill_grey_rect(shade, x, y, w, h):
@@ -1348,4 +1377,4 @@ class XpraServer(gobject.GObject, X11ServerBase):
         return X11_DBUS_Server(self, os.environ.get("DISPLAY", "").lstrip(":"))
 
 
-gobject.type_register(XpraServer)
+GObject.type_register(XpraServer)

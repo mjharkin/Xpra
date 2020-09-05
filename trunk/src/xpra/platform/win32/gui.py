@@ -12,8 +12,11 @@ import types
 import ctypes
 from ctypes import WinDLL, CFUNCTYPE, c_int, POINTER, Structure, byref, sizeof
 from ctypes.wintypes import HWND, DWORD, WPARAM, LPARAM, MSG, POINT, RECT
+from ctypes import CDLL, pythonapi, c_void_p, py_object
+from ctypes.util import find_library
 
 from xpra.client import mixin_features
+from xpra.exit_codes import EXIT_OK
 from xpra.platform.win32 import constants as win32con, setup_console_event_listener
 from xpra.platform.win32.window_hooks import Win32Hooks
 from xpra.platform.win32.win32_events import KNOWN_EVENTS, POWER_EVENTS
@@ -35,8 +38,7 @@ from xpra.platform.win32.common import (
     user32,
     )
 from xpra.util import AdHocStruct, csv, envint, envbool, typedict
-from xpra.os_util import PYTHON2, PYTHON3, get_util_logger, strtobytes
-
+from xpra.os_util import get_util_logger, strtobytes
 from xpra.log import Logger
 
 log = Logger("win32")
@@ -52,15 +54,12 @@ SCREENSAVER_LISTENER_POLL_DELAY = envint("XPRA_SCREENSAVER_LISTENER_POLL_DELAY",
 APP_ID = os.environ.get("XPRA_WIN32_APP_ID", "Xpra")
 
 
-if PYTHON3:
-    from ctypes import CDLL, pythonapi, c_void_p, py_object
-    from ctypes.util import find_library
-    PyCapsule_GetPointer = pythonapi.PyCapsule_GetPointer
-    PyCapsule_GetPointer.restype = c_void_p
-    PyCapsule_GetPointer.argtypes = [py_object]
-    log("PyCapsute_GetPointer=%s", PyCapsule_GetPointer)
-    gdkdll = CDLL(find_library("libgdk-3-0.dll"))
-    log("gdkdll=%s", gdkdll)
+PyCapsule_GetPointer = pythonapi.PyCapsule_GetPointer
+PyCapsule_GetPointer.restype = c_void_p
+PyCapsule_GetPointer.argtypes = [py_object]
+log("PyCapsute_GetPointer=%s", PyCapsule_GetPointer)
+gdkdll = CDLL(find_library("libgdk-3-0.dll"))
+log("gdkdll=%s", gdkdll)
 
 
 shell32 = WinDLL("shell32", use_last_error=True)
@@ -77,7 +76,7 @@ except ImportError as e:
 try:
     dwmapi = WinDLL("dwmapi", use_last_error=True)
     DwmGetWindowAttribute = dwmapi.DwmGetWindowAttribute
-except:
+except Exception:
     #win XP:
     DwmGetWindowAttribute = None
 
@@ -87,9 +86,7 @@ GROUP_LEADER = WINDOW_HOOKS and envbool("XPRA_WIN32_GROUP_LEADER", True)
 UNDECORATED_STYLE = WINDOW_HOOKS and envbool("XPRA_WIN32_UNDECORATED_STYLE", True)
 CLIP_CURSOR = WINDOW_HOOKS and envbool("XPRA_WIN32_CLIP_CURSOR", True)
 #GTK3 is fixed, so we don't need this hook:
-DEFAULT_MAX_SIZE_HINT = PYTHON2
-MAX_SIZE_HINT = WINDOW_HOOKS and envbool("XPRA_WIN32_MAX_SIZE_HINT", DEFAULT_MAX_SIZE_HINT)
-GEOMETRY = WINDOW_HOOKS and envbool("XPRA_WIN32_GEOMETRY", True)
+MAX_SIZE_HINT = WINDOW_HOOKS and envbool("XPRA_WIN32_MAX_SIZE_HINT", False)
 LANGCHANGE = WINDOW_HOOKS and envbool("XPRA_WIN32_LANGCHANGE", True)
 
 DPI_AWARE = envbool("XPRA_DPI_AWARE", True)
@@ -99,14 +96,23 @@ WHEEL = envbool("XPRA_WHEEL", True)
 WHEEL_DELTA = envint("XPRA_WIN32_WHEEL_DELTA", 120)
 assert WHEEL_DELTA>0
 
-log("win32 gui settings: CONSOLE_EVENT_LISTENER=%s, USE_NATIVE_TRAY=%s, WINDOW_HOOKS=%s, GROUP_LEADER=%s, UNDECORATED_STYLE=%s, CLIP_CURSOR=%s, MAX_SIZE_HINT=%s, GEOMETRY=%s, LANGCHANGE=%s, DPI_AWARE=%s, DPI_AWARENESS=%s, FORWARD_WINDOWS_KEY=%s, WHEEL=%s, WHEEL_DELTA=%s",
-    CONSOLE_EVENT_LISTENER, USE_NATIVE_TRAY, WINDOW_HOOKS, GROUP_LEADER, UNDECORATED_STYLE, CLIP_CURSOR, MAX_SIZE_HINT, GEOMETRY, LANGCHANGE, DPI_AWARE, DPI_AWARENESS, FORWARD_WINDOWS_KEY, WHEEL, WHEEL_DELTA)
+log("win32 gui settings: CONSOLE_EVENT_LISTENER=%s, USE_NATIVE_TRAY=%s, WINDOW_HOOKS=%s, GROUP_LEADER=%s",
+    CONSOLE_EVENT_LISTENER, USE_NATIVE_TRAY, WINDOW_HOOKS, GROUP_LEADER)
+log("win32 gui settings: UNDECORATED_STYLE=%s, CLIP_CURSOR=%s, MAX_SIZE_HINT=%s, LANGCHANGE=%s",
+    UNDECORATED_STYLE, CLIP_CURSOR, MAX_SIZE_HINT, LANGCHANGE)
+log("win32 gui settings: DPI_AWARE=%s, DPI_AWARENESS=%s, FORWARD_WINDOWS_KEY=%s, WHEEL=%s, WHEEL_DELTA=%s",
+    DPI_AWARE, DPI_AWARENESS, FORWARD_WINDOWS_KEY, WHEEL, WHEEL_DELTA)
 
 
 def do_init():
     init_dpi()
     if APP_ID:
         init_appid()
+    try:
+        from xpra.platform.win32.dwm_color import match_window_color
+        match_window_color()
+    except Exception:
+        log.error("Error: failed to setup dwm window color matching", exc_info=True)
 
 def init_dpi():
     #tell win32 we handle dpi
@@ -247,8 +253,6 @@ def get_window_handle(window):
         pass
     if not gdk_window:
         return 0
-    if PYTHON2:
-        return gdk_window.handle
     gpointer =  PyCapsule_GetPointer(gdk_window.__gpointer__, None)
     hwnd = gdkdll.gdk_win32_window_get_handle(gpointer)
     #log("get_window_handle(%s) gpointer=%#x, hwnd=%#x", gpointer, hwnd)
@@ -382,11 +386,13 @@ def pointer_grab(window, *args):
 
 def pointer_ungrab(window, *args):
     hwnd = get_window_handle(window)
-    grablog("pointer_ungrab%s window=%s, hwnd=%s", args, window, hwnd)
+    client = window._client
+    grablog("pointer_ungrab%s window=%s, hwnd=%s, pointer_grabbed=%s",
+            args, window, hwnd, client.pointer_grabbed)
     if hwnd:
         grablog("ClipCursor(None)")
         ClipCursor(None)
-    window._client.pointer_grabbed = False
+    client.pointer_grabbed = False
 
 def fixup_window_style(self, *_args):
     """ a fixup function we want to call from other places """
@@ -526,8 +532,8 @@ def cache_pointer_offset(self, event):
 
 
 def add_window_hooks(window):
-    log("add_window_hooks(%s) WINDOW_HOOKS=%s, GROUP_LEADER=%s, UNDECORATED_STYLE=%s, MAX_SIZE_HINT=%s, GEOMETRY=%s",
-            window, WINDOW_HOOKS, GROUP_LEADER, UNDECORATED_STYLE, MAX_SIZE_HINT, GEOMETRY)
+    log("add_window_hooks(%s) WINDOW_HOOKS=%s, GROUP_LEADER=%s, UNDECORATED_STYLE=%s, MAX_SIZE_HINT=%s, MAX_SIZE_HINT=%s",
+            window, WINDOW_HOOKS, GROUP_LEADER, UNDECORATED_STYLE, MAX_SIZE_HINT, MAX_SIZE_HINT)
     if not WINDOW_HOOKS:
         #allows us to disable the win32 hooks for testing
         return
@@ -577,7 +583,7 @@ def add_window_hooks(window):
         win32hooks.max_size = None
         win32hooks.setup()
 
-        if GEOMETRY:
+        if MAX_SIZE_HINT:
             #save original geometry function:
             window.__apply_geometry_hints = window.apply_geometry_hints
             window.apply_geometry_hints = types.MethodType(apply_geometry_hints, window)
@@ -602,7 +608,7 @@ def add_window_hooks(window):
                 keys = wParam & 0xFFFF
                 y = lParam>>16
                 x = lParam & 0xFFFF
-                units = float(distance) / WHEEL_DELTA
+                units = distance / WHEEL_DELTA
                 client = getattr(window, "_client")
                 wid = getattr(window, "_id", 0)
                 mouselog("win32 mousewheel: orientation=%s, distance=%i, wheel-delta=%s, units=%.3f, new value=%.1f, keys=%#x, x=%i, y=%i, client=%s, wid=%i", orientation, distance, WHEEL_DELTA, units, distance, keys, x, y, client, wid)
@@ -945,7 +951,7 @@ WTS_SESSION_EVENTS = {
                       WTS_SESSION_REMOTE_CONTROL: "SESSION_REMOTE_CONTROL",
                       }
 
-class ClientExtras(object):
+class ClientExtras:
     def __init__(self, client, _opts):
         self.client = client
         self._kh_warning = False
@@ -978,6 +984,7 @@ class ClientExtras(object):
                 el.add_event_callback(WM_WTSSESSION_CHANGE,         self.session_change_event)
                 el.add_event_callback(win32con.WM_INPUTLANGCHANGE,  self.inputlangchange)
                 el.add_event_callback(win32con.WM_WININICHANGE,     self.inichange)
+                el.add_event_callback(win32con.WM_ENDSESSION,       self.end_session)
         except Exception as e:
             log.error("Error: cannot register focus and power callbacks:")
             log.error(" %s", e)
@@ -1107,12 +1114,11 @@ class ClientExtras(object):
             keylog("init_keyboard_listener: GetMessage()=%s", ret)
             if ret==-1:
                 raise ctypes.WinError(ctypes.get_last_error())
-            elif ret==0:
+            if ret==0:
                 keylog("GetMessage()=0, exiting loop")
                 return
-            else:
-                TranslateMessage(lpmsg)
-                DispatchMessageA(lpmsg)
+            TranslateMessage(lpmsg)
+            DispatchMessageA(lpmsg)
 
 
     def wm_move(self, wParam, lParam):
@@ -1122,6 +1128,25 @@ class ClientExtras(object):
             #this is not really a screen size change event,
             #but we do want to process it as such (see window reinit code)
             c.screen_size_changed()
+
+    def end_session(self, wParam, lParam):
+        log("WM_ENDSESSION")
+        c = self.client
+        if not c:
+            return
+        ENDSESSION_CLOSEAPP = 0x1
+        ENDSESSION_CRITICAL = 0x40000000
+        ENDSESSION_LOGOFF   = 0x80000000
+        reason = None
+        if (wParam & ENDSESSION_CLOSEAPP) and wParam:
+            reason = "restart manager request"
+        elif wParam & ENDSESSION_CRITICAL:
+            reason = "application forced to shutdown"
+        elif wParam & ENDSESSION_LOGOFF:
+            reason = "logoff"
+        else:
+            return
+        c.disconnect_and_quit(EXIT_OK, reason)
 
     def session_change_event(self, event, session):
         event_name = WTS_SESSION_EVENTS.get(event, event)
@@ -1136,9 +1161,8 @@ class ClientExtras(object):
             log("will unfreeze all the windows")
             #don't unfreeze directly from here,
             #as the system may not be fully usable yet (see #997)
-            from xpra.gtk_common.gobject_compat import import_glib
-            glib = import_glib()
-            glib.idle_add(c.unfreeze)
+            from gi.repository import GLib
+            GLib.idle_add(c.unfreeze)
 
 
     def inputlangchange(self, wParam, lParam):
@@ -1214,11 +1238,10 @@ def main():
             log.enable_debug()
             win32_event_logger.enable_debug()
 
-        from xpra.gtk_common.gobject_compat import import_gobject
-        gobject = import_gobject()
+        from gi.repository import GLib
 
         log.info("Event loop is running")
-        loop = gobject.MainLoop()
+        loop = GLib.MainLoop()
 
         def suspend():
             log.info("suspend event")

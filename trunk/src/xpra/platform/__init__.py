@@ -1,17 +1,11 @@
 # This file is part of Xpra.
 # Copyright (C) 2010 Nathaniel Smith <njs@pobox.com>
-# Copyright (C) 2011-2017 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2011-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import os
 import sys
-
-
-try:
-    import encodings
-except ImportError:
-    pass
 
 
 _init_done = False
@@ -29,19 +23,20 @@ def init(prgname=None, appname=None):
         do_init()
 
 #platforms can override this
-def do_init():
+def do_init():  # pragma: no cover
     pass
 
 def threaded_server_init():
     pass
 
 
-class program_context(object):
+class program_context:
     def __init__(self, prgname=None, appname=None):
         self.prgname = prgname
         self.appname = appname
     def __enter__(self):
         init(self.prgname, self.appname)
+        return self
     def __exit__(self, *_args):
         clean()
     def __repr__(self):
@@ -77,7 +72,7 @@ def clean():
         do_clean()
 
 #platforms can override this
-def do_clean():
+def do_clean(): # pragma: no cover
     pass
 
 
@@ -89,16 +84,12 @@ def set_name(prgname=None, appname=None):
         set_prgname(prgname or _prgname)
         set_application_name(appname or _appname)
 
-def _glib():
-    from xpra.gtk_common.gobject_compat import import_glib
-    return import_glib()
-
 #platforms can override this
 def set_prgname(name):
-    try:
-        _glib().set_prgname(name)
-    except Exception:
-        pass
+    if not name:
+        return
+    from gi.repository import GLib
+    GLib.set_prgname(name)
 
 def get_prgname():
     global _prgname
@@ -107,10 +98,10 @@ def get_prgname():
 
 #platforms can override this
 def set_application_name(name):
-    try:
-        _glib().set_application_name(name)
-    except Exception:
-        pass
+    if not name:
+        return
+    from gi.repository import GLib
+    GLib.set_application_name(name)
 
 def get_application_name():
     global _appname
@@ -124,24 +115,24 @@ def do_get_username():
     try:
         import pwd
         return pwd.getpwuid(os.getuid()).pw_name
-    except Exception:
+    except Exception:   # pragma: no cover
         try:
             import getpass
             return getpass.getuser()
         except Exception:
             pass
-    return ""
+        return ""
 
 
 def platform_import(where, pm, required, *imports):
     from xpra.os_util import OSX, POSIX
-    if os.name == "nt":
+    if os.name == "nt": # pragma: no cover
         p = "win32"
-    elif OSX:
+    elif OSX:           # pragma: no cover
         p = "darwin"
-    elif POSIX:
+    elif POSIX:         # pragma: no cover
         p = "xposix"
-    else:
+    else:               # pragma: no cover
         raise OSError("Unknown OS %s" % (os.name))
 
     module = "xpra.platform.%s" % p
@@ -151,16 +142,20 @@ def platform_import(where, pm, required, *imports):
     #cannot log this early! (win32 needs log to file redirection..)
     #log = Logger("platform", "import")
     #log("importing %s from %s (required=%s)" % (imports, module, required))
-    platform_module = __import__(module, {}, {}, imports)
+    try:
+        platform_module = __import__(module, {}, {}, imports)
+    except ImportError:
+        if required:
+            raise
+        return
     assert platform_module
     for x in imports:
         found = hasattr(platform_module, x)
         if not found:
             if required:
-                raise Exception("could not find %s in %s" % (x, module))
-            continue
-        v = getattr(platform_module, x)
-        where[x] = v
+                raise ImportError("could not find %s in %s" % (x, module))
+        else:
+            where[x] = getattr(platform_module, x)
 
 platform_import(globals(), None, True, "do_init", "do_clean")
 platform_import(globals(), None, False, "threaded_server_init",

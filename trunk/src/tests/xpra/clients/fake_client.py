@@ -4,9 +4,10 @@
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-from xpra.log import Logger
-log = Logger()
 from xpra.net.file_transfer import FileTransferHandler
+from xpra.log import Logger
+
+log = Logger()
 
 
 class FakeClient(FileTransferHandler):
@@ -60,6 +61,9 @@ class FakeClient(FileTransferHandler):
         self.yscale = 1
         self.log_events = True
         self.handshake_callbacks = []
+
+    def server_ok(self):
+        return True
 
     def log(self, *args):
         if self.log_events:

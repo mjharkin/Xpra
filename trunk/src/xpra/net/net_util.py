@@ -9,7 +9,7 @@
 import socket
 import sys
 
-from xpra.os_util import WIN32, OSX, PYTHON3
+from xpra.os_util import WIN32
 from xpra.log import Logger
 
 log = Logger("network", "util")
@@ -17,7 +17,7 @@ log = Logger("network", "util")
 
 netifaces_version = 0
 _netifaces = None
-def import_netifaces():
+def import_netifaces() -> object:
     global _netifaces, netifaces_version
     if _netifaces is None:
         try:
@@ -34,7 +34,7 @@ iface_ipmasks = {}
 bind_IPs = None
 
 
-def get_free_tcp_port():
+def get_free_tcp_port() -> int:
     s = socket.socket()
     s.bind(('', 0))
     port = s.getsockname()[1]
@@ -46,14 +46,14 @@ def get_interfaces():
     netifaces = import_netifaces()
     if not netifaces:
         return []
-    return netifaces.interfaces()           #@UndefinedVariable
+    return netifaces.interfaces()           #@UndefinedVariable pylint: disable=no-member
 
-def get_interfaces_addresses():
+def get_interfaces_addresses() -> dict:
     d = {}
     netifaces = import_netifaces()
     if netifaces:
         for iface in get_interfaces():
-            d[iface] = netifaces.ifaddresses(iface)     #@UndefinedVariable
+            d[iface] = netifaces.ifaddresses(iface)     #@UndefinedVariable pylint: disable=no-member
     return d
 
 def get_interface(address):
@@ -70,16 +70,16 @@ def get_interface(address):
                     return iface
     return None
 
-def get_gateways():
+def get_gateways() -> dict:
     netifaces = import_netifaces()
     if not netifaces:
         return {}
     #versions older than 0.10.5 can crash when calling gateways()
     #https://bitbucket.org/al45tair/netifaces/issues/15/gateways-function-crash-segmentation-fault
-    if netifaces.version<'0.10.5':            #@UndefinedVariable
+    if netifaces.version<'0.10.5':            #@UndefinedVariable pylint: disable=no-member
         return {}
     try:
-        d = netifaces.gateways()            #@UndefinedVariable
+        d = netifaces.gateways()            #@UndefinedVariable pylint: disable=no-member
         AF_NAMES = {}
         for k in dir(netifaces):
             if k.startswith("AF_"):
@@ -110,7 +110,7 @@ def do_get_bind_IPs():
     ips = []
     netifaces = import_netifaces()
     assert netifaces
-    ifaces = netifaces.interfaces()            #@UndefinedVariable
+    ifaces = netifaces.interfaces()            #@UndefinedVariable pylint: disable=no-member
     log("ifaces=%s", ifaces)
     for iface in ifaces:
         if_ipmasks = []
@@ -135,7 +135,7 @@ def do_get_bind_ifacemask(iface):
     ipmasks = []
     netifaces = import_netifaces()
     assert netifaces
-    address_types = netifaces.ifaddresses(iface)    #@UndefinedVariable
+    address_types = netifaces.ifaddresses(iface)    #@UndefinedVariable pylint: disable=no-member
     for addresses in address_types.values():
         for address in addresses:
             if 'netmask' in address and 'addr' in address:
@@ -150,12 +150,19 @@ def do_get_bind_ifacemask(iface):
     log("do_get_bind_ifacemask(%s)=%s", iface, ipmasks)
     return ipmasks
 
-def get_iface(ip):
+def get_iface(ip) -> str:
     log("get_iface(%s)", ip)
     if not ip:
         return None
     if ip.find("%")>=0:
-        return ip.split("%", 1)[1]
+        iface = ip.split("%", 1)[1]
+        if if_nametoindex:
+            try:
+                if_nametoindex(iface)
+            except OSError:
+                return None
+            else:
+                return iface
     if ip.find(":")>=0:
         #ipv6?
         return None
@@ -213,7 +220,7 @@ def get_iface(ip):
 if_nametoindex = None
 if_indextoname = None
 
-if WIN32:
+if WIN32:   # pragma: no cover
     def int_if_nametoindex(iface):
         #IPv6 addresses give us the interface as a string:
         #fe80:....%11, so try to convert "11" into 11
@@ -222,47 +229,13 @@ if WIN32:
         except (TypeError, ValueError):
             return None
     if_nametoindex = int_if_nametoindex
-elif PYTHON3:
+else:
     if_nametoindex = socket.if_nametoindex
     def socket_if_indextoname(index):
         if index<0:
             return None
         return socket.if_indextoname(index)
     if_indextoname = socket_if_indextoname
-
-else:
-    library = "libc.so.6"
-    if OSX:
-        library = "/usr/lib/libc.dylib"
-    elif sys.platform.startswith("sunos"):
-        library = "libsocket.so.1"
-    elif sys.platform.startswith("freebsd"):
-        library = "/lib/libc.so.7"
-    elif sys.platform.startswith("openbsd"):
-        library = "libc.so"
-    try:
-        from ctypes import CDLL, c_char_p, c_uint, create_string_buffer
-        #cdll.LoadLibrary(library)
-        from ctypes.util import find_library
-        #<CDLL 'libc.so.6', handle 7fcac419b000 at 7fcac1ab0c10>
-        _libc = CDLL(find_library(library))
-        log("successfully loaded socket C library from %s", library)
-    except ImportError as e:
-        log.error("library %s not found: %s", library, e)
-    except OSError as e:
-        log.error("error loading %s: %s", library, e)
-    else:
-        _libc.if_indextoname.restype = c_char_p
-        _libc.if_indextoname.argtypes = [c_uint, c_char_p]
-        _libc.if_nametoindex.restype = c_uint
-        _libc.if_nametoindex.argtypes = [c_char_p]
-        def libc_if_nametoindex(interfaceName):
-            return _libc.if_nametoindex(create_string_buffer(interfaceName.encode()))
-        def libc_if_indextoname(index):
-            s = create_string_buffer(b'\000' * 256)
-            return _libc.if_indextoname(c_uint(index), s)
-        if_nametoindex = libc_if_nametoindex
-        if_indextoname = libc_if_indextoname
 
 
 net_sys_config = None
@@ -331,7 +304,7 @@ def get_net_sys_config():
                 addproc("/proc/sys/net/ipv4/%s" % k,     "ipv4", k, int)
     return net_sys_config
 
-def get_net_config():
+def get_net_config() -> dict:
     config = {}
     try:
         from xpra.net.bytestreams import VSOCK_TIMEOUT, SOCKET_TIMEOUT, SOCKET_NODELAY
@@ -341,25 +314,27 @@ def get_net_config():
                 }
         if SOCKET_NODELAY is not None:
             config["socket.nodelay"] = SOCKET_NODELAY
-    except Exception:
+    except Exception:   # pragma: no cover
         log("get_net_config()", exc_info=True)
     return config
 
 
-def get_ssl_info():
+def get_ssl_info(show_constants=False) -> dict:
     try:
         import ssl
-    except ImportError as e:
+    except ImportError as e:    # pragma: no cover
         log("no ssl: %s", e)
         return {}
-    protocols = dict((k,int(getattr(ssl, k))) for k in dir(ssl) if k.startswith("PROTOCOL_"))
-    ops = dict((k,int(getattr(ssl, k))) for k in dir(ssl) if k.startswith("OP_"))
-    vers = dict((k,int(getattr(ssl, k))) for k in dir(ssl) if k.startswith("VERIFY_"))
-    info = {
-            "protocols"    : protocols,
-            "options"    : ops,
-            "verify"    : vers,
-            }
+    info = {}
+    if show_constants:
+        protocols = dict((k,int(getattr(ssl, k))) for k in dir(ssl) if k.startswith("PROTOCOL_"))
+        ops = dict((k,int(getattr(ssl, k))) for k in dir(ssl) if k.startswith("OP_"))
+        vers = dict((k,int(getattr(ssl, k))) for k in dir(ssl) if k.startswith("VERIFY_"))
+        info.update({
+                "protocols"    : protocols,
+                "options"    : ops,
+                "verify"    : vers,
+                })
     for k,name in {
                     "HAS_ALPN"                : "alpn",
                     "HAS_ECDH"                : "ecdh",
@@ -382,11 +357,7 @@ def get_ssl_info():
     return info
 
 
-def get_network_caps():
-    try:
-        from xpra.platform.features import MMAP_SUPPORTED
-    except ImportError:
-        MMAP_SUPPORTED = False
+def get_network_caps() -> dict:
     from xpra.net.digest import get_digests
     from xpra.net.crypto import get_crypto_caps
     from xpra.net.compression import get_enabled_compressors, get_compression_caps
@@ -399,7 +370,6 @@ def get_network_caps():
                 "salt-digest"           : salt_digests,
                 "compressors"           : get_enabled_compressors(),
                 "encoders"              : get_enabled_encoders(),
-                "mmap"                  : MMAP_SUPPORTED,
                }
     caps.update(get_crypto_caps())
     caps.update(get_compression_caps())
@@ -407,7 +377,7 @@ def get_network_caps():
     return caps
 
 
-def get_info():
+def get_info() -> dict:
     i = get_network_caps()
     netifaces = import_netifaces()
     if netifaces:
@@ -429,7 +399,7 @@ def get_info():
     return i
 
 
-def main():
+def main(): # pragma: no cover
     from xpra.os_util import POSIX
     from xpra.util import print_nested_dict, csv
     from xpra.platform import program_context
@@ -450,7 +420,7 @@ def main():
                 print("* %s (index=%s)" % (iface.ljust(20), if_nametoindex(iface)))
             else:
                 print("* %s" % iface)
-            addresses = netifaces.ifaddresses(iface)     #@UndefinedVariable
+            addresses = netifaces.ifaddresses(iface)     #@UndefinedVariable pylint: disable=no-member
             for addr, defs in addresses.items():
                 if addr in (socket.AF_INET, socket.AF_INET6):
                     for d in defs:
@@ -462,7 +432,7 @@ def main():
                                 }[addr]
                             print(" * %s:     %s" % (stype, ip))
                             if POSIX:
-                                from xpra.server.socket_util import create_tcp_socket
+                                from xpra.net.socket_util import create_tcp_socket
                                 try:
                                     sock = create_tcp_socket(ip, 0)
                                     sockfd = sock.fileno()
@@ -526,7 +496,7 @@ def main():
 
         print("")
         print("SSL:")
-        print_nested_dict(get_ssl_info())
+        print_nested_dict(get_ssl_info(True))
 
         try:
             from xpra.net.crypto import crypto_backend_init, get_crypto_caps
@@ -539,7 +509,8 @@ def main():
         except Exception as e:
             print("No Crypto:")
             print(" %s" % e)
+    return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()

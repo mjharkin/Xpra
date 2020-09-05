@@ -22,6 +22,7 @@ WAVPACK = "wavpack"
 OGG = "ogg"
 MKA = "mka"
 MPEG4 = "mpeg4"
+ID3V2 = "id3v2"
 #RTP = "rtp"
 RAW = "raw"
 
@@ -40,6 +41,7 @@ AAC_MPEG4   = AAC+"+"+MPEG4
 WAV_LZ4     = WAV+"+"+LZ4
 WAV_LZO     = WAV+"+"+LZO
 MP3_MPEG4   = MP3+"+"+MPEG4
+MP3_ID3V2   = MP3+"+"+ID3V2
 
 
 #used for parsing codec names specified on the command line:
@@ -60,9 +62,9 @@ def sound_option_or_all(name, options, all_values):
                     v.append(o)
         if invalid_options:
             if all_values:
-                log.warn("Warning: invalid value%s for %s: %s", engs(invalid_options), name, csv(invalid_options))
+                log.warn("Warning: invalid value%s for '%s': %s", engs(invalid_options), name, csv(invalid_options))
                 log.warn(" valid option%s: %s", engs(all_values), csv(all_values))
             else:
-                log.warn("Warning: no %ss available", name)
+                log.warn("Warning: no '%ss' available", name)
     log("%s=%s", name, csv(v))
     return v

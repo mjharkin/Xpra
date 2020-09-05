@@ -1,11 +1,10 @@
 # This file is part of Xpra.
 # Copyright (C) 2013 Arthur Huillet
-# Copyright (C) 2012-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2012-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 #cython: auto_pickle=False, cdivision=True, language_level=3
-from __future__ import absolute_import
 
 import os
 import time
@@ -45,6 +44,7 @@ cdef extern from "libavutil/pixfmt.h":
     AVPixelFormat AV_PIX_FMT_RGBA
     AVPixelFormat AV_PIX_FMT_GBRP
     AVPixelFormat AV_PIX_FMT_BGR24
+    AVPixelFormat AV_PIX_FMT_NV12
     AVPixelFormat AV_PIX_FMT_NONE
 
 ctypedef void SwsContext
@@ -71,11 +71,11 @@ cdef extern from "libswscale/swscale.h":
 
 cdef class CSCPixelFormat:
     cdef AVPixelFormat av_enum
-    cdef char* av_enum_name
+    cdef object av_enum_name
     cdef float width_mult[4]
     cdef float height_mult[4]
-    cdef char *pix_fmt
-    def __init__(self, AVPixelFormat av_enum, char *av_enum_name, width_mult, height_mult, char *pix_fmt):
+    cdef object pix_fmt
+    def __init__(self, AVPixelFormat av_enum, av_enum_name, width_mult, height_mult, pix_fmt):
         self.av_enum = av_enum
         self.av_enum_name = av_enum_name
         for i in range(4):
@@ -87,7 +87,7 @@ cdef class CSCPixelFormat:
         self.pix_fmt = pix_fmt
 
     def __repr__(self):
-        return "CSCPixelFormat(%s)" % av_enum_name
+        return "CSCPixelFormat(%s)" % self.av_enum_name
 
 #we could use a class to represent these options:
 COLORSPACES = []
@@ -104,18 +104,21 @@ FORMAT_OPTIONS = [
     ("YUV420P", AV_PIX_FMT_YUV420P,    (1, 0.5, 0.5, 0),   (1, 0.5, 0.5, 0),   "YUV420P"),
     ("YUV422P", AV_PIX_FMT_YUV422P,    (1, 0.5, 0.5, 0),   (1, 1, 1, 0),       "YUV422P"),
     ("YUV444P", AV_PIX_FMT_YUV444P,    (1, 1, 1, 0),       (1, 1, 1, 0),       "YUV444P"),
-    ("GBRP",    AV_PIX_FMT_GBRP,       (1, 1, 1, 0),       (1, 1, 1, 0),       "GBRP"   )
+    ("GBRP",    AV_PIX_FMT_GBRP,       (1, 1, 1, 0),       (1, 1, 1, 0),       "GBRP"   ),
+    ("NV12",    AV_PIX_FMT_NV12,       (1, 1, 0, 0),       (1, 0.5, 0, 0),     "NV12"   ),
      ]
 FORMATS = {}
 for av_enum_name, av_enum, width_mult, height_mult, pix_fmt in FORMAT_OPTIONS:
-    FORMATS[pix_fmt] = CSCPixelFormat(av_enum, av_enum_name.encode("latin1"), width_mult, height_mult, pix_fmt.encode("latin1"))
+    FORMATS[pix_fmt] = CSCPixelFormat(av_enum, av_enum_name, width_mult, height_mult, pix_fmt)
     if pix_fmt not in COLORSPACES:
         COLORSPACES.append(pix_fmt)
 log("swscale pixel formats: %s", FORMATS)
 COLORSPACES = tuple(COLORSPACES)
 log("colorspaces: %s", COLORSPACES)
 
+#(per plane)
 BYTES_PER_PIXEL = {
+    AV_PIX_FMT_NV12     : 1,
     AV_PIX_FMT_YUV420P  : 1,
     AV_PIX_FMT_YUV422P  : 1,
     AV_PIX_FMT_YUV444P  : 1,
@@ -252,17 +255,7 @@ def get_spec(in_colorspace, out_colorspace):
                     setup_cost=20, min_w=8, min_h=2, can_scale=True,
                     max_w=MAX_WIDTH, max_h=MAX_HEIGHT)
 
-
-MIN_SWSCALE_VERSION = (2, 1, 1)
-if (LIBSWSCALE_VERSION_MAJOR, LIBSWSCALE_VERSION_MINOR, LIBSWSCALE_VERSION_MICRO)<MIN_SWSCALE_VERSION and is_Ubuntu():
-    log.warn("buggy Ubuntu swscale version detected: %s", get_version())
-    if envbool("XPRA_FORCE_SWSCALE", False):
-        log.warn("XPRA_FORCE_SWSCALE enabled at your own risk!")
-    else:
-        log.warn("cowardly refusing to use it to avoid problems, set the environment variable:")
-        log.warn("XPRA_FORCE_SWSCALE=1")
-        log.warn("to use it anyway, at your own risk")
-        COLORSPACES = []
+assert (LIBSWSCALE_VERSION_MAJOR, LIBSWSCALE_VERSION_MINOR, LIBSWSCALE_VERSION_MICRO)>(2, 1, 1)
 
 
 cdef class ColorspaceConverter:
@@ -331,7 +324,7 @@ cdef class ColorspaceConverter:
         log("sws context=%#x", <uintptr_t> self.context)
         assert self.context!=NULL, "sws_getContext returned NULL"
 
-    def get_info(self):         #@DuplicatedSignature
+    def get_info(self) -> dict:         #@DuplicatedSignature
         info = get_info()
         info.update({
                 "flags"     : get_swscale_flags_strs(self.flags),
@@ -347,7 +340,7 @@ cdef class ColorspaceConverter:
         if self.dst_format:
             info["dst_format"] = self.dst_format
         if self.frames>0 and self.time>0:
-            pps = float(self.src_width) * float(self.src_height) * float(self.frames) / self.time
+            pps = self.src_width * self.src_height * self.frames / self.time
             info["total_time_ms"] = int(self.time*1000.0)
             info["pixels_per_second"] = int(pps)
         return info
@@ -361,26 +354,26 @@ cdef class ColorspaceConverter:
     def __dealloc__(self):                  #@DuplicatedSignature
         self.clean()
 
-    def get_src_width(self):
+    def get_src_width(self) -> int:
         return self.src_width
 
-    def get_src_height(self):
+    def get_src_height(self) -> int:
         return self.src_height
 
     def get_src_format(self):
         return self.src_format
 
-    def get_dst_width(self):
+    def get_dst_width(self) -> int:
         return self.dst_width
 
-    def get_dst_height(self):
+    def get_dst_height(self) -> int:
         return self.dst_height
 
     def get_dst_format(self):
         return self.dst_format
 
-    def get_type(self):                     #@DuplicatedSignature
-        return  "swscale"
+    def get_type(self) -> str:              #@DuplicatedSignature
+        return "swscale"
 
 
     def clean(self):                        #@DuplicatedSignature
@@ -406,8 +399,8 @@ cdef class ColorspaceConverter:
             self.out_stride[i] = 0
             self.out_size[i] = 0
 
-    def is_closed(self):
-        return self.context!=NULL
+    def is_closed(self) -> bool:
+        return self.context==NULL
 
 
     def convert_image(self, image):
@@ -434,7 +427,7 @@ cdef class ColorspaceConverter:
             iplanes = 1
         else:
             planes = pixels
-        if self.dst_format.endswith("P"):
+        if self.dst_format.endswith("P") or self.dst_format=="NV12":
             pad = self.dst_width
         else:
             pad = self.dst_width * 4
@@ -458,7 +451,7 @@ cdef class ColorspaceConverter:
         #allocate the output buffer(s):
         output_buf = []
         cdef MemBuf mb
-        for i in range(3):
+        for i in range(4):
             if self.out_size[i]>0:
                 mb = padbuf(self.out_size[i], pad)
                 output_buf.append(mb)
@@ -476,6 +469,10 @@ cdef class ColorspaceConverter:
             oplanes = ImageWrapper.PLANAR_3
             out = [memoryview(output_buf[i]) for i in range(3)]
             strides = [self.out_stride[i] for i in range(3)]
+        elif self.dst_format=="NV12":
+            oplanes = ImageWrapper.PLANAR_2
+            out = [memoryview(output_buf[i]) for i in range(2)]
+            strides = [self.out_stride[i] for i in range(2)]
         else:
             #assume no planes, plain RGB packed pixels:
             oplanes = ImageWrapper.PACKED
@@ -500,7 +497,7 @@ def selftest(full=False):
             planar_tests = [x for x in get_input_colorspaces() if x.endswith("P")]
             packed_tests = [x for x in get_input_colorspaces() if ((x.find("BGR")>=0 or x.find("RGB")>=0) and not x not in planar_tests)]
         else:
-            planar_tests = [x for x in ("YUV420P", "YUV422P", "YUV444P", "GBRP") if x in get_input_colorspaces()]
+            planar_tests = [x for x in ("YUV420P", "YUV422P", "YUV444P", "GBRP", "NV12") if x in get_input_colorspaces()]
             packed_tests = ["BGRX"]   #only test BGRX
         maxw, maxh = 2**24, 2**24
         for planar in planar_tests:

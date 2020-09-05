@@ -1,15 +1,18 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 from xpra.os_util import strtobytes
-from xpra.util import iround, log_screen_sizes, engs
+from xpra.util import engs, iround, log_screen_sizes
+from xpra.os_util import bytestostr
+from xpra.scripts.config import FALSE_OPTIONS
 from xpra.server.mixins.stub_server_mixin import StubServerMixin
 from xpra.log import Logger
 
 log = Logger("screen")
+gllog = Logger("opengl")
 
 """
 Mixin for servers that handle displays.
@@ -28,8 +31,11 @@ class DisplayManager(StubServerMixin):
         self.cursor_size = 0
         self.double_click_time  = -1
         self.double_click_distance = -1, -1
+        self.opengl = False
+        self.opengl_props = {}
 
     def init(self, opts):
+        self.opengl = opts.opengl
         self.bell = opts.bell
         self.cursors = opts.cursors
         self.default_dpi = int(opts.dpi)
@@ -44,17 +50,78 @@ class DisplayManager(StubServerMixin):
         self.reset_icc_profile()
 
 
-    def get_caps(self, source):
+    def threaded_setup(self):
+        self.opengl_props = self.query_opengl()
+
+
+    def query_opengl(self):
+        props = {}
+        if self.opengl.lower()=="noprobe" or self.opengl.lower() in FALSE_OPTIONS:
+            gllog("query_opengl() skipped: %s", self.opengl)
+            return props
+        try:
+            from subprocess import Popen, PIPE
+            from xpra.platform.paths import get_xpra_command
+            cmd = self.get_full_child_command(get_xpra_command()+["opengl", "--opengl=yes"])
+            env = self.get_child_env()
+            #we want the output so we can parse it:
+            env["XPRA_REDIRECT_OUTPUT"] = "0"
+            proc = Popen(cmd, stdin=PIPE, stdout=PIPE, stderr=PIPE, env=env)
+            out,err = proc.communicate()
+            gllog("out(%s)=%s", cmd, out)
+            gllog("err(%s)=%s", cmd, err)
+            if proc.returncode==0:
+                #parse output:
+                for line in out.splitlines():
+                    parts = line.split(b"=")
+                    if len(parts)!=2:
+                        continue
+                    k = bytestostr(parts[0].strip())
+                    v = bytestostr(parts[1].strip())
+                    props[k] = v
+                gllog("opengl props=%s", props)
+                if props:
+                    gllog.info("OpenGL is supported on display '%s'", self.display_name)
+                    renderer = props.get("renderer")
+                    if renderer:
+                        gllog.info(" using '%s' renderer", renderer)
+                else:
+                    gllog.info("No OpenGL information available")
+            else:
+                props["error-details"] = str(err).strip("\n\r")
+                error = "unknown error"
+                for x in str(err).splitlines():
+                    if x.startswith("RuntimeError: "):
+                        error = x[len("RuntimeError: "):]
+                        break
+                    if x.startswith("ImportError: "):
+                        error = x[len("ImportError: "):]
+                        break
+                props["error"] = error
+                log.warn("Warning: OpenGL support check failed:")
+                log.warn(" %s", error)
+        except Exception as e:
+            gllog("query_opengl()", exc_info=True)
+            gllog.error("Error: OpenGL support check failed")
+            gllog.error(" '%s'", e)
+            props["error"] = str(e)
+        gllog("OpenGL: %s", props)
+        return props
+
+
+    def get_caps(self, source) -> dict:
         root_w, root_h = self.get_root_window_size()
-        return {
+        caps = {
             "bell"          : self.bell,
             "cursors"       : self.cursors,
             "desktop_size"  : self._get_desktop_size_capability(source, root_w, root_h),
             }
+        if self.opengl_props:
+            caps["opengl"] = self.opengl_props
+        return caps
 
-    def get_info(self, _proto):
-        return {
-            "display": {
+    def get_info(self, _proto) -> dict:
+        i = {
                 "randr" : self.randr,
                 "bell"  : self.bell,
                 "cursors" : {
@@ -72,7 +139,11 @@ class DisplayManager(StubServerMixin):
                     "y"         : self.ydpi,
                     },
                 "antialias" : self.antialias,
-                },
+                }
+        if self.opengl_props:
+            i["opengl"] = self.opengl_props
+        return {
+            "display": i,
             }
 
 
@@ -192,6 +263,7 @@ class DisplayManager(StubServerMixin):
         return root_w, root_h
 
     def _process_desktop_size(self, proto, packet):
+        log("new desktop size from %s: %s", proto, packet)
         width, height = packet[1:3]
         ss = self.get_server_source(proto)
         if ss is None:
@@ -238,9 +310,9 @@ class DisplayManager(StubServerMixin):
         names = []
         for i in range(count):
             if i==0:
-                name = u"Main"
+                name = "Main"
             else:
-                name = u"Desktop %i" % (i+1)
+                name = "Desktop %i" % (i+1)
             for ss in self._server_sources.values():
                 if ss.desktops and i<len(ss.desktop_names) and ss.desktop_names[i]:
                     dn = ss.desktop_names[i]

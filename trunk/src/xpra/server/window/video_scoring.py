@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2013-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2013-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -13,17 +13,19 @@ scorelog = Logger("score")
 GPU_BIAS = envint("XPRA_GPU_BIAS", 100)
 MIN_FPS_COST = envint("XPRA_MIN_FPS_COST", 4)
 
+#any colourspace convertion will lose at least some quality (due to rounding)
+#(so add 0.2 to the value we get from calculating the degradation using get_subsampling_divs)
 SUBSAMPLING_QUALITY_LOSS = {
+    "NV12"      : 186,
     "YUV420P"   : 186,      #1.66 + 0.2
     "YUV422P"   : 153,      #1.33 + 0.2
     "YUV444P"   : 120,      #1.00 + 0.2
     }
 
 
-def get_quality_score(csc_format, csc_spec, encoder_spec, scaling, target_quality=100, min_quality=0):
+def get_quality_score(csc_format, csc_spec, encoder_spec, scaling,
+                      target_quality : int=100, min_quality : int=0) -> int:
     quality = encoder_spec.quality
-    #any colourspace convertion will lose at least some quality (due to rounding)
-    #(so add 0.2 to the value we get from calculating the degradation using get_subsampling_divs)
     div = SUBSAMPLING_QUALITY_LOSS.get(csc_format, 100)
     quality = quality*100//div
 
@@ -32,7 +34,7 @@ def get_quality_score(csc_format, csc_spec, encoder_spec, scaling, target_qualit
         quality += csc_spec.quality
         quality /= 2.0
 
-    if scaling==(1, 1) and csc_format not in ("YUV420P", "YUV422P") and target_quality==100 and encoder_spec.has_lossless_mode:
+    if scaling==(1, 1) and csc_format not in ("NV12", "YUV420P", "YUV422P") and target_quality==100 and encoder_spec.has_lossless_mode:
         #we want lossless!
         qscore = quality + 80
     else:
@@ -44,14 +46,16 @@ def get_quality_score(csc_format, csc_spec, encoder_spec, scaling, target_qualit
             mqs = (min_quality - quality) // 2
             qscore = max(0, qscore - mqs)
         #when downscaling, YUV420P should always win:
-        if csc_format=="YUV420P" and scaling!=(1, 1):
+        if csc_format in ("YUV420P", "NV12") and scaling!=(1, 1):
             qscore *= 2.0
     return int(qscore)
 
-def get_speed_score(csc_format, csc_spec, encoder_spec, scaling, target_speed=100, min_speed=0):
+def get_speed_score(csc_format, csc_spec, encoder_spec, scaling,
+                    target_speed : int=100, min_speed : int=0) -> int:
     #when subsampling, add the speed gains to the video encoder
     #which now has less work to do:
     mult = {
+        "NV12"      : 100,
         "YUV420P"   : 100,
         "YUV422P"   : 80,
         }.get(csc_format, 60)
@@ -67,7 +71,7 @@ def get_speed_score(csc_format, csc_spec, encoder_spec, scaling, target_speed=10
         #but less if the csc is fast
         sscore = sscore - 20 - (100-csc_spec.speed)//2
     #when already downscaling, favour YUV420P subsampling:
-    if csc_format=="YUV420P" and scaling!=(1, 1):
+    if csc_format in ("YUV420P", "NV12") and scaling!=(1, 1):
         sscore += 25
     if min_speed>=speed:
         #if this encoder's speed is lower than the min_speed
@@ -76,11 +80,12 @@ def get_speed_score(csc_format, csc_spec, encoder_spec, scaling, target_speed=10
         sscore = max(0, sscore - mss)
     return max(0, min(100, sscore))
 
-def get_pipeline_score(enc_in_format, csc_spec, encoder_spec, width, height, scaling,
-                       target_quality, min_quality,
-                       target_speed, min_speed,
+def get_pipeline_score(enc_in_format, csc_spec, encoder_spec,
+                       width : int, height : int, scaling,
+                       target_quality : int, min_quality : int,
+                       target_speed : int, min_speed : int,
                        current_csce, current_ve,
-                       score_delta, ffps, detection=True):
+                       score_delta : int, ffps : int, detection=True):
     """
         Given an optional csc step (csc_format and csc_spec), and
         and a required encoding step (encoder_spec and width/height),
@@ -190,13 +195,13 @@ def get_pipeline_score(enc_in_format, csc_spec, encoder_spec, width, height, sca
     gpu_score = max(0, GPU_BIAS-50)*encoder_spec.gpu_cost//50
     cpu_score = max(0, 50-GPU_BIAS)*encoder_spec.cpu_cost//50
     score = int((qscore+sscore+er_score+sizescore+score_delta+gpu_score+cpu_score)*runtime_score//100//5)
-    scorelog("get_pipeline_score(%-7s, %-24r, %-24r, %5i, %5i) quality: %3i, speed: %3i, setup: %3i - %3i runtime: %3i scaling: %s / %s, encoder dimensions=%sx%s, sizescore=%3i, client score delta=%3i, cpu score=%3i, gpu score=%3i, score=%3i",
+    scorelog("get_pipeline_score(%-7s, %-24r, %-24r, %5i, %5i) quality: %3i, speed: %3i, setup: %4i - %4i runtime: %3i scaling: %s / %s, encoder dimensions=%sx%s, sizescore=%3i, client score delta=%3i, cpu score=%3i, gpu score=%3i, score=%3i",
              enc_in_format, csc_spec, encoder_spec, width, height,
              qscore, sscore, ecsc_score, ee_score, runtime_score, scaling, encoder_scaling, enc_width, enc_height, sizescore, score_delta,
              cpu_score, gpu_score, score)
     return score, scaling, csc_scaling, csc_width, csc_height, csc_spec, enc_in_format, encoder_scaling, enc_width, enc_height, encoder_spec
 
-def get_encoder_dimensions(encoder_spec, width, height, scaling=(1,1)):
+def get_encoder_dimensions(encoder_spec, width : int, height : int, scaling=(1,1)):
     """
         Given a csc and encoder specs and dimensions, we calculate
         the dimensions that we would use as output.

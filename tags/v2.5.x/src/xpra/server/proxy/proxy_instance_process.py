@@ -407,7 +407,7 @@ class ProxyInstanceProcess(Process):
 
     def do_process_control_packet(self, proto, packet):
         log("process_control_packet(%s, %s)", proto, packet)
-        packet_type = packet[0]
+        packet_type = bytestostr(packet[0])
         if packet_type==Protocol.CONNECTION_LOST:
             log.info("Connection lost")
             if proto in self.potential_protocols:
@@ -542,8 +542,8 @@ class ProxyInstanceProcess(Process):
             fn, args, kwargs = v
             log("run_queue() %s%s%s", fn, args, kwargs)
             try:
-                v = fn(*args, **kwargs)
-                if bool(v):
+                r = fn(*args, **kwargs)
+                if bool(r):
                     #re-run it
                     self.main_queue.put(v)
             except:

@@ -97,6 +97,7 @@ MAX_SCALING = float(os.environ.get("XPRA_MAX_SCALING", "8"))
 SCALING_OPTIONS = [float(x) for x in os.environ.get("XPRA_TRAY_SCALING_OPTIONS", "0.25,0.5,0.666,1,1.25,1.5,2.0,3.0,4.0,5.0").split(",") if float(x)>=MIN_SCALING and float(x)<=MAX_SCALING]
 SCALING_EMBARGO_TIME = int(os.environ.get("XPRA_SCALING_EMBARGO_TIME", "1000"))/1000.0
 MAX_SOFT_EXPIRED = envint("XPRA_MAX_SOFT_EXPIRED", 5)
+SYNC_ICC = envbool("XPRA_SYNC_ICC", True)
 
 PYTHON3 = sys.version_info[0] == 3
 WIN32 = sys.platform.startswith("win")
@@ -681,6 +682,11 @@ class UIXpraClient(XpraClientBase):
         if self._suspended_at>0:
             elapsed = time.time()-self._suspended_at
             self._suspended_at = 0
+        self.send_refresh_all()
+        if elapsed<1:
+            #not really suspended
+            #happens on macos when switching workspace!
+            return
         delta = datetime.timedelta(seconds=int(elapsed))
         log.info("system resumed, was suspended for %s", delta)
         #this will reset the refresh rate too:
@@ -1365,7 +1371,7 @@ class UIXpraClient(XpraClientBase):
         dpi = 0
         if self.dpi>0:
             #scale it:
-            xdpi = ydpi = dpi = self.cx(self.cy(self.dpi))
+            xdpi = ydpi = dpi = iround((self.cx(self.dpi) + self.cy(self.dpi))/2.0)
         else:
             #not supplied, use platform detection code:
             #platforms may also provide per-axis dpi (later win32 versions do)
@@ -1449,6 +1455,8 @@ class UIXpraClient(XpraClientBase):
             "sound.ogg-latency-fix"     : True,
             "av-sync"                   : self.av_sync,
             "av-sync.delay.default"     : 0,    #start at 0 and rely on sound-control packets to set the correct value
+            #webcam:
+            "webcam"                    : self.webcam_forwarding,
             })
         updict(capabilities, "window", {
             "raise"                     : True,
@@ -1487,10 +1495,13 @@ class UIXpraClient(XpraClientBase):
             })
         capabilities.update({
                              "antialias"    : get_antialias_info(),
-                             "icc"          : self.get_icc_info(),
-                             "display-icc"  : self.get_display_icc_info(),
                              "cursor.size"  : int(2*get_cursor_size()/(self.xscale+self.yscale)),
                              })
+        if SYNC_ICC:
+            capabilities.update({
+                             "icc"          : self.get_icc_info(),
+                             "display-icc"  : self.get_display_icc_info(),
+            })
         #generic rgb compression flags:
         for x in compression.ALL_COMPRESSORS:
             capabilities["encoding.rgb_%s" % x] = x in compression.get_enabled_compressors()
@@ -1999,7 +2010,11 @@ class UIXpraClient(XpraClientBase):
             return
         self.in_remote_logging = True
         try:
-            data = self.compressed_wrapper("text", str(msg % args), level=1)
+            if args:
+                s = msg % args
+            else:
+                s = msg
+            data = self.compressed_wrapper("text", str(s), level=1)
             self.send("logging", level, data)
             exc_info = kwargs.get("exc_info")
             if exc_info:
@@ -2787,7 +2802,7 @@ class UIXpraClient(XpraClientBase):
         #find a "transient-for" value using the pid to find a suitable window
         #if possible, choosing the currently focused window (if there is one..)
         pid = metadata.intget("pid", 0)
-        if override_redirect and pid>0 and metadata.intget("transient-for", 0)>0 is None and metadata.get("role")=="popup":
+        if override_redirect and pid>0 and metadata.intget("transient-for", 0)==0 and metadata.get("role")=="popup":
             tfor = None
             for twid, twin in self._id_to_window.items():
                 if not twin._override_redirect and twin._metadata.intget("pid", -1)==pid:
@@ -2828,7 +2843,9 @@ class UIXpraClient(XpraClientBase):
     def deiconify_windows(self):
         log("deiconify_windows()")
         for window in self._id_to_window.values():
-            window.deiconify()
+            deiconify = getattr(window, "deiconify", None)
+            if deiconify:
+                deiconify()
 
 
     def reinit_window_icons(self):

@@ -4,7 +4,6 @@
 # later version. See the file COPYING for details.
 
 #cython: auto_pickle=False, wraparound=False, cdivision=True, language_level=3
-from __future__ import absolute_import
 
 import os
 
@@ -444,7 +443,7 @@ cdef class Encoder:
         self.first_frame_timestamp = 0
 
 
-    def get_info(self):             #@DuplicatedSignature
+    def get_info(self) -> dict:             #@DuplicatedSignature
         cdef float pps
         if self.profile is None:
             return {}
@@ -459,7 +458,7 @@ cdef class Encoder:
             "src_format": self.src_format,
             }
         if self.frames>0 and self.time>0:
-            pps = float(self.width) * float(self.height) * float(self.frames) / self.time
+            pps = self.width * self.height * self.frames / self.time
             info["total_time_ms"] = int(self.time*1000.0)
             info["pixels_per_second"] = int(pps)
         return info
@@ -567,6 +566,7 @@ cdef class Encoder:
         finally:
             x265_picture_free(pic_out)
         client_options = {
+                "csc"       : self.src_format,
                 "frame"     : self.frames,
                 "pts"     : image.get_timestamp()-self.first_frame_timestamp,
                 }

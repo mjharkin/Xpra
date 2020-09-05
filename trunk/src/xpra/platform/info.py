@@ -35,7 +35,7 @@ def get_posix_sys_info():
                 if isinstance(value, float):
                     value = int(value)
                 minfo[var] = value
-    except Exception:
+    except Exception:   # pragma: no cover
         from xpra.os_util import get_util_logger
         get_util_logger().error("Error getting memory usage info", exc_info=True)
     return info
@@ -43,7 +43,7 @@ def get_posix_sys_info():
 def get_sys_info():
     if os.name=="posix":
         return get_posix_sys_info()
-    return {}
+    return {}           # pragma: no cover
 
 def get_version_info():
     return {}
@@ -53,18 +53,18 @@ def _get_pwd():
         import pwd
         USER_ID = os.getuid()
         return pwd.getpwuid(USER_ID)
-    except Exception:
+    except KeyError:    # pragma: no cover
         return None
 
 def get_username():
     p = _get_pwd()
-    if p is None:
+    if p is None:       # pragma: no cover
         return ""
     return p.pw_name
 
 def get_name():
     p = _get_pwd()
-    if p is None:
+    if p is None:       # pragma: no cover
         return ""
     return p.pw_gecos.replace(",", "")
 

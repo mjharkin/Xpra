@@ -26,6 +26,7 @@ class AudioMixinTest(ServerMixinTest):
         opts.pulseaudio = False
         opts.pulseaudio_command = "/bin/true"
         opts.pulseaudio_configure_commands = []
+        opts.av_sync = True
         self._test_mixin_class(AudioServer, opts, {
             "sound.receive" : True,
             "sound.decoders" : CODEC_ORDER,
@@ -41,7 +42,15 @@ class AudioMixinTest(ServerMixinTest):
         self.handle_packet(("sound-control", "stop"))
 
 def main():
-    unittest.main()
+    from xpra.os_util import POSIX, OSX
+    if POSIX and not OSX:
+        #verify that pulseaudio is running:
+        #otherwise the tests will fail
+        #ie: during rpmbuild
+        from subprocess import getstatusoutput
+        if getstatusoutput("pactl info")[0]!=0:
+            return
+        unittest.main()
 
 
 if __name__ == '__main__':

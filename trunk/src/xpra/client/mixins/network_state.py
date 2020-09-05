@@ -1,5 +1,5 @@
 # This file is part of Xpra.
-# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 #pylint: disable-msg=E1101
@@ -9,8 +9,10 @@ import re
 from collections import deque
 
 from xpra.os_util import monotonic_time, POSIX
-from xpra.util import envint, csv
+from xpra.util import envint, envbool, csv, typedict
 from xpra.exit_codes import EXIT_TIMEOUT
+from xpra.net.packet_encoding import ALL_ENCODERS
+from xpra.net.compression import ALL_COMPRESSORS
 from xpra.client.mixins.stub_client_mixin import StubClientMixin
 from xpra.scripts.config import parse_with_unit
 from xpra.log import Logger
@@ -20,10 +22,11 @@ bandwidthlog = Logger("bandwidth")
 
 FAKE_BROKEN_CONNECTION = envint("XPRA_FAKE_BROKEN_CONNECTION")
 PING_TIMEOUT = envint("XPRA_PING_TIMEOUT", 60)
+SWALLOW_PINGS = envbool("XPRA_SWALLOW_PINGS", False)
 #LOG_INFO_RESPONSE = ("^window.*position", "^window.*size$")
 LOG_INFO_RESPONSE = os.environ.get("XPRA_LOG_INFO_RESPONSE", "")
 AUTO_BANDWIDTH_PCT = envint("XPRA_AUTO_BANDWIDTH_PCT", 80)
-assert AUTO_BANDWIDTH_PCT>1 and AUTO_BANDWIDTH_PCT<=100, "invalid value for XPRA_AUTO_BANDWIDTH_PCT: %i" % AUTO_BANDWIDTH_PCT
+assert 1<AUTO_BANDWIDTH_PCT<=100, "invalid value for XPRA_AUTO_BANDWIDTH_PCT: %i" % AUTO_BANDWIDTH_PCT
 
 
 """
@@ -54,6 +57,8 @@ class NetworkState(StubClientMixin):
         self.info_request_pending = False
 
         #network state:
+        self.server_packet_encoders = ()
+        self.server_packet_compressors = ()
         self.server_ping_latency = deque(maxlen=1000)
         self.server_load = None
         self.client_ping_latency = deque(maxlen=1000)
@@ -64,7 +69,7 @@ class NetworkState(StubClientMixin):
         self.ping_echo_timeout_timer = None
 
 
-    def init(self, opts, _extra_args=[]):
+    def init(self, opts):
         self.pings = opts.pings
         self.bandwidth_limit = parse_with_unit("bandwidth-limit", opts.bandwidth_limit)
         self.bandwidth_detection = opts.bandwidth_detection
@@ -77,8 +82,20 @@ class NetworkState(StubClientMixin):
         self.cancel_ping_echo_timeout_timer()
 
 
-    def get_caps(self):
-        caps = {"info-namespace" : True}
+    def get_info(self) -> dict:
+        return {
+            "network" : {
+                "bandwidth-limit"       : self.bandwidth_limit,
+                "bandwidth-detection"   : self.bandwidth_detection,
+                "server-ok"             : self._server_ok,
+                }
+            }
+
+    def get_caps(self) -> dict:
+        caps = {
+            "network-state" : True,
+            "info-namespace" : True,            #v4 servers assume this is always supported
+            }
         #get socket speed if we have it:
         pinfo = self._protocol.get_info()
         device_info = pinfo.get("socket", {}).get("device", {})
@@ -113,10 +130,10 @@ class NetworkState(StubClientMixin):
         if bandwidth_limit>0:
             caps["bandwidth-limit"] = bandwidth_limit
         caps["bandwidth-detection"] = self.bandwidth_detection
+        caps["ping-echo-sourceid"] = True
         return caps
 
-    def parse_server_capabilities(self):
-        c = self.server_capabilities
+    def parse_server_capabilities(self, c : typedict) -> bool:
         #make sure the server doesn't provide a start time in the future:
         import time
         self.server_start_time = min(time.time(), c.intget("start_time", -1))
@@ -124,9 +141,11 @@ class NetworkState(StubClientMixin):
         self.server_bandwidth_limit = c.intget("network.bandwidth-limit")
         bandwidthlog("server_bandwidth_limit_change=%s, server_bandwidth_limit=%s",
                      self.server_bandwidth_limit_change, self.server_bandwidth_limit)
+        self.server_packet_encoders = tuple(x for x in ALL_ENCODERS if c.boolget(x, False))
+        self.server_packet_compressors = tuple(x for x in ALL_COMPRESSORS if c.boolget(x, False))
         return True
 
-    def process_ui_capabilities(self):
+    def process_ui_capabilities(self, caps : typedict):
         self.send_deflate_level()
         self.send_ping()
         if self.pings>0:
@@ -162,13 +181,13 @@ class NetworkState(StubClientMixin):
     def send_info_request(self, *categories):
         if not self.info_request_pending:
             self.info_request_pending = True
-            window_ids = ()	#no longer used or supported by servers
+            window_ids = () #no longer used or supported by servers
             self.send("info-request", [self.uuid], window_ids, categories)
 
 
     ######################################################################
     # network and status:
-    def server_ok(self):
+    def server_ok(self) -> bool:
         return self._server_ok
 
     def check_server_echo(self, ping_sent_time):
@@ -186,7 +205,8 @@ class NetworkState(StubClientMixin):
             self._server_ok = self.last_ping_echoed_time>=ping_sent_time
         if not self._server_ok:
             if not self.ping_echo_timeout_timer:
-                self.ping_echo_timeout_timer = self.timeout_add(PING_TIMEOUT*1000, self.check_echo_timeout, ping_sent_time)
+                self.ping_echo_timeout_timer = self.timeout_add(PING_TIMEOUT*1000,
+                                                                self.check_echo_timeout, ping_sent_time)
         else:
             self.cancel_ping_echo_timeout_timer()
         log("check_server_echo(%s) last=%s, server_ok=%s (last_ping_echoed_time=%s)",
@@ -240,6 +260,9 @@ class NetworkState(StubClientMixin):
     def _process_ping(self, packet):
         echotime = packet[1]
         l1,l2,l3 = 0,0,0
+        sid = ""
+        if len(packet)>=4:
+            sid = packet[3]
         if POSIX:
             try:
                 (fl1, fl2, fl3) = os.getloadavg()
@@ -250,7 +273,9 @@ class NetworkState(StubClientMixin):
             sl = self.server_ping_latency[-1][1]
         except IndexError:
             sl = -1
-        self.send("ping_echo", echotime, l1, l2, l3, int(1000.0*sl))
+        if SWALLOW_PINGS>0:
+            return
+        self.send("ping_echo", echotime, l1, l2, l3, int(1000.0*sl), sid)
 
 
     ######################################################################
@@ -260,8 +285,9 @@ class NetworkState(StubClientMixin):
         self.send_deflate_level()
 
     def send_deflate_level(self):
-        self._protocol.set_compression_level(self.compression_level)
-        self.send("set_deflate", self.compression_level)
+        if self._protocol:
+            self._protocol.set_compression_level(self.compression_level)
+            self.send("set_deflate", self.compression_level)
 
 
     def send_bandwidth_limit(self):

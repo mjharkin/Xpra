@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # This file is part of Xpra.
-# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -10,17 +10,14 @@ import os
 from xpra.sound.common import (
     FLAC_OGG, OPUS_OGG, OPUS_MKA, SPEEX_OGG, VORBIS_OGG, VORBIS_MKA, \
     AAC_MPEG4, WAV_LZ4, WAV_LZO, \
-    VORBIS, FLAC, MP3, MP3_MPEG4, OPUS, SPEEX, WAV, WAVPACK, \
+    VORBIS, FLAC, MP3, MP3_MPEG4, OPUS, SPEEX, WAV, WAVPACK, MP3_ID3V2, \
     MPEG4, MKA, OGG,
     )
-from xpra.os_util import WIN32, OSX, POSIX, PYTHON3, bytestostr
+from xpra.os_util import WIN32, OSX, POSIX, bytestostr
 from xpra.util import csv, engs, parse_simple_dict, reverse_dict, envint, envbool
 from xpra.log import Logger
 
 log = Logger("sound", "gstreamer")
-
-if PYTHON3:
-    unicode = str           #@ReservedAssignment
 
 
 #used on the server (reversed):
@@ -32,6 +29,9 @@ GST_QUEUE_LEAK_UPSTREAM       = 1
 GST_QUEUE_LEAK_DOWNSTREAM     = 2
 GST_QUEUE_LEAK_DEFAULT = GST_QUEUE_LEAK_DOWNSTREAM
 MS_TO_NS = 1000000
+
+GST_FLOW_OK = 0     #Gst.FlowReturn.OK
+
 
 QUEUE_LEAK = envint("XPRA_SOUND_QUEUE_LEAK", GST_QUEUE_LEAK_DEFAULT)
 if QUEUE_LEAK not in (GST_QUEUE_NO_LEAK, GST_QUEUE_LEAK_UPSTREAM, GST_QUEUE_LEAK_DOWNSTREAM):
@@ -89,6 +89,7 @@ NAME_TO_INFO_PLUGIN = {
 #we keep multiple options here for the same encoding
 #and will populate the ones that are actually available into the "CODECS" dict
 CODEC_OPTIONS = [
+        (VORBIS_MKA , "vorbisenc",      "matroskamux",  "vorbisdec",                    "matroskademux"),
         (VORBIS_MKA , "vorbisenc",      "webmmux",      "vorbisdec",                    "matroskademux"),
         #those two used to fail silently (older versions of gstreamer?)
         (VORBIS_OGG , "vorbisenc",      "oggmux",       "vorbisparse ! vorbisdec",      "oggdemux"),
@@ -96,6 +97,7 @@ CODEC_OPTIONS = [
         (FLAC       , "flacenc",        None,           "flacparse ! flacdec",          None),
         (FLAC_OGG   , "flacenc",        "oggmux",       "flacparse ! flacdec",          "oggdemux"),
         (MP3        , "lamemp3enc",     None,           "mpegaudioparse ! mad",         None),
+        (MP3_ID3V2  , "lamemp3enc",     "id3v2mux",     "mpegaudioparse ! mpg123audiodec", "id3demux"),
         (MP3        , "lamemp3enc",     None,           "mpegaudioparse ! mpg123audiodec", None),
         (MP3_MPEG4  , "lamemp3enc",     "mp4mux",       "mpegaudioparse ! mad",         "qtdemux"),
         (WAV        , "wavenc",         None,           "wavparse",                     None),
@@ -104,6 +106,7 @@ CODEC_OPTIONS = [
         (OPUS_OGG   , "opusenc",        "oggmux",       "opusdec",                      "oggdemux"),
         (OPUS       , "opusenc",        None,           "opusparse ! opusdec",          None),
         #this can cause "could not link opusenc0 to webmmux0"
+        (OPUS_MKA   , "opusenc",        "matroskamux",  "opusdec",                      "matroskademux"),
         (OPUS_MKA   , "opusenc",        "webmmux",      "opusdec",                      "matroskademux"),
         (SPEEX_OGG  , "speexenc",       "oggmux",       "speexdec",                     "oggdemux"),
         (WAVPACK    , "wavpackenc",      None,          "wavpackparse ! wavpackdec",    None),
@@ -114,6 +117,7 @@ CODEC_OPTIONS = [
 MUX_OPTIONS = [
                (OGG,    "oggmux",   "oggdemux"),
                (MKA,    "webmmux",  "matroskademux"),
+               (MKA,    "matroskamux",  "matroskademux"),
                (MPEG4,  "mp4mux",   "qtdemux"),
               ]
 emux = [x for x in os.environ.get("XPRA_MUXER_OPTIONS", "").split(",") if len(x.strip())>0]
@@ -161,13 +165,12 @@ ENCODER_DEFAULT_OPTIONS_COMMON = {
             #"vorbisenc"     : {"perfect-timestamp" : 1},
                            }
 ENCODER_DEFAULT_OPTIONS = {
-                                #FIXME: figure out when it is safe to apply the "bitrate-type" setting:
-                                "opusenc"       : {
-                                                   #only available with 1.6 onwards?
-                                                   #"bitrate-type"   : 2,      #constrained vbr
-                                                   "complexity"     : 0
-                                                   },
-                           }
+    "opusenc"       : {
+        #only available with 1.6 onwards?
+        "bitrate-type"   : 1,      #vbr
+        "complexity"     : 0
+        },
+    }
 #we may want to review this if/when we implement UDP transport:
 MUXER_DEFAULT_OPTIONS = {
             "oggmux"        : {
@@ -179,6 +182,10 @@ MUXER_DEFAULT_OPTIONS = {
                                "streamable"         : 1,
                                #"min-index-interval" : 0,
                                },
+            "matroskamux"   : {
+                               "writing-app"        : "Xpra",
+                               "streamable"         : 1,
+                },
             "mp4mux"        : {
                                "faststart"          : 1,
                                "streamable"         : 1,
@@ -188,7 +195,7 @@ MUXER_DEFAULT_OPTIONS = {
            }
 
 #based on the encoder options above:
-RECORD_PIPELINE_LATENCY = 75
+RECORD_PIPELINE_LATENCY = 25
 ENCODER_LATENCY = {
         VORBIS      : 0,
         VORBIS_OGG  : 0,
@@ -203,7 +210,7 @@ ENCODER_LATENCY = {
 
 CODEC_ORDER = [
     OPUS, OPUS_OGG, VORBIS_MKA, VORBIS_OGG, VORBIS,
-    MP3, FLAC_OGG, AAC_MPEG4,
+    MP3, MP3_ID3V2, FLAC_OGG, AAC_MPEG4,
     WAV_LZ4, WAV_LZO, WAV, WAVPACK,
     SPEEX_OGG, VORBIS, OPUS_MKA, FLAC, MP3_MPEG4,
     ]
@@ -231,26 +238,9 @@ def do_import_gst():
         frozen = getattr(sys, "frozen", None) in ("windows_exe", "console_exe", True)
         log("gstreamer_util: frozen=%s", frozen)
         if frozen:
-            #on win32, we keep separate trees
-            #because GStreamer 0.10 and 1.x were built using different
-            # and / or incompatible version of the same libraries:
             from xpra.platform.paths import get_app_dir
-            gi_dir = os.path.join(get_app_dir(), "lib", "girepository-1.0")
             gst_dir = os.path.join(get_app_dir(), "lib", "gstreamer-1.0")   #ie: C:\Program Files\Xpra\lib\gstreamer-1.0
-            gst_bin_dir = os.path.join(get_app_dir(), "bin")                #ie: C:\Program Files\Xpra\bin
-            if not os.path.exists(gst_dir):
-                #fallback to old build locations:
-                gi_dir = os.path.join(get_app_dir(), "girepository-1.0")
-                gst_dir = os.path.join(get_app_dir(), "gstreamer-1.0")
-                #ie: "C:\Program Files\Xpra\gstreamer-0.10\bin" :
-                gst_bin_dir = os.path.join(gst_dir, "bin")
-            os.environ["GI_TYPELIB_PATH"] = gi_dir
             os.environ["GST_PLUGIN_PATH"] = gst_dir
-            os.environ["PATH"] = os.pathsep.join(x for x in (gst_bin_dir, os.environ.get("PATH", "")) if x)
-            sys.path.insert(0, gst_bin_dir)
-            scanner = os.path.join(gst_bin_dir, "gst-plugin-scanner.exe")
-            if os.path.exists(scanner):
-                os.environ["GST_PLUGIN_SCANNER"]    = scanner
     elif OSX:
         bundle_contents = os.environ.get("GST_BUNDLE_CONTENTS")
         log("OSX: GST_BUNDLE_CONTENTS=%s", bundle_contents)
@@ -258,10 +248,6 @@ def do_import_gst():
             rsc_dir = os.path.join(bundle_contents, "Resources")
             os.environ["GST_PLUGIN_PATH"]       = os.path.join(rsc_dir, "lib", "gstreamer-1.0")
             os.environ["GST_PLUGIN_SCANNER"]    = os.path.join(rsc_dir, "bin", "gst-plugin-scanner-1.0")
-            #typelib path should have been set in PythonExecWrapper
-            if not os.environ.get("GI_TYPELIB_PATH"):
-                gi_dir = os.path.join(bundle_contents, "Resources", "lib", "girepository-1.0")
-                os.environ["GI_TYPELIB_PATH"]       = gi_dir
     log("GStreamer 1.x environment: %s",
         dict((k,v) for k,v in os.environ.items() if (k.startswith("GST") or k.startswith("GI") or k=="PATH")))
     log("GStreamer 1.x sys.path=%s", csv(sys.path))
@@ -423,10 +409,10 @@ def has_stream_compressor(stream_compressor):
     if stream_compressor not in ("lz4", "lzo"):
         log.warn("Warning: invalid stream compressor '%s'", stream_compressor)
         return False
-    from xpra.net.compression import use_lz4, use_lzo
-    if stream_compressor=="lz4" and not use_lz4:
+    from xpra.net.compression import use
+    if stream_compressor=="lz4" and not use("lz4"):
         return False
-    if stream_compressor=="lzo" and not use_lzo:
+    if stream_compressor=="lzo" and not use("lzo"):
         return False
     return True
 
@@ -496,7 +482,7 @@ def plugin_str(plugin, options):
     s = "%s" % plugin
     def qstr(v):
         #only quote strings
-        if isinstance(v, (str, unicode)):
+        if isinstance(v, str):
             return "\"%s\"" % v
         return v
     if options:
@@ -572,7 +558,7 @@ def get_sink_plugins():
         SINKS += ["alsasink", "osssink", "oss4sink", "jackaudiosink"]
     return SINKS
 
-def get_default_sink():
+def get_default_sink_plugin():
     sink = os.environ.get("XPRA_SOUND_SINK")
     sinks = get_sink_plugins()
     if sink:
@@ -589,7 +575,7 @@ def get_default_sink():
             else:
                 return "pulsesink"
     except ImportError as e:
-        log("get_default_sink() no pulsesink: %s", e)
+        log("get_default_sink_plugin() no pulsesink: %s", e)
     for sink in sinks:
         if has_plugins(sink):
             return sink
@@ -874,13 +860,15 @@ def parse_sound_source(all_plugins, sound_source_plugin, device, want_monitor_de
     options_str = (sound_source_plugin+":").split(":",1)[1].rstrip(":")
     simple_str = (plugin).lower().strip()
     if not simple_str:
-        #choose the first one from
-        options = [x for x in get_source_plugins() if x in all_plugins]
-        if not options:
-            log.error("no source plugins available")
-            return None
-        log("parse_sound_source: no plugin specified, using default: %s", options[0])
-        simple_str = options[0]
+        simple_str = get_default_source()
+        if not simple_str:
+            #choose the first one from
+            options = [x for x in get_source_plugins() if x in all_plugins]
+            if not options:
+                log.error("no source plugins available")
+                return None, {}
+            log("parse_sound_source: no plugin specified, using default: %s", options[0])
+            simple_str = options[0]
     for s in ("src", "sound", "audio"):
         if simple_str.endswith(s):
             simple_str = simple_str[:-len(s)]
@@ -936,7 +924,7 @@ def main():
         print("stream compressors: %s" % csv(get_stream_compressors()))
         print("source plugins:     %s" % csv([x for x in get_source_plugins() if x in apn]))
         print("sink plugins:       %s" % csv([x for x in get_sink_plugins() if x in apn]))
-        print("default sink:       %s" % get_default_sink())
+        print("default sink:       %s" % get_default_sink_plugin())
 
 
 if __name__ == "__main__":

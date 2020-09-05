@@ -44,7 +44,7 @@ def get_interface_index(host):
     return index
 
 
-class AvahiPublishers(object):
+class AvahiPublishers:
     """
     Aggregates a number of AvahiPublisher(s).
     This takes care of constructing the appropriate AvahiPublisher
@@ -73,7 +73,7 @@ class AvahiPublishers(object):
                 for k,v in text_dict.items():
                     txt.append("%s=%s" % (k,v))
             fqdn = host
-            if host=="0.0.0.0":
+            if host in ("0.0.0.0", "::"):
                 fqdn = ""
             elif host:
                 try:
@@ -87,7 +87,7 @@ class AvahiPublishers(object):
                         if fqdn:
                             fqdn += ".local"
                         log("cannot find a fully qualified domain name for '%s', using: %s", host, fqdn)
-                except (OSError, IOError, IndexError):
+                except (OSError, IndexError):
                     log("failed to get hostbyaddr for '%s'", host, exc_info=True)
             self.publishers.append(AvahiPublisher(bus, service_name, port,
                                                   service_type, domain="", host=fqdn,
@@ -115,7 +115,7 @@ class AvahiPublishers(object):
             publisher.update_txt(txt)
 
 
-class AvahiPublisher(object):
+class AvahiPublisher:
 
     def __init__(self, bus, name, port, stype=XPRA_MDNS_TYPE, domain="", host="", text=(), interface=avahi.IF_UNSPEC):
         log("AvahiPublisher%s", (bus, name, port, stype, domain, host, text, interface))
@@ -132,7 +132,7 @@ class AvahiPublisher(object):
         self.server = None
         self.group = None
 
-    def get_info(self):
+    def get_info(self) -> dict:
         def iface():
             if self.interface>0:
                 return "interface %i" % self.interface
@@ -225,13 +225,20 @@ class AvahiPublisher(object):
             log.warn("Warning: cannot update mdns record")
             log.warn(" publisher has already been stopped")
             return
+        #prevent avahi from choking on ints:
+        txt_strs = dict((k,str(v)) for k,v in txt.items())
         def reply_handler(*args):
             log("reply_handler%s", args)
             log("update_txt(%s) done", txt)
         def error_handler(*args):
             log("error_handler%s", args)
             log.warn("Warning: failed to update mDNS TXT record")
-        txt_array = avahi.dict_to_txt_array(txt)
+            log.warn(" for name '%s'", self.name)
+            log.warn(" host=%s, port=%s", self.host, self.port)
+            log.warn(" with new data:")
+            for k,v in txt_strs.items():
+                log.warn(" * %s=%s", k, v)
+        txt_array = avahi.dict_to_txt_array(txt_strs)
         self.group.UpdateServiceTxt(self.interface,
             avahi.PROTO_UNSPEC, dbus.UInt32(0), self.name, self.stype, self.domain,
             txt_array, reply_handler=reply_handler,
@@ -239,8 +246,7 @@ class AvahiPublisher(object):
 
 
 def main():
-    from xpra.gtk_common.gobject_compat import import_glib
-    glib = import_glib()
+    from gi.repository import GLib
     import random
     import signal
     port = int(20000*random.random())+10000
@@ -251,12 +257,12 @@ def main():
     assert publisher
     def update_rec():
         publisher.update_txt({b"hello" : b"world"})
-    glib.timeout_add(5*1000, update_rec)
+    GLib.timeout_add(5*1000, update_rec)
     def start():
         publisher.start()
-    glib.idle_add(start)
+    GLib.idle_add(start)
     signal.signal(signal.SIGTERM, exit)
-    glib.MainLoop().run()
+    GLib.MainLoop().run()
 
 
 if __name__ == "__main__":

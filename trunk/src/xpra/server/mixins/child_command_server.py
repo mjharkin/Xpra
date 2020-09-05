@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2020 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -11,7 +11,9 @@ from xpra.platform.features import COMMAND_SIGNALS
 from xpra.child_reaper import getChildReaper, reaper_cleanup
 from xpra.os_util import monotonic_time, bytestostr, OSX, WIN32, POSIX
 from xpra.util import envint, csv
-from xpra.scripts.parsing import parse_env
+from xpra.make_thread import start_thread
+from xpra.scripts.parsing import parse_env, get_subcommands
+from xpra.server.server_util import source_env
 from xpra.server import EXITING_CODE
 from xpra.server.mixins.stub_server_mixin import StubServerMixin
 from xpra.log import Logger
@@ -20,7 +22,19 @@ log = Logger("exec")
 
 TERMINATE_DELAY = envint("XPRA_TERMINATE_DELAY", 1000)/1000.0
 MENU_RELOAD_DELAY = envint("XPRA_MENU_RELOAD_DELAY", 5)
+EXPORT_XDG_MENU_DATA = envint("XPRA_EXPORT_XDG_MENU_DATA", True)
 
+
+def noicondata(menu_data):
+    newdata = {}
+    for k,v in menu_data.items():
+        if k in ("IconData", b"IconData"):
+            continue
+        if isinstance(v, dict):
+            newdata[k] = noicondata(v)
+        else:
+            newdata[k] = v
+    return newdata
 
 """
 Mixin for servers that can handle file transfers and forwarded printers.
@@ -41,7 +55,8 @@ class ChildCommandServer(StubServerMixin):
         self.exit_with_children = False
         self.start_after_connect_done = False
         self.start_new_commands = False
-        self.start_env = []
+        self.source_env = {}
+        self.start_env = {}
         self.exec_cwd = None
         self.exec_wrapper = None
         self.terminate_children = False
@@ -73,6 +88,7 @@ class ChildCommandServer(StubServerMixin):
             import shlex
             self.exec_wrapper = shlex.split(opts.exec_wrapper)
         self.child_reaper = getChildReaper()
+        self.source_env = source_env(opts.source_start)
         self.start_env = parse_env(opts.start_env)
 
     def threaded_setup(self):
@@ -81,7 +97,7 @@ class ChildCommandServer(StubServerMixin):
             self.child_reaper.set_quit_callback(self.reaper_exit)
             self.child_reaper.check()
         self.idle_add(set_reaper_callback)
-        if POSIX and not OSX and self.start_new_commands:
+        if POSIX and not OSX and self.start_new_commands and EXPORT_XDG_MENU_DATA:
             try:
                 self.setup_menu_watcher()
             except Exception as e:
@@ -89,12 +105,16 @@ class ChildCommandServer(StubServerMixin):
                 log.error("Error setting up menu watcher:")
                 log.error(" %s", e)
             from xpra.platform.xposix.xdg_helper import load_xdg_menu_data
-            load_xdg_menu_data()
+            #start loading in a thread,
+            #so server startup can complete:
+            start_thread(load_xdg_menu_data, "load-xdg-menu-data", True)
+
 
     def setup_menu_watcher(self):
         try:
             import pyinotify
         except ImportError as e:
+            log("setup_menu_watcher() cannot import pyinotify", exc_info=True)
             log.warn("Warning: cannot watch for application menu changes without pyinotify:")
             log.warn(" %s", e)
             return
@@ -147,11 +167,11 @@ class ChildCommandServer(StubServerMixin):
             self.watch_manager = None
             try:
                 watch_manager.close()
-            except (OSError, IOError):
+            except OSError:
                 log("error closing watch manager %s", watch_manager, exc_info=True)
 
 
-    def get_server_features(self, _source):
+    def get_server_features(self, _source) -> dict:
         return {
             "start-new-commands"        : self.start_new_commands,
             "exit-with-children"        : self.exit_with_children,
@@ -162,21 +182,32 @@ class ChildCommandServer(StubServerMixin):
 
 
     def _get_xdg_menu_data(self, force_reload=False):
-        if not self.start_new_commands or not POSIX or OSX:
+        if not EXPORT_XDG_MENU_DATA:
             return None
-        from xpra.platform.xposix.xdg_helper import load_xdg_menu_data
-        return load_xdg_menu_data(force_reload)
+        if not self.start_new_commands:
+            return None
+        if OSX:
+            return None
+        if POSIX:
+            from xpra.platform.xposix.xdg_helper import load_xdg_menu_data
+            return load_xdg_menu_data(force_reload)
+        if WIN32:
+            from xpra.platform.win32.menu_helper import load_menu
+            return load_menu()
+        log.error("Error: unsupported platform!")
+        return None
 
-    def get_caps(self, source):
+    def get_caps(self, source) -> dict:
         caps = {}
         if not source:
             return caps
         #don't assume we have a real ClientConnection object:
-        if getattr(source, "wants_features", False):
+        if getattr(source, "wants_features", False) and getattr(source, "ui_client", False):
             caps["xdg-menu"] = {}
             if not source.xdg_menu_update:
                 #we have to send it now:
                 xdg_menu = self._get_xdg_menu_data()
+                log("%i entries sent in hello", len(xdg_menu or ()))
                 if xdg_menu:
                     l = len(str(xdg_menu))
                     #arbitrary: don't use more than half
@@ -187,12 +218,21 @@ class ChildCommandServer(StubServerMixin):
                         log.info("removed icons to reduce the size of the xdg menu data")
                         log.info("size reduced from %i to %i", l, len(str(xdg_menu)))
                     caps["xdg-menu"] = xdg_menu
+            caps["subcommands"] = get_subcommands()
         return caps
 
     def send_initial_data(self, ss, caps, send_ui, share_count):
-        xdg_menu = self._get_xdg_menu_data()
         if ss.xdg_menu_update:
-            ss.send_setting_change("xdg-menu", xdg_menu or {})
+            #this method may block if the menus are still being loaded,
+            #so do it in a throw-away thread:
+            start_thread(self.send_xdg_menu_data, "send-xdg-menu-data", True, (ss,))
+
+    def send_xdg_menu_data(self, ss):
+        if ss.is_closed():
+            return
+        xdg_menu = self._get_xdg_menu_data() or {}
+        log("%i entries sent in initial data", len(xdg_menu))
+        ss.send_setting_change("xdg-menu", xdg_menu)
 
     def schedule_xdg_menu_reload(self):
         xmrt = self.xdg_menu_reload_timer
@@ -207,8 +247,9 @@ class ChildCommandServer(StubServerMixin):
         for source in tuple(self._server_sources.values()):
             if source.xdg_menu_update:
                 source.send_setting_change("xdg-menu", xdg_menu or {})
+        return False
 
-    def get_info(self, _proto):
+    def get_info(self, _proto) -> dict:
         info = {
             "start"                     : self.start_commands,
             "start-child"               : self.start_child_commands,
@@ -220,6 +261,9 @@ class ChildCommandServer(StubServerMixin):
             "start-after-connect-done"  : self.start_after_connect_done,
             "start-new"                 : self.start_new_commands,
             }
+        md = self._get_xdg_menu_data()
+        if md:
+            info["start-menu"] = noicondata(md)
         for i,procinfo in enumerate(self.children_started):
             info[i] = procinfo.get_info()
         return {"commands": info}
@@ -231,18 +275,16 @@ class ChildCommandServer(StubServerMixin):
 
     def get_child_env(self):
         #subclasses may add more items (ie: fakexinerama)
-        env = os.environ.copy()
+        env = super().get_child_env()
+        env.update(self.source_env)
         env.update(self.start_env)
         if self.child_display:
             env["DISPLAY"] = self.child_display
         return env
 
-
-    def get_full_child_command(self, cmd, use_wrapper=True):
+    def get_full_child_command(self, cmd, use_wrapper=True) -> list:
         #make sure we have it as a list:
-        if not isinstance(cmd, (list, tuple)):
-            import shlex
-            cmd = shlex.split(str(cmd))
+        cmd = super().get_full_child_command(cmd, use_wrapper)
         if not use_wrapper or not self.exec_wrapper:
             return cmd
         return self.exec_wrapper + cmd
@@ -287,7 +329,7 @@ class ChildCommandServer(StubServerMixin):
         try:
             real_cmd = self.get_full_child_command(child_cmd, use_wrapper)
             log("full child command(%s, %s)=%s", child_cmd, use_wrapper, real_cmd)
-            proc = Popen(real_cmd, env=env, shell=shell, cwd=self.exec_cwd, close_fds=True, **kwargs)
+            proc = Popen(real_cmd, env=env, shell=shell, cwd=self.exec_cwd, **kwargs)
             procinfo = self.add_process(proc, name, real_cmd, ignore=ignore, callback=callback)
             log("pid(%s)=%s", real_cmd, proc.pid)
             if not ignore:
@@ -304,7 +346,7 @@ class ChildCommandServer(StubServerMixin):
     def add_process(self, process, name, command, ignore=False, callback=None):
         return self.child_reaper.add_process(process, name, command, ignore, callback=callback)
 
-    def is_child_alive(self, proc):
+    def is_child_alive(self, proc) -> bool:
         return proc is not None and proc.poll() is None
 
     def reaper_exit_check(self):
@@ -355,6 +397,13 @@ class ChildCommandServer(StubServerMixin):
             if not proc_info:
                 continue
             cmd = proc_info.command
+            if self.exec_wrapper:
+                #strip exec wrapper
+                l = len(self.exec_wrapper)
+                if len(cmd)>l and cmd[:l]==self.exec_wrapper:
+                    cmd = cmd[l:]
+            elif len(cmd)>1 and cmd[0] in ("vglrun", "nohup",):
+                cmd.pop(0)
             bcmd = os.path.basename(cmd[0])
             if bcmd not in cmd_names:
                 cmd_names.append(bcmd)

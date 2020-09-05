@@ -11,7 +11,7 @@ from xpra.log import Logger
 from xpra.scripts.config import FALSE_OPTIONS
 from xpra.net import compression
 from xpra.os_util import OSEnvContext, monotonic_time, WIN32, BITS
-from xpra.util import envint, envbool, csv, XPRA_WEBCAM_NOTIFICATION_ID
+from xpra.util import envint, envbool, csv, typedict, XPRA_WEBCAM_NOTIFICATION_ID
 from xpra.client.mixins.stub_client_mixin import StubClientMixin
 
 
@@ -57,7 +57,7 @@ class WebcamForwarder(StubClientMixin):
         self.stop_sending_webcam()
 
 
-    def init(self, opts, _extra_args=()):
+    def init(self, opts):
         self.webcam_option = opts.webcam
         self.webcam_forwarding = self.webcam_option.lower() not in FALSE_OPTIONS
         self.server_webcam = False
@@ -72,20 +72,23 @@ class WebcamForwarder(StubClientMixin):
                     assert cv2 and Image
                 except ImportError as e:
                     log("init webcam failure", exc_info=True)
-                    if WIN32 and BITS==32:
-                        log.info("32-bit builds do not support webcam forwarding")
-                    else:
-                        log.warn("Warning: failed to import opencv:")
-                        log.warn(" %s", e)
-                        log.warn(" webcam forwarding is disabled")
+                    if WIN32:
+                        log.info("opencv not found:")
+                        log.info(" %s", e)
+                        log.info(" webcam forwarding is not available")
                     self.webcam_forwarding = False
         log("webcam forwarding: %s", self.webcam_forwarding)
 
 
-    def parse_server_capabilities(self):
-        c = self.server_capabilities
+    def get_caps(self) -> dict:
+        if not self.webcam_forwarding:
+            return {}
+        return {"webcam" : True}
+
+
+    def parse_server_capabilities(self, c : typedict) -> bool:
         self.server_webcam = c.boolget("webcam")
-        self.server_webcam_encodings = c.strlistget("webcam.encodings", ("png", "jpeg"))
+        self.server_webcam_encodings = c.strtupleget("webcam.encodings", ("png", "jpeg"))
         self.server_virtual_video_devices = c.intget("virtual-video-devices")
         log("webcam server support: %s (%i devices, encodings: %s)",
             self.server_webcam, self.server_virtual_video_devices, csv(self.server_webcam_encodings))

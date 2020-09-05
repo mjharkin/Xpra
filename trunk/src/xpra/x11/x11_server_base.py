@@ -13,6 +13,7 @@ from xpra.util import nonl, typedict, envbool, iround
 from xpra.gtk_common.error import xswallow, xsync, xlog
 from xpra.x11.x11_server_core import X11ServerCore, XTestPointerDevice
 from xpra.x11.bindings.keyboard_bindings import X11KeyboardBindings #@UnresolvedImport
+from xpra.x11.xsettings_prop import XSettingsTypeInteger, XSettingsTypeString, BLACKLISTED_XSETTINGS
 from xpra.log import Logger
 
 log = Logger("x11", "server")
@@ -23,6 +24,7 @@ dbuslog = Logger("dbus")
 X11Keyboard = X11KeyboardBindings()
 
 SCALED_FONT_ANTIALIAS = envbool("XPRA_SCALED_FONT_ANTIALIAS", False)
+SYNC_ICC = envbool("XPRA_SYNC_ICC", True)
 
 
 def _get_antialias_hintstyle(antialias):
@@ -60,9 +62,10 @@ class X11ServerBase(X11ServerCore):
         self._xsettings_manager = None
         self._xsettings_enabled = False
         self.display_pid = 0
+        self.icc_profile = b""
 
     def do_init(self, opts):
-        X11ServerCore.do_init(self, opts)
+        super().do_init(opts)
         self._xsettings_enabled = opts.xsettings
         if self._xsettings_enabled:
             from xpra.x11.xsettings import XSettingsHelper
@@ -75,7 +78,7 @@ class X11ServerBase(X11ServerCore):
         if pid:
             from xpra.scripts.server import _save_int
             _save_int(b"_XPRA_SERVER_PID", pid)
-        elif self.clobber:
+        else:
             from xpra.scripts.server import _get_int
             pid = _get_int(b"_XPRA_SERVER_PID")
             if not pid:
@@ -110,11 +113,19 @@ class X11ServerBase(X11ServerCore):
 
 
     def init_dbus(self, dbus_pid, dbus_env):
+        try:
+            from xpra.server.dbus import dbus_start
+            assert dbus_start
+        except ImportError as e:
+            log("init_dbus(%s, %s)", dbus_pid, dbus_env, exc_info=True)
+            log.warn("Warning: cannot initialize dbus")
+            log.warn(" %s", e)
+            return
         from xpra.server.dbus.dbus_start import (
             get_saved_dbus_pid, get_saved_dbus_env,
             save_dbus_pid, save_dbus_env,
             )
-        super(X11ServerBase, self).init_dbus(dbus_pid, dbus_env)
+        super().init_dbus(dbus_pid, dbus_env)
         if self.clobber:
             #get the saved pids and env
             self.dbus_pid = get_saved_dbus_pid()
@@ -188,7 +199,25 @@ class X11ServerBase(X11ServerCore):
         self.update_server_settings()
 
 
+    def get_info(self, proto=None, client_uuids=None):
+        info = super().get_info(proto=proto, client_uuids=client_uuids)
+        display_info = info.setdefault("display", {})
+        if self.display_pid:
+            display_info["pid"] = self.display_pid
+        display_info["icc"] = self.get_icc_info()
+        return info
+
+    def get_icc_info(self) -> dict:
+        icc_info = {
+            "sync"  : SYNC_ICC,
+            }
+        if SYNC_ICC:
+            icc_info["profile"] = hexstr(self.icc_profile)
+        return icc_info
+
     def set_icc_profile(self):
+        if not SYNC_ICC:
+            return
         ui_clients = [s for s in self._server_sources.values() if s.ui_client]
         if len(ui_clients)!=1:
             screenlog("%i UI clients, resetting ICC profile to default", len(ui_clients))
@@ -206,14 +235,9 @@ class X11ServerBase(X11ServerCore):
             return
         screenlog("set_icc_profile() icc data for %s: %s (%i bytes)",
                   ui_clients[0], hexstr(data or ""), len(data or ""))
+        self.icc_profile = data
         from xpra.x11.gtk_x11.prop import prop_set
-        #each CARD32 contains just one 8-bit value - don't ask me why
-        def o(x):
-            try:
-                return ord(x)
-            except:
-                return x
-        prop_set(self.root_window, "_ICC_PROFILE", ["u32"], [o(x) for x in data])
+        prop_set(self.root_window, "_ICC_PROFILE", ["u32"], [ord(x) for x in data])
         prop_set(self.root_window, "_ICC_PROFILE_IN_X_VERSION", "u32", 0*100+4) #0.4 -> 0*100+4*1
 
     def reset_icc_profile(self):
@@ -221,6 +245,7 @@ class X11ServerBase(X11ServerCore):
         from xpra.x11.gtk_x11.prop import prop_del
         prop_del(self.root_window, "_ICC_PROFILE")
         prop_del(self.root_window, "_ICC_PROFILE_IN_X_VERSION")
+        self.icc_profile = b""
 
 
     def reset_settings(self):
@@ -296,6 +321,9 @@ class X11ServerBase(X11ServerCore):
                     if len(parts)!=2:
                         log("skipped invalid option: '%s'", option)
                         continue
+                    if parts[0] in BLACKLISTED_XSETTINGS:
+                        log("skipped blacklisted option: '%s'", option)
+                        continue
                     values[parts[0]] = parts[1]
                 if cursor_size>0:
                     values["Xcursor.size"] = cursor_size
@@ -333,7 +361,17 @@ class X11ServerBase(X11ServerCore):
             #(as those may not be present in xsettings on some platforms.. like win32 and osx)
             if k==b"xsettings-blob" and \
             (self.double_click_time>0 or self.double_click_distance!=(-1, -1) or antialias or dpi>0):
-                from xpra.x11.xsettings_prop import XSettingsTypeInteger, XSettingsTypeString
+                #start by removing blacklisted options:
+                def filter_blacklisted():
+                    serial, values = v
+                    new_values = []
+                    for _t,_n,_v,_s in values:
+                        if bytestostr(_n) in BLACKLISTED_XSETTINGS:
+                            log("skipped blacklisted option %s", (_t, _n, _v, _s))
+                        else:
+                            new_values.append((_t, _n, _v, _s))
+                    return serial, new_values
+                v = filter_blacklisted()
                 def set_xsettings_value(name, value_type, value):
                     #remove existing one, if any:
                     serial, values = v

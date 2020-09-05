@@ -6,7 +6,7 @@
 #opengl = no
 #opengl = gtk, native
 #opengl = auto
-opengl = probe
+opengl = %(opengl)s
 
 # How we handle server authentication requests:
 #challenge-handlers=none
@@ -15,7 +15,11 @@ opengl = probe
 challenge-handlers=all
 
 # Client window title:
-title = @title@ on @client-machine@
+title = @title@ on @hostname@
+
+# Use a header bar with controls:
+#headerbar = no
+headerbar = %(headerbar)s
 
 # Icon used by the system tray:
 #tray-icon = /path/to/icon.png

@@ -1350,7 +1350,6 @@ XpraClient.prototype.do_window_mouse_move = function(e, window) {
 		return;
 	}
 	var mouse = this.getMouse(e, window),
-	const mouse = this.getMouse(e, window),
 		x = Math.round(mouse.x),
 		y = Math.round(mouse.y);
 	const modifiers = this._keyb_get_modifiers(e);

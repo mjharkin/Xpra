@@ -448,7 +448,10 @@ def do_run_mode(script_file, error_cb, options, args, mode, defaults):
         progress_cb = None
         if options.splash is True or (
             options.splash is not False and (
-                not POSIX or os.environ.get("DISPLAY") or os.environ.get("XDG_SESSION_DESKTOP")
+                not POSIX or (
+                    (os.environ.get("DISPLAY") or os.environ.get("XDG_SESSION_DESKTOP")) and 
+                    not (os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_CLIENT"))
+                    )
                 )
             ):
             # use splash screen to show server startup progress:
@@ -2552,6 +2555,7 @@ def run_proxy(error_cb, opts, script_file, args, mode, defaults):
                 v = strip_defaults_start_child(getattr(opts, fn), getattr(defaults, fn))
                 setattr(opts, fn, v)
 
+            opts.splash = False
             proc, socket_path, display = start_server_subprocess(script_file, args, server_mode, opts)
             if not socket_path:
                 #if we return non-zero, we will try the next run-xpra script in the list..

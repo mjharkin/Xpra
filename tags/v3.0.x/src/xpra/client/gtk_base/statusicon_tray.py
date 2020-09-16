@@ -57,7 +57,7 @@ class GTKStatusIconTray(TrayBase):
         modifiers_mask = get_default_root_window().get_pointer()[-1]
         log("activate_menu(%s) modifiers_mask=%s", widget, modifiers_mask)
         if (modifiers_mask & SHIFT_MASK) ^ OSX:
-            self.handle_click(2)
+            self.handle_click(3)
         else:
             self.handle_click(1)
 
@@ -67,7 +67,7 @@ class GTKStatusIconTray(TrayBase):
         if (modifiers_mask & SHIFT_MASK) ^ OSX:
             self.handle_click(1)
         else:
-            self.handle_click(2)
+            self.handle_click(3)
 
     def handle_click(self, button, event_time=0):
         log("handle_click(%i, %i)", button, event_time)

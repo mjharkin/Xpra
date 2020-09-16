@@ -268,7 +268,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         password_input.set_visibility(False)
         add(password_input, 10)
         add(gtk.Label('OTP'), 10)
-        otp_input = gtk.Entry()
+        otp_input = Gtk.Entry()
         otp_input.set_max_length(255)
         otp_input.set_width_chars(32)
         otp_input.set_visibility(False)

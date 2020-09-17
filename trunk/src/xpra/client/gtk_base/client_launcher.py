@@ -11,7 +11,7 @@
 This is a simple GUI for starting the xpra client.
 
 """
-import os
+
 import os.path
 import sys
 import traceback
@@ -1070,22 +1070,6 @@ class ApplicationWindow:
             fn = k.replace("-", "_")
             setattr(self.config, fn, v)
         self.config_keys = self.config_keys.union(set(props.keys()))
-        
-        #apply env property as env variables
-        if "env" in props.keys():
-            if isinstance(props["env"], list):
-                for k in props["env"]:
-                    envprop = k.split("=", 1)
-                    assert len(envprop)==2
-                    name = envprop[0].strip()
-                    value = envprop[1].strip()
-                    os.environ[name]=value
-            else:
-                envprop = props["env"].split("=", 1)
-                assert len(envprop)==2
-                name = envprop[0].strip()
-                value = envprop[1].strip()
-                os.environ[name]=value
         log("_apply_props(%s) populated config with keys '%s', ssh=%s", props, options.keys(), self.config.ssh)
 
     def choose_session_file(self, title, action, action_button, callback):

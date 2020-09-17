@@ -36,7 +36,8 @@ def client_upgrade(read, write, host, port):
     key = b64encode(uuid.uuid4().bytes)
     headers = HEADERS.copy()
     headers[b"Sec-WebSocket-Key"] = key
-    headers[b"Cookie"] = strtobytes(os.environ['XPRA_WS_COOKIE'])
+    if "XPRA_WS_COOKIE" in os.environ:
+        headers[b"Cookie"] = strtobytes(os.environ['XPRA_WS_COOKIE'])
     if host:
         headers[b"Host"] = strtobytes("%s:%s" % (host, port))
     for k,v in headers.items():

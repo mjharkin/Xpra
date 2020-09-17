@@ -4,7 +4,6 @@
 # later version. See the file COPYING for details.
 
 import uuid
-import os
 from hashlib import sha1
 from base64 import b64encode
 from requests.structures import CaseInsensitiveDict
@@ -36,7 +35,6 @@ def client_upgrade(read, write, host, port):
     key = b64encode(uuid.uuid4().bytes)
     headers = HEADERS.copy()
     headers[b"Sec-WebSocket-Key"] = key
-    headers[b"Cookie"] = strtobytes(os.environ['XPRA_WS_COOKIE'])
     if host:
         headers[b"Host"] = strtobytes("%s:%s" % (host, port))
     for k,v in headers.items():

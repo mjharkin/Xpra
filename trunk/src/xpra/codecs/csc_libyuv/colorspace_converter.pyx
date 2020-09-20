@@ -281,8 +281,14 @@ cdef class ColorspaceConverter:
         divs = get_subsampling_divs(self.dst_format)
         for i in range(self.planes):
             xdiv, ydiv = divs[i]
-            self.out_width[i]   = src_width // xdiv
-            self.out_height[i]  = src_height // ydiv
+            if self.rgb_scaling:
+                #we scale before csc to the dst size:
+                self.out_width[i]   = dst_width // xdiv
+                self.out_height[i]  = dst_height // ydiv
+            else:
+                #we don't scale, so the size is the src size:
+                self.out_width[i]   = src_width // xdiv
+                self.out_height[i]  = src_height // ydiv
             self.out_stride[i]  = roundup(self.out_width[i], MEMALIGN_ALIGNMENT)
             self.out_size[i]    = self.out_stride[i] * self.out_height[i]
             self.out_offsets[i] = self.out_buffer_size
@@ -402,16 +408,15 @@ cdef class ColorspaceConverter:
         cdef double start = monotonic_time()
         iplanes = image.get_planes()
         assert iplanes==ImageWrapper.PACKED, "invalid plane input format: %s" % iplanes
+        width = image.get_width()
+        height = image.get_height()
+        assert width>=self.src_width, "invalid image width: %s (minimum is %s)" % (width, self.src_width)
+        assert height>=self.src_height, "invalid image height: %s (minimum is %s)" % (height, self.src_height)
         if self.rgb_scaling:
             #first downscale:
             image = argb_scale(image, self.dst_width, self.dst_height, self.filtermode)
-            width = image.get_width()
-            height = image.get_height()
-        else:
-            width = image.get_width()
-            height = image.get_height()
-            assert width>=self.src_width, "invalid image width: %s (minimum is %s)" % (width, self.src_width)
-            assert height>=self.src_height, "invalid image height: %s (minimum is %s)" % (height, self.src_height)
+            width = self.dst_width
+            height = self.dst_height
         stride = image.get_rowstride()
         pixels = image.get_pixels()
         assert pixels, "failed to get pixels from %s" % image
@@ -485,7 +490,7 @@ def selftest(full=False):
     maxw, maxh = MAX_WIDTH, MAX_HEIGHT
     in_csc = get_input_colorspaces()
     out_csc = get_output_colorspaces(in_csc[0])
-    testcsc(colorspace_converter, full, in_csc, out_csc)
+    testcsc(colorspace_converter, True, full, in_csc, out_csc)
     if full:
         mw, mh = get_csc_max_size(colorspace_converter, in_csc, out_csc, limit_w=32768, limit_h=32768)
         MAX_WIDTH = min(maxw, mw)

@@ -1,33 +1,38 @@
 #!/usr/bin/env python
 # This file is part of Xpra.
-# Copyright (C) 2015 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2015-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-import unittest
 import os
+import logging
+import unittest
+
+from xpra.codecs import loader
 
 SUSPEND_CODEC_ERROR_LOGGING = os.environ.get("XPRA_SUSPEND_CODEC_ERROR_LOGGING", "1")=="1"
+TEST_CODECS = os.environ.get("XPRA_TEST_CODECS", "").split(",") or loader.ALL_CODECS
 
 
 class TestDecoders(unittest.TestCase):
 
     def test_all_codecs_found(self):
-        from xpra.codecs import loader
         #the self tests would swallow the exceptions and produce a warning:
         loader.RUN_SELF_TESTS = False
-        loader.load_codecs()
+        #loader.load_codecs()
         #test them all:
-        for codec_name in loader.ALL_CODECS:
+        print("testing: %s" % (TEST_CODECS,))
+        for codec_name in TEST_CODECS:
+            loader.load_codec(codec_name)
             codec = loader.get_codec(codec_name)
             if not codec:
+                print("WARNING: %s not found" % (codec_name,))
                 continue
             try:
                 #try to suspend error logging for full tests,
                 #as those may cause errors
                 log = getattr(codec, "log", None)
-                if SUSPEND_CODEC_ERROR_LOGGING and log:
-                    import logging
+                if SUSPEND_CODEC_ERROR_LOGGING and log and not log.is_debug_enabled():
                     log.logger.setLevel(logging.CRITICAL)
                 init_module = getattr(codec, "init_module", None)
                 #print("%s.init_module=%s" % (codec, init_module))

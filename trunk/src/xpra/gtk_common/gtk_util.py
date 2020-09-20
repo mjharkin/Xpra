@@ -197,22 +197,6 @@ WINDOW_EVENT_MASK = em.STRUCTURE_MASK | em.KEY_PRESS_MASK | em.KEY_RELEASE_MASK 
         | em.PROPERTY_CHANGE_MASK | em.SCROLL_MASK
 del em
 
-WINDOW_NAME_TO_HINT = {
-            "NORMAL"        : Gdk.WindowTypeHint.NORMAL,
-            "DIALOG"        : Gdk.WindowTypeHint.DIALOG,
-            "MENU"          : Gdk.WindowTypeHint.MENU,
-            "TOOLBAR"       : Gdk.WindowTypeHint.TOOLBAR,
-            "SPLASH"        : Gdk.WindowTypeHint.SPLASHSCREEN,
-            "UTILITY"       : Gdk.WindowTypeHint.UTILITY,
-            "DOCK"          : Gdk.WindowTypeHint.DOCK,
-            "DESKTOP"       : Gdk.WindowTypeHint.DESKTOP,
-            "DROPDOWN_MENU" : Gdk.WindowTypeHint.DROPDOWN_MENU,
-            "POPUP_MENU"    : Gdk.WindowTypeHint.POPUP_MENU,
-            "TOOLTIP"       : Gdk.WindowTypeHint.TOOLTIP,
-            "NOTIFICATION"  : Gdk.WindowTypeHint.NOTIFICATION,
-            "COMBO"         : Gdk.WindowTypeHint.COMBO,
-            "DND"           : Gdk.WindowTypeHint.DND
-            }
 
 orig_pack_start = Gtk.Box.pack_start
 def pack_start(self, child, expand=True, fill=True, padding=0):
@@ -699,7 +683,7 @@ class TableBuilder:
     def get_table(self):
         return self.table
 
-    def add_row(self, widget=None, *widgets, **kwargs):
+    def add_row(self, widget, *widgets, **kwargs):
         if widget:
             l_al = Gtk.Alignment(xalign=1.0, yalign=0.5, xscale=0.0, yscale=0.0)
             l_al.add(widget)

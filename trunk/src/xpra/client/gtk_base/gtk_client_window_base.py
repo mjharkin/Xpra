@@ -8,7 +8,7 @@
 import math
 import os.path
 from urllib.parse import unquote
-import cairo
+from cairo import OPERATOR_OVER, LINE_CAP_ROUND #pylint: disable=no-name-in-module
 from gi.repository import Gtk, Gdk, Gio
 
 from xpra.os_util import bytestostr, strtobytes, is_X11, monotonic_time, WIN32, OSX, POSIX
@@ -92,6 +92,7 @@ if USE_X11_BINDINGS:
         log.error(" %s", e)
 
 
+AWT_DIALOG_WORKAROUND = envbool("XPRA_AWT_DIALOG_WORKAROUND", WIN32)
 BREAK_MOVERESIZE = os.environ.get("XPRA_BREAK_MOVERESIZE", "Escape").split(",")
 MOVERESIZE_X11 = envbool("XPRA_MOVERESIZE_X11", POSIX)
 CURSOR_IDLE_TIMEOUT = envint("XPRA_CURSOR_IDLE_TIMEOUT", 6)
@@ -161,6 +162,39 @@ GDK_SCROLL_MAP = {
     Gdk.ScrollDirection.DOWN     : 5,
     Gdk.ScrollDirection.LEFT     : 6,
     Gdk.ScrollDirection.RIGHT    : 7,
+    }
+
+OR_TYPE_HINTS = (
+    Gdk.WindowTypeHint.DIALOG,
+    Gdk.WindowTypeHint.MENU,
+    Gdk.WindowTypeHint.TOOLBAR,
+    #Gdk.WindowTypeHint.SPLASHSCREEN,
+    #Gdk.WindowTypeHint.UTILITY,
+    #Gdk.WindowTypeHint.DOCK,
+    #Gdk.WindowTypeHint.DESKTOP,
+    Gdk.WindowTypeHint.DROPDOWN_MENU,
+    Gdk.WindowTypeHint.POPUP_MENU,
+    Gdk.WindowTypeHint.TOOLTIP,
+    #Gdk.WindowTypeHint.NOTIFICATION,
+    Gdk.WindowTypeHint.COMBO,
+    Gdk.WindowTypeHint.DND,
+    )
+
+WINDOW_NAME_TO_HINT = {
+    "NORMAL"        : Gdk.WindowTypeHint.NORMAL,
+    "DIALOG"        : Gdk.WindowTypeHint.DIALOG,
+    "MENU"          : Gdk.WindowTypeHint.MENU,
+    "TOOLBAR"       : Gdk.WindowTypeHint.TOOLBAR,
+    "SPLASH"        : Gdk.WindowTypeHint.SPLASHSCREEN,
+    "UTILITY"       : Gdk.WindowTypeHint.UTILITY,
+    "DOCK"          : Gdk.WindowTypeHint.DOCK,
+    "DESKTOP"       : Gdk.WindowTypeHint.DESKTOP,
+    "DROPDOWN_MENU" : Gdk.WindowTypeHint.DROPDOWN_MENU,
+    "POPUP_MENU"    : Gdk.WindowTypeHint.POPUP_MENU,
+    "TOOLTIP"       : Gdk.WindowTypeHint.TOOLTIP,
+    "NOTIFICATION"  : Gdk.WindowTypeHint.NOTIFICATION,
+    "COMBO"         : Gdk.WindowTypeHint.COMBO,
+    "DND"           : Gdk.WindowTypeHint.DND
     }
 
 
@@ -254,6 +288,9 @@ class GTKClientWindowBase(ClientWindowBase, Gtk.Window):
         widget.connect("draw", self.draw_widget)
 
     def draw_widget(self, widget, context):
+        raise NotImplementedError()
+
+    def get_drawing_area_geometry(self):
         raise NotImplementedError()
 
 
@@ -1028,6 +1065,27 @@ class GTKClientWindowBase(ClientWindowBase, Gtk.Window):
         self.when_realized("strut", do_set_strut)
 
 
+    def set_window_type(self, window_types):
+        pass
+        hints = 0
+        for window_type in window_types:
+            #win32 workaround:
+            if AWT_DIALOG_WORKAROUND and window_type=="DIALOG" and self._metadata.boolget("skip-taskbar"):
+                wm_class = self._metadata.strtupleget("class-instance", (None, None), 2, 2)
+                if wm_class and len(wm_class)==2 and wm_class[0] and wm_class[0].startswith("sun-awt-X11"):
+                    #replace "DIALOG" with "NORMAL":
+                    if "NORMAL" in window_types:
+                        continue
+                    window_type = "NORMAL"
+            hint = WINDOW_NAME_TO_HINT.get(window_type, None)
+            if hint is not None:
+                hints |= hint
+            else:
+                log("ignoring unknown window type hint: %s", window_type)
+        log("set_window_type(%s) hints=%s", window_types, hints)
+        if hints:
+            self.set_type_hint(hints)
+
     def set_modal(self, modal):
         #with gtk2 setting the window as modal would prevent
         #all other windows we manage from receiving input
@@ -1233,7 +1291,9 @@ class GTKClientWindowBase(ClientWindowBase, Gtk.Window):
             #which will look at the window metadata again
             workspacelog("workspace=%s will be set when the window is mapped", wn(workspace))
             return
-        workspace = workspace & 0xffffffff
+        workspace = workspace
+        if workspace is not None:
+            workspace = workspace & 0xffffffff
         desktop = self.get_desktop_workspace()
         ndesktops = self.get_workspace_count()
         current = self.get_window_workspace()
@@ -1286,11 +1346,11 @@ class GTKClientWindowBase(ClientWindowBase, Gtk.Window):
         if target is None:
             workspacelog("do_get_workspace: target is None, returning %s", wn(default_value))
             return default_value        #window is not realized yet
-        value = self.xget_u32_property(target, prop) & 0xffffffff
+        value = self.xget_u32_property(target, prop)
         if value is not None:
             workspacelog("do_get_workspace %s=%s on window %i: %#x",
                          prop, wn(value), self._id, target.get_xid())
-            return value
+            return value & 0xffffffff
         workspacelog("do_get_workspace %s unset on window %i: %#x, returning default value=%s",
                      prop, self._id, target.get_xid(), wn(default_value))
         return  default_value
@@ -1649,7 +1709,7 @@ class GTKClientWindowBase(ClientWindowBase, Gtk.Window):
         w = c.cx(ww)
         h = c.cy(wh)
         #add grey semi-opaque layer on top:
-        context.set_operator(cairo.OPERATOR_OVER)
+        context.set_operator(OPERATOR_OVER)
         context.set_source_rgba(0.2, 0.2, 0.2, 0.4)
         #we can't use the area as rectangle with:
         #context.rectangle(area)
@@ -1660,7 +1720,7 @@ class GTKClientWindowBase(ClientWindowBase, Gtk.Window):
         #add spinner:
         dim = min(w/3.0, h/3.0, 100.0)
         context.set_line_width(dim/10.0)
-        context.set_line_cap(cairo.LINE_CAP_ROUND)
+        context.set_line_cap(LINE_CAP_ROUND)
         context.translate(w/2, h/2)
         from xpra.client.spinner import cv
         count = int(monotonic_time()*4.0)

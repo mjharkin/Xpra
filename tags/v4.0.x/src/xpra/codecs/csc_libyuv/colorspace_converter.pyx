@@ -182,8 +182,14 @@ cdef class ColorspaceConverter:
         divs = get_subsampling_divs(self.dst_format)
         for i in range(3):
             xdiv, ydiv = divs[i]
-            self.out_width[i]   = src_width // xdiv
-            self.out_height[i]  = src_height // ydiv
+            if self.rgb_scaling:
+                #we scale before csc to the dst size:
+                self.out_width[i]   = dst_width // xdiv
+                self.out_height[i]  = dst_height // ydiv
+            else:
+                #we don't scale, so the size is the src size:
+                self.out_width[i]   = src_width // xdiv
+                self.out_height[i]  = src_height // ydiv
             self.out_stride[i]  = roundup(self.out_width[i], MEMALIGN_ALIGNMENT)
             self.out_size[i]    = self.out_stride[i] * self.out_height[i]
             self.out_offsets[i] = self.out_buffer_size
@@ -370,3 +376,7 @@ def selftest(full=False):
         mw, mh = get_csc_max_size(colorspace_converter, in_csc, out_csc, limit_w=32768, limit_h=32768)
         MAX_WIDTH = min(maxw, mw)
         MAX_HEIGHT = min(maxh, mh)
+        width = image.get_width()
+        height = image.get_height()
+        assert width>=self.src_width, "invalid image width: %s (minimum is %s)" % (width, self.src_width)
+        assert height>=self.src_height, "invalid image height: %s (minimum is %s)" % (height, self.src_height)

@@ -9,7 +9,7 @@ from gi.repository import Gdk, Gtk, Gio, GdkPixbuf
 
 from xpra.client.gtk_base.gtk_client_window_base import GTKClientWindowBase, HAS_X11_BINDINGS
 from xpra.client.gtk3.window_menu import WindowMenuHelper
-from xpra.gtk_common.gtk_util import WINDOW_NAME_TO_HINT, scaled_image
+from xpra.gtk_common.gtk_util import scaled_image
 from xpra.scripts.config import TRUE_OPTIONS, FALSE_OPTIONS
 from xpra.util import envbool, typedict
 from xpra.os_util import bytestostr, is_gnome
@@ -18,20 +18,6 @@ from xpra.log import Logger
 paintlog = Logger("paint")
 metalog = Logger("metadata")
 geomlog = Logger("geometry")
-
-GTK3_OR_TYPE_HINTS = (Gdk.WindowTypeHint.DIALOG,
-                      Gdk.WindowTypeHint.MENU,
-                      Gdk.WindowTypeHint.TOOLBAR,
-                      #Gdk.WindowTypeHint.SPLASHSCREEN,
-                      #Gdk.WindowTypeHint.UTILITY,
-                      #Gdk.WindowTypeHint.DOCK,
-                      #Gdk.WindowTypeHint.DESKTOP,
-                      Gdk.WindowTypeHint.DROPDOWN_MENU,
-                      Gdk.WindowTypeHint.POPUP_MENU,
-                      Gdk.WindowTypeHint.TOOLTIP,
-                      #Gdk.WindowTypeHint.NOTIFICATION,
-                      Gdk.WindowTypeHint.COMBO,
-                      Gdk.WindowTypeHint.DND)
 
 
 WINDOW_ICON = envbool("XPRA_WINDOW_ICON", True)
@@ -43,9 +29,6 @@ WINDOW_MENU = envbool("XPRA_WINDOW_MENU", True)
 GTK3 version of the ClientWindow class
 """
 class GTK3ClientWindow(GTKClientWindowBase):
-
-    OR_TYPE_HINTS       = GTK3_OR_TYPE_HINTS
-    NAME_TO_HINT        = WINDOW_NAME_TO_HINT
 
     def init_window(self, metadata):
         super().init_window(metadata)

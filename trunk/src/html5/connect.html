@@ -81,7 +81,8 @@
 		  </div>
 
 		  <div class="form-group">
-		  	<a class="btn btn-lg btn-success" role="button" onclick="doConnect();">Connect</a>
+		  	<a id="connect-button" class="btn btn-lg btn-success" role="button" onclick="doConnect(this.id);">Connect</a>
+		  	<a id="native-launch-button" class="btn btn-lg btn-success" role="button" onclick="doConnect(this.id);">Native Launch</a>
 		  </div>
 
 		  <div class="panel-group" role="tablist">
@@ -286,13 +287,41 @@
     <div class="bg-image"></div>
 
 <script type="text/javascript">
+	
+function downloadConfig(connectProps) {
+    var text = ""
+    if (location.protocol == 'https:') {
+        connectProps["mode"] = "wss";
+    } else {
+        connectProps["mode"] = "ws";
+    }
+    connectProps["autoconnect"] = "True";
+    connectProps["env.XPRA_WS_COOKIE"] = document.cookie;
+    connectProps["host"] = connectProps["server"];
+    delete connectProps["server"];
+  
+    for(var connectProp in connectProps) {
+		text = text + "\n"+connectProp+"="+connectProps[connectProp];
+	}
+    var element = document.createElement('a');
+    element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(text));
+    element.setAttribute('download', "connect.xpra");
+    element.style.display = 'none';
+    document.body.appendChild(element);
+    element.click();
+    document.body.removeChild(element);
+}
 
-function doConnect() {
+function doConnect(buttonid="connect-button") {
 	// url to client
 	let url = "./index.html";
 	const has_session_storage = Utilities.hasSessionStorage();
-
+    var connectProps = {};
 	function add_prop(prop, value) {
+		if (value===null || value==="undefined") {
+		    value = "";
+		}
+		connectProps[prop] = value;
 		if (has_session_storage) {
 			if (value===null || value==="undefined") {
 				sessionStorage.removeItem(prop);
@@ -300,11 +329,6 @@ function doConnect() {
 			else {
 				sessionStorage.setItem(prop, value);
 			}
-		} else {
-			if (value===null || value==="undefined") {
-				value = "";
-			}
-			url = url + "&"+prop+"="+encodeURIComponent(""+value);
 		}
 	}
 	add_prop("submit", true);
@@ -351,7 +375,24 @@ function doConnect() {
 		const prop = bool_props[i];
 		add_prop(prop, document.getElementById(prop).checked);
 	}
-	window.location = url;
+	
+	
+	for (let i = 0; i < bool_props.length; i++) {
+		const prop = bool_props[i];
+		add_prop(prop, document.getElementById(prop).checked);
+	}
+	
+	if(buttonid=="native-launch-button"){
+		downloadConfig(connectProps);
+	} else {
+	  url = url + "?"
+	  for(var connectProp in connectProps) {
+	    url = url + "&"+connectProp+"="+encodeURIComponent(""+connectProps[connectProp]);
+	  }
+	  window.location = url;
+	}
+		
+	
 }
 
 function fill_form(default_settings) {

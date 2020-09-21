@@ -102,7 +102,7 @@ canvas {
 .windowhead {
 	height: 30px;
 	color: #000000;
-	background-color: #ffffff;
+	background-color: #A0A0A0;
 }
 .windowicon {
 	display: inline-block;
@@ -149,7 +149,7 @@ div.windowinfocus {
 	z-index: 5000;
 }
 div.windowinfocus div.windowhead {
-	background-color: #A0A0A0;
+	background-color: #ffffff;
 }
 
 .modal {

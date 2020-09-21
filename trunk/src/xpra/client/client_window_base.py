@@ -73,7 +73,10 @@ class ClientWindowBase(ClientWidgetBase):
         self.max_window_size = max_window_size
         self.button_state = {}
         self.pixel_depth = pixel_depth      #0 for default
-        self.window_offset = None           #actual vs reported coordinates
+        #window_offset is the delta between the location of the window requested by the server,
+        #and where we actually end up mapping it on the client
+        #(ie: when we reposition an OR window to ensure it is visible on screen)
+        self.window_offset = None
         self.pending_refresh = []
         self.headerbar = headerbar
 
@@ -740,9 +743,9 @@ class ClientWindowBase(ClientWidgetBase):
         self.pending_refresh = []
         for x, y, w, h in pr:
             rx, ry, rw, rh = self._client.srect(x, y, w, h)
-            #if self.window_offset:
-            #    rx -= self.window_offset[0]
-            #    ry -= self.window_offset[1]
+            if self.window_offset:
+                rx += self.window_offset[0]
+                ry += self.window_offset[1]
             self.idle_add(self.repaint, rx, ry, rw, rh)
 
     def eos(self):

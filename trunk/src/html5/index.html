@@ -983,7 +983,10 @@
 			
 			function toggle_fullscreen() {
 				const f_el = document.hasOwnProperty("requestFullScreen") || document.hasOwnProperty("webkitRequestFullScreen") || document.hasOwnProperty("mozRequestFullScreen") || document.hasOwnProperty("msRequestFullscreen");
+				
 				if (!f_el) {
+					var is_fullscreen = document.fullScreen || document.mozFullScreen || document.webkitIsFullScreen;
+					if (!is_fullscreen) {
 						const elem = document.getElementById("fullscreen_button");
 						const req = elem.requestFullScreen || elem.webkitRequestFullScreen || elem.mozRequestFullScreen || elem.msRequestFullscreen;
 						if (req) {
@@ -1004,6 +1007,7 @@
 							document.msExitFullscreen();
 						}
 					}
+				}
 			}
 			
 			function expand_float_menu(){

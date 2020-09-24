@@ -63,6 +63,7 @@ HAS_ALPHA = envbool("XPRA_ALPHA", True)
 FORCE_BATCH = envint("XPRA_FORCE_BATCH", True)
 STRICT_MODE = envint("XPRA_ENCODING_STRICT_MODE", False)
 MERGE_REGIONS = envbool("XPRA_MERGE_REGIONS", True)
+DOWNSCALE_THRESHOLD = envint("XPRA_DOWNSCALE_THRESHOLD", 20)
 INTEGRITY_HASH = envint("XPRA_INTEGRITY_HASH", False)
 MAX_SYNC_BUFFER_SIZE = envint("XPRA_MAX_SYNC_BUFFER_SIZE", 256)*1024*1024        #256MB
 AV_SYNC_RATE_CHANGE = envint("XPRA_AV_SYNC_RATE_CHANGE", 20)
@@ -678,7 +679,7 @@ class WindowSource(WindowIconSource):
         if self.enc_pillow and (self.client_render_size or grayscale):
             crsw, crsh = self.client_render_size
             ww, wh = self.window_dimensions
-            if grayscale or (crsw<ww and crsh<wh):
+            if grayscale or (ww-crsw>DOWNSCALE_THRESHOLD and wh-crsh>DOWNSCALE_THRESHOLD):
                 for x in self.enc_pillow.get_encodings():
                     if x in self.server_core_encodings:
                         self.add_encoder(x, self.pillow_encode)
@@ -935,13 +936,13 @@ class WindowSource(WindowIconSource):
         return self.get_auto_encoding(w, h, speed, quality)
 
     def get_auto_encoding(self, w, h, speed, quality, *_args):
-        if w*h<self._rgb_auto_threshold:
-            return "rgb24"
         co = self.common_encodings
         depth = self.image_depth
         if depth>24 and "rgb32" in co and self.client_bit_depth>24:
             #the only encoding that can do higher bit depth at present
             return "rgb32"
+        if w*h<self._rgb_auto_threshold:
+            return "rgb24"
         if depth in (24, 32) and "webp" in co and 16383>=w>=2 and 16383>=h>=2:
             return "webp"
         if "png" in co and ((quality>=80 and speed<80) or depth<=16):
@@ -1334,9 +1335,16 @@ class WindowSource(WindowIconSource):
 
     def do_damage(self, ww, wh, x, y, w, h, options):
         now = monotonic_time()
-        if self.refresh_timer and (w*h>=ww*wh//4 or w*h>=512*1024):
-            #large enough screen update: cancel refresh timer
-            self.cancel_refresh_timer()
+        if self.refresh_timer and options.get("quality", self._current_quality)<self.refresh_quality:
+            rr = tuple(self.refresh_regions)
+            if rr:
+                #does this screen update intersect with
+                #the areas that are due to be refreshed?
+                overlap = sum(rect.width*rect.height for rect in rr)
+                if overlap>0:
+                    pct = int(min(100, 100*overlap//(ww*wh)) * (1+self.global_statistics.congestion_value))
+                    sched_delay = max(self.min_auto_refresh_delay, int(self.base_auto_refresh_delay * pct // 100))
+                    self.refresh_target_time = max(self.refresh_target_time, now + sched_delay/1000.0)
 
         delayed = self._damage_delayed
         if delayed:
@@ -2006,7 +2014,9 @@ class WindowSource(WindowIconSource):
             refresh_exclude = self.get_refresh_exclude()    #pylint: disable=assignment-from-none
             refreshlog("timer_full_refresh() after %ims, auto_refresh_encodings=%s, options=%s, regions=%s, refresh_exclude=%s",
                        1000.0*(monotonic_time()-ret), self.auto_refresh_encodings, options, regions, refresh_exclude)
+            log.enable_debug()
             WindowSource.do_send_delayed_regions(self, now, regions, self.auto_refresh_encodings[0], options, exclude_region=refresh_exclude, get_best_encoding=self.get_refresh_encoding)
+            log.disable_debug()
         return False
 
     def get_refresh_encoding(self, w, h, speed, quality, coding):
@@ -2301,6 +2311,7 @@ class WindowSource(WindowIconSource):
             log("make_data_packet: dropping data packet for window %s with sequence=%s", self.wid, sequence)
             return None
         if SCROLL_ALL and self.may_use_scrolling(image, options):
+            log("used scrolling, no packet")
             image.free()
             return None
         x = image.get_target_x()
@@ -2319,6 +2330,7 @@ class WindowSource(WindowIconSource):
         encoder = self._encoders.get(coding)
         if encoder is None:
             if self.is_cancelled(sequence):
+                log("make_data_packet: skipped, sequence no %i is cancelled", sequence)
                 return None
             raise Exception("BUG: no encoder not found for %s" % coding)
         ret = encoder(coding, image, options)
@@ -2333,7 +2345,7 @@ class WindowSource(WindowIconSource):
         #but always send mmap data so we can reclaim the space!
         if coding!="mmap" and (self.is_cancelled(sequence) or self.suspended):
             log("make_data_packet: dropping data packet for window %s with sequence=%s", self.wid, sequence)
-            return  None
+            return None
         csize = len(data)
         if INTEGRITY_HASH and coding!="mmap":
             #could be a compressed wrapper or just raw bytes:
@@ -2365,7 +2377,7 @@ class WindowSource(WindowIconSource):
             ws = options.get("window-size")
             if ws:
                 client_options["window-size"] = ws
-        packet = ("draw", self.wid, x, y, outw, outh, strtobytes(coding), data, self._damage_packet_sequence, outstride, client_options)
+        packet = ("draw", self.wid, x, y, outw, outh, coding, data, self._damage_packet_sequence, outstride, client_options)
         self.global_statistics.packet_count += 1
         self.statistics.packet_count += 1
         self._damage_packet_sequence += 1
@@ -2423,7 +2435,7 @@ class WindowSource(WindowIconSource):
         if crs:
             crsw, crsh = crs
             #resize if the render size is smaller
-            if ww>crsw and wh>crsh:
+            if ww-crsw>DOWNSCALE_THRESHOLD and wh-crsh>DOWNSCALE_THRESHOLD:
                 #keep the same proportions:
                 resize = w*crsw//ww, h*crsh//wh
         return self.enc_pillow.encode(coding, image, q, s, transparency, grayscale, resize)

@@ -578,6 +578,11 @@ class WindowVideoSource(WindowSource):
             damage_options["novideo"] = True
         super().full_quality_refresh(damage_options)
 
+    def timer_full_refresh(self):
+        self.free_scroll_data()
+        self.last_scroll_time = 0
+        super().timer_full_refresh()
+
 
     def quality_changed(self, window, *args):
         super().quality_changed(window, args)
@@ -875,7 +880,8 @@ class WindowVideoSource(WindowSource):
         # * we want av-sync
         # * the video encoder needs a thread safe image
         #   (the xshm backing may change from underneath us if we don't freeze it)
-        must_freeze = av_delay>0 or ((coding in self.video_encodings or coding=="auto") and not image.is_thread_safe())
+        video_mode = coding in self.video_encodings or coding=="auto"
+        must_freeze = av_delay>0 or (video_mode and not image.is_thread_safe())
         log("process_damage_region: av_delay=%s, must_freeze=%s, size=%s, encoding=%s",
             av_delay, must_freeze, (w, h), coding)
         if must_freeze:
@@ -896,7 +902,7 @@ class WindowVideoSource(WindowSource):
                 self.encode_queue.append(item)
                 self.schedule_encode_from_queue(av_delay)
         #now figure out if we need to send edges separately:
-        if coding in self.video_encodings and self.edge_encoding and not VIDEO_SKIP_EDGE:
+        if video_mode and self.edge_encoding and not VIDEO_SKIP_EDGE:
             dw = w - (w & self.width_mask)
             dh = h - (h & self.height_mask)
             if dw>0 and h>0:

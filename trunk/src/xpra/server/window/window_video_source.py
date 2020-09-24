@@ -405,10 +405,11 @@ class WindowVideoSource(WindowSource):
         #encodings may have changed, so redo this:
         nv_common = (set(self.server_core_encodings) & set(self.core_encodings)) - set(self.video_encodings)
         self.non_video_encodings = [x for x in PREFERRED_ENCODING_ORDER if x in nv_common]
-        try:
-            self.edge_encoding = [x for x in EDGE_ENCODING_ORDER if x in self.non_video_encodings][0]
-        except IndexError:
-            self.edge_encoding = None
+        if not VIDEO_SKIP_EDGE:
+            try:
+                self.edge_encoding = [x for x in EDGE_ENCODING_ORDER if x in self.non_video_encodings][0]
+            except IndexError:
+                self.edge_encoding = None
         log("do_set_client_properties(%s) full_csc_modes=%s, video_subregion=%s, non_video_encodings=%s, edge_encoding=%s, scaling_control=%s",
             properties, self.full_csc_modes, self.video_subregion.supported, self.non_video_encodings, self.edge_encoding, self.scaling_control)
 
@@ -527,6 +528,8 @@ class WindowVideoSource(WindowSource):
         pixel_count = ww*wh
         if pixel_count<self._rgb_auto_threshold or self.is_tray or ww<=2 or wh<=2:
             #high speed and high quality, rgb is still good
+            if self.is_tray and "rgb32" in options:
+                return "rgb32"
             if "rgb24" in options:
                 return "rgb24"
             if "rgb32" in options:
@@ -597,6 +600,11 @@ class WindowVideoSource(WindowSource):
             #refresh the whole window in one go:
             damage_options["novideo"] = True
         super().full_quality_refresh(damage_options)
+
+    def timer_full_refresh(self):
+        self.free_scroll_data()
+        self.last_scroll_time = 0
+        super().timer_full_refresh()
 
 
     def quality_changed(self, window, *args):
@@ -895,7 +903,8 @@ class WindowVideoSource(WindowSource):
         # * we want av-sync
         # * the video encoder needs a thread safe image
         #   (the xshm backing may change from underneath us if we don't freeze it)
-        must_freeze = av_delay>0 or ((coding in self.video_encodings or coding=="auto") and not image.is_thread_safe())
+        video_mode = coding in self.video_encodings or coding=="auto"
+        must_freeze = av_delay>0 or (video_mode and not image.is_thread_safe())
         log("process_damage_region: av_delay=%s, must_freeze=%s, size=%s, encoding=%s",
             av_delay, must_freeze, (w, h), coding)
         if must_freeze:
@@ -916,7 +925,7 @@ class WindowVideoSource(WindowSource):
                 self.encode_queue.append(item)
                 self.schedule_encode_from_queue(av_delay)
         #now figure out if we need to send edges separately:
-        if coding in self.video_encodings and self.edge_encoding and not VIDEO_SKIP_EDGE:
+        if video_mode and self.edge_encoding:
             dw = w - (w & self.width_mask)
             dh = h - (h & self.height_mask)
             if dw>0 and h>0:
@@ -1801,6 +1810,7 @@ class WindowVideoSource(WindowSource):
         self.call_in_encode_thread(False, self.do_free_scroll_data)
 
     def do_free_scroll_data(self):
+        scrolllog("do_free_scroll_data()")
         sd = self.scroll_data
         if sd:
             self.scroll_data = None
@@ -1900,10 +1910,7 @@ class WindowVideoSource(WindowSource):
         #generate all the packets for this screen update
         #using 'scroll' encoding and picture encodings for the other regions
         start = monotonic_time()
-        try:
-            del options["av-sync"]
-        except KeyError:
-            pass
+        options.pop("av-sync", None)
         #tells make_data_packet not to invalidate the scroll data:
         ww, wh = self.window_dimensions
         scrolllog("encode_scrolling([], %s, %s, %i, %i) window-dimensions=%s",

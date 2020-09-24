@@ -584,10 +584,7 @@ class ClientWindowBase(ClientWidgetBase):
             #and that keys are always "bytes":
             #(in practice this code should never fire, just here as a reminder)
             for x in ("max_width", "max_height"):
-                try:
-                    del hints[x]
-                except KeyError:
-                    pass
+                hints.pop(x, None)
             #bug 2214: GTK3 on win32 gets confused if we specify a large max-size
             # and it will mess up maximizing the window
             if not WIN32 or (maxw<32000 or maxh<32000):
@@ -726,6 +723,9 @@ class ClientWindowBase(ClientWidgetBase):
                 self.pending_refresh.append((x, y, width, height))
             if options.intget("flush", 0)==0:
                 callbacks.append(self.after_draw_refresh)
+        if coding=="void":
+            fire_paint_callbacks(callbacks)
+            return
         backing.draw_region(x, y, width, height, coding, img_data, rowstride, options, callbacks)
 
     def after_draw_refresh(self, success, message=""):

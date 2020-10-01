@@ -806,8 +806,14 @@ class ApplicationWindow:
         def raise_exception(*args):
             raise Exception(*args)
         self.client = make_client(raise_exception, self.config)
+        self.client.show_progress(30, "client configuration")
         self.client.init(self.config)
+        self.client.show_progress(40, "loading user interface")
+        self.client.init_ui(self.config)
         self.client.username = username
+        def handshake_complete(*_args):
+            self.client.show_progress(100, "connection established")
+        self.client.after_handshake(handshake_complete)
         self.set_info_text("Connecting...")
         start_thread(self.do_connect_builtin, "connect", daemon=True, args=(params,))
 
@@ -901,12 +907,17 @@ class ApplicationWindow:
             self.set_info_text("Running")
             self.window.hide()
         self.client.connect("first-ui-received", first_ui_received)
+        if Gtk.main_level()>0:
+            #no need to start a new main loop:
+            self.client.gtk_main = noop
         try:
             self.client.run()
             log("client.run() returned")
         except Exception as e:
             log.error("client error", exc_info=True)
             self.handle_exception(e)
+        if self.client.gtk_main==noop:
+            return
         log("exit_launcher=%s", self.exit_launcher)
         #if we're using "autoconnect",
         #the main loop was running from here,

@@ -38,20 +38,6 @@ def client_upgrade(read, write, host, port):
     headers[b"Sec-WebSocket-Key"] = key
     if "XPRA_WS_COOKIE" in os.environ:
         headers[b"Cookie"] = strtobytes(os.environ['XPRA_WS_COOKIE'])
-    if "XPRA_WS_COOKIE_FROM_BROWSER" in os.environ:
-        import browser_cookie3
-        cookie_domain = host
-        cookie_string = ''
-        # get cookies for domain and all parent domains except tld
-        while cookie_domain.count('.', 2):
-            cj = browser_cookie3.load(domain_name=cookie_domain)
-            for c in cj:
-                cookie = c.name + "=" + c.value + "; "
-                # add if cookie doesn't already exist from subdomain
-                if not c.name + "=" in cookie_string:
-                    cookie_string += cookie
-            cookie_domain = cookie_domain.split('.', 1)[1]
-        headers[b"Cookie"] = strtobytes(cookie_string)
     if host:
         headers[b"Host"] = strtobytes("%s:%s" % (host, port))
     for k,v in headers.items():

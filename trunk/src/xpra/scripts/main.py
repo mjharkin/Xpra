@@ -449,7 +449,7 @@ def do_run_mode(script_file, error_cb, options, args, mode, defaults):
         if options.splash is True or (
             options.splash is not False and (
                 not POSIX or (
-                    (os.environ.get("DISPLAY") or os.environ.get("XDG_SESSION_DESKTOP")) and 
+                    (os.environ.get("DISPLAY") or os.environ.get("XDG_SESSION_DESKTOP")) and
                     not (os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_CLIENT"))
                     )
                 )
@@ -1415,6 +1415,10 @@ def connect_to(display_desc, opts=None, debug_cb=None, ssh_fail_cb=None):
             if strict_host_check is False:
                 opts.ssl_server_verify_mode = "none"
             from xpra.net.socket_util import ssl_wrap_socket, get_ssl_attributes
+            if not opts.ssl_server_hostname:
+                #if the server hostname was not specified explicitly,
+                #use the one from the connection string:
+                opts.ssl_server_hostname = host
             kwargs = get_ssl_attributes(opts, server_side=False, overrides=display_desc)
             sock = ssl_wrap_socket(sock, **kwargs)
             assert sock, "failed to wrap socket %s" % sock
@@ -1834,7 +1838,7 @@ def get_client_gui_app(error_cb, opts, request_mode, extra_args, mode):
     return app
 
 
-def make_progress_process(): 
+def make_progress_process():
     #start the splash subprocess
     from xpra.platform.paths import get_nodock_command
     cmd = get_nodock_command()+["splash"]

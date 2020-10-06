@@ -1241,6 +1241,7 @@ if WIN32:
             external_includes += ["multiprocessing", "setproctitle"]
 
         external_includes += ["encodings"]
+        external_includes += ["mimetypes"]
         if client_ENABLED:
             #for parsing "open-command":
             external_includes += ["shlex"]
@@ -1600,6 +1601,7 @@ else:
         remove_packages("xpra.platform.win32", "xpra.platform.xposix")
         #to support GStreamer 1.x we need this:
         modules.append("importlib")
+        modules.append("mimetypes")
     else:
         PYGTK_PACKAGES += ["gdk-x11-2.0", "gtk+-x11-2.0"]
         add_packages("xpra.platform.xposix")
@@ -1733,7 +1735,7 @@ if modules_ENABLED:
 
 toggle_packages(dbus_ENABLED, "xpra.dbus")
 toggle_packages(mdns_ENABLED, "xpra.net.mdns")
-toggle_packages(websockets_ENABLED, "xpra.net.websockets")
+toggle_packages(websockets_ENABLED, "xpra.net.websockets", "xpra.net.websockets.headers")
 toggle_packages(server_ENABLED or proxy_ENABLED, "xpra.server", "xpra.server.auth")
 toggle_packages(rfb_ENABLED, "xpra.server.rfb")
 toggle_packages(proxy_ENABLED, "xpra.server.proxy")

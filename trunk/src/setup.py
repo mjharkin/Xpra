@@ -381,7 +381,7 @@ external_excludes = [
 if not html5_ENABLED and not crypto_ENABLED:
     external_excludes += ["ssl", "_ssl"]
 if not html5_ENABLED:
-    external_excludes += ["BaseHTTPServer", "mimetypes"]
+    external_excludes += ["BaseHTTPServer"]
 if not html5_ENABLED and not client_ENABLED:
     external_excludes += ["mimetools"]
 
@@ -1250,7 +1250,6 @@ if WIN32:
                                   "ftplib", "fileinput",
                                   ]
             external_includes += ["urllib", "http.cookiejar", "http.client"]
-            #for websocket browser cookie
             external_includes += ["browser_cookie3", "pyaes", "pbkdf2", "keyring"]
 
         if dec_avcodec2_ENABLED:

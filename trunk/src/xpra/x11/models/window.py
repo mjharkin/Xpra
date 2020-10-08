@@ -590,6 +590,9 @@ class WindowModel(BaseWindowModel):
         if event.value_mask & CWWidth or event.value_mask & CWHeight:
             self._updateprop("requested-size", (rw, rh))
 
+        if event.value_mask & CWStackMode:
+            self.emit("restack", event.detail, event.above)
+
         if VALIDATE_CONFIGURE_REQUEST:
             w, h = self.calc_constrained_size(w, h, hints)
         #update the geometry now, as another request may come in

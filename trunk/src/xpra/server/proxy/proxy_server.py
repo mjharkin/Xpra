@@ -16,9 +16,10 @@ from xpra.util import (
     )
 from xpra.os_util import (
     get_username_for_uid, get_groups, get_home_for_uid, bytestostr,
-    getuid, getgid, WIN32, POSIX,
-    monotonic_time,
+    getuid, getgid, WIN32, POSIX, OSX,
+    monotonic_time, umask_context, get_group_id,
     )
+from xpra.net.socket_util import SOCKET_DIR_MODE, SOCKET_GROUP
 from xpra.server.server_core import ServerCore
 from xpra.server.control_command import ArgsControlCommand, ControlError
 from xpra.child_reaper import getChildReaper
@@ -43,6 +44,7 @@ STOP_PROXY_AUTH_SOCKET_TYPES = os.environ.get("XPRA_STOP_PROXY_AUTH_SOCKET_TYPES
 #something (a thread lock?) doesn't allow us to use multiprocessing on MS Windows:
 PROXY_INSTANCE_THREADED = envbool("XPRA_PROXY_INSTANCE_THREADED", WIN32)
 PROXY_CLEANUP_GRACE_PERIOD = envfloat("XPRA_PROXY_CLEANUP_GRACE_PERIOD", "0.5")
+GROUP = os.environ.get("XPRA_GROUP", "xpra")
 
 MAX_CONCURRENT_CONNECTIONS = envint("XPRA_PROXY_MAX_CONCURRENT_CONNECTIONS", 200)
 if WIN32:
@@ -104,6 +106,46 @@ class ProxyServer(ServerCore):
         from xpra.version_util import get_platform_info
         get_platform_info()
         self.child_reaper = getChildReaper()
+        self.create_system_dir(opts.system_proxy_socket)
+
+    def create_system_dir(self, sps):
+        if not POSIX or OSX or not sps:
+            return
+        xpra_group_id = get_group_id(SOCKET_GROUP)
+        if sps.startswith("/run/xpra") or sps.startswith("/var/run/xpra"):
+            #create the directory and verify its permissions
+            #which should have been set correctly by tmpfiles.d,
+            #but may have been set wrong if created by systemd's socket activation instead
+            d = sps.split("/xpra")[0]+"/xpra"
+            try:
+                if os.path.exists(d):
+                    stat = os.stat(d)
+                    mode = stat.st_mode
+                    if (mode & SOCKET_DIR_MODE)!=SOCKET_DIR_MODE:
+                        log.warn("Warning: invalid permissions on '%s' : %s", d, oct(mode))
+                        mode = mode | SOCKET_DIR_MODE
+                        log.warn(" changing to %s", oct(mode))
+                        os.chmod(d, mode)
+                    if xpra_group_id>=0 and stat.st_gid!=xpra_group_id:
+                        import grp
+                        group = grp.getgrgid(stat.st_gid)[0]
+                        log.warn("Warning: invalid group on '%s': %s", d, group)
+                        log.warn(" changing to '%s'", SOCKET_GROUP)
+                        os.lchown(d, xpra_group_id, stat.st_uid)
+                else:
+                    log.info("creating '%s' with permissions %s and group '%s'",
+                             d, oct(SOCKET_DIR_MODE), SOCKET_GROUP)
+                    with umask_context(0):
+                        os.mkdir(d, SOCKET_DIR_MODE)
+                    stat = os.stat(d)
+                    if xpra_group_id>=0 and stat.st_gid!=xpra_group_id:
+                        os.lchown(d, get_group_id, stat.st_uid)
+                mode = os.stat(d).st_mode
+                log("%s permissions: %s", d, oct(mode))
+            except OSError as e:
+                log("create_system_dir()", exc_info=True)
+                log.error("Error: failed to create or change the permissions on '%s':", d)
+                log.error(" %s", e)
 
     def init_control_commands(self):
         ServerCore.init_control_commands(self)
@@ -366,12 +408,15 @@ class ProxyServer(ServerCore):
             authlog("proxy_session: proxy-virtual-display=%s (ignored), user specified display=%s, found displays=%s",
                     proxy_virtual_display, display, displays)
             if display==proxy_virtual_display:
-                disconnect(SESSION_NOT_FOUND, "invalid display")
+                disconnect(SESSION_NOT_FOUND, "invalid display: proxy display")
                 return
             if display:
                 if display not in displays:
-                    disconnect(SESSION_NOT_FOUND, "display '%s' not found" % display)
-                    return
+                    if (":%s" % display) in displays:
+                        display = ":%s" % display
+                    else:
+                        disconnect(SESSION_NOT_FOUND, "display '%s' not found" % display)
+                        return
             else:
                 if len(displays)!=1:
                     disconnect(SESSION_NOT_FOUND,

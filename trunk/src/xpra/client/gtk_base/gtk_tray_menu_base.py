@@ -8,7 +8,11 @@ import os
 import re
 from gi.repository import GLib, Gtk, GdkPixbuf
 
-from xpra.util import CLIENT_EXIT, iround, envbool, repr_ellipsized, reverse_dict, typedict
+from xpra.util import (
+    CLIENT_EXIT,
+    iround, envbool,
+    ellipsizer, repr_ellipsized, reverse_dict, typedict,
+    )
 from xpra.os_util import bytestostr, OSX, WIN32
 from xpra.gtk_common.gtk_util import (
     get_pixbuf_from_data, scaled_image,
@@ -1320,12 +1324,16 @@ class GTKTrayMenuBase(MenuHelper):
 
 
     def make_serverlogmenuitem(self):
-        self.download_log = self.menuitem("Download Server Log", "list.png", cb=self.client.download_server_log)
+        def download_server_log(*_args):
+            self.client.download_server_log()
+        self.download_log = self.menuitem("Download Server Log", "list.png", cb=download_server_log)
         def enable_download(*args):
             log("enable_download%s server_file_transfer=%s", args, self.client.remote_file_transfer)
-            set_sensitive(self.download_log, self.client.remote_file_transfer)
+            set_sensitive(self.download_log, self.client.remote_file_transfer and bool(self.client._remote_server_log))
             if not self.client.remote_file_transfer:
                 self.download_log.set_tooltip_text("Not supported by the server")
+            elif not self.client._remote_server_log:
+                self.download_log.set_tooltip_text("Server does not expose its log-file")
             else:
                 self.download_log.set_tooltip_text("Download the server log")
         self.client.after_handshake(enable_download)
@@ -1394,7 +1402,7 @@ class GTKTrayMenuBase(MenuHelper):
     def build_start_menu(self):
         menu = Gtk.Menu()
         execlog("build_start_menu() %i menu items", len(self.client.server_xdg_menu))
-        execlog("self.client.server_xdg_menu=%s", self.client.server_xdg_menu)
+        execlog("self.client.server_xdg_menu=%s", ellipsizer(self.client.server_xdg_menu))
         for cat, category_props in sorted(self.client.server_xdg_menu.items()):
             category = cat.decode("utf-8")
             execlog(" * category: %s", category)
@@ -1403,7 +1411,7 @@ class GTKTrayMenuBase(MenuHelper):
                 execlog("category properties is not a dict: %s", type(category_props))
                 continue
             cp = typedict(category_props)
-            execlog("  category_props(%s)=%s", category, category_props)
+            execlog("  category_props(%s)=%s", category, ellipsizer(category_props))
             entries = cp.dictget("Entries")
             if not entries:
                 execlog("  no entries for category '%s'", category)

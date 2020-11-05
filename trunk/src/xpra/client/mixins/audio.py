@@ -140,6 +140,21 @@ class AudioClient(StubClientMixin):
             self.stop_receiving_sound()
 
 
+    def get_info(self) -> dict:
+        info = {
+            "speaker" : self.speaker_enabled,
+            "microphone" : self.microphone_enabled,
+            "properties" : dict(self.sound_properties),
+            }
+        ss = self.sound_source
+        if ss:
+            info["src"] = ss.get_info()
+        ss = self.sound_sink
+        if ss:
+            info["sink"] = ss.get_info()
+        return {"audio" : info}
+
+
     def get_caps(self) -> dict:
         d = {}
         updict(d, "av-sync", self.get_avsync_capabilities())
@@ -186,6 +201,7 @@ class AudioClient(StubClientMixin):
                  csv(self.server_sound_decoders), csv(self.server_sound_encoders),
                  self.server_sound_receive, self.server_sound_send)
         if self.server_sound_send and self.speaker_enabled:
+            self.show_progress(90, "starting speaker forwarding")
             self.start_receiving_sound()
         if self.server_sound_receive and self.microphone_enabled:
             self.start_sending_sound()
@@ -338,7 +354,7 @@ class AudioClient(StubClientMixin):
             self.emit("microphone-changed")
         self.sound_source = None
         if ss is None:
-            log.warn("Warning: cannot stop sound source which has not been started")
+            log.warn("Warning: cannot stop audio capture which has not been started")
             return
         #tell the server to stop:
         self.send("sound-data", ss.codec or "", "", {

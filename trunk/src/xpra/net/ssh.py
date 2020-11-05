@@ -15,6 +15,7 @@ from xpra.platform.paths import get_ssh_known_hosts_files
 from xpra.platform import get_username
 from xpra.scripts.config import parse_bool
 from xpra.net.bytestreams import SocketConnection, SOCKET_TIMEOUT, ConnectionClosedException
+from xpra.make_thread import start_thread
 from xpra.exit_codes import (
     EXIT_SSH_KEY_FAILURE, EXIT_SSH_FAILURE,
     EXIT_CONNECTION_FAILED,
@@ -150,11 +151,13 @@ def input_pass(prompt) -> str:
 class SSHSocketConnection(SocketConnection):
 
     def __init__(self, ssh_channel, sock, sockname, peername, target, info=None, socket_options=None):
-        super().__init__(ssh_channel, sockname, peername, target, "ssh", info, socket_options)
         self._raw_socket = sock
+        super().__init__(ssh_channel, sockname, peername, target, "ssh", info, socket_options)
+
+    def get_raw_socket(self):
+        return self._raw_socket
 
     def start_stderr_reader(self):
-        from xpra.make_thread import start_thread
         start_thread(self._stderr_reader, "ssh-stderr-reader", daemon=True)
 
     def _stderr_reader(self):
@@ -166,8 +169,10 @@ class SSHSocketConnection(SocketConnection):
             v = stderr.readline()
             if not v:
                 log("SSH EOF on stderr of %s", chan.get_name())
-                return
-            errs.append(bytestostr(v.rstrip(b"\n\r")))
+                break
+            s = bytestostr(v.rstrip(b"\n\r"))
+            if s:
+                errs.append(s)
         if errs:
             log.warn("remote SSH stderr:")
             for e in errs:
@@ -815,10 +820,12 @@ def ssh_exec_connect_to(display_desc, opts=None, debug_cb=None, ssh_fail_cb=ssh_
             startupinfo = STARTUPINFO()
             startupinfo.dwFlags |= STARTF_USESHOWWINDOW
             startupinfo.wShowWindow = 0     #aka win32.con.SW_HIDE
-            kwargs["startupinfo"] = startupinfo
             flags = CREATE_NEW_PROCESS_GROUP | CREATE_NEW_CONSOLE
-            kwargs["creationflags"] = flags
-            kwargs["stderr"] = PIPE
+            kwargs.update({
+                "startupinfo"   : startupinfo,
+                "creationflags" : flags,
+                "stderr"        : PIPE,
+                })
         elif not display_desc.get("exit_ssh", False) and not OSX:
             kwargs["start_new_session"] = True
         remote_xpra = display_desc["remote_xpra"]
@@ -964,4 +971,24 @@ def ssh_exec_connect_to(display_desc, opts=None, debug_cb=None, ssh_fail_cb=ssh_
     conn.endpoint = host_target_string("ssh", username, host, port, display)
     conn.timeout = 0            #taken care of by abort_test
     conn.process = (child, "ssh", cmd)
+    if kwargs.get("stderr")==PIPE:
+        def stderr_reader():
+            errs = []
+            while child.poll() is None:
+                try:
+                    v = child.stderr.readline()
+                except OSError:
+                    log("stderr_reader()", exc_info=True)
+                    break
+                if not v:
+                    log("SSH EOF on stderr of %s", cmd)
+                    break
+                s = bytestostr(v.rstrip(b"\n\r"))
+                if s:
+                    errs.append(s)
+            if errs:
+                log.warn("remote SSH stderr:")
+                for e in errs:
+                    log.warn(" %s", e)
+        start_thread(stderr_reader, "ssh-stderr-reader", daemon=True)
     return conn

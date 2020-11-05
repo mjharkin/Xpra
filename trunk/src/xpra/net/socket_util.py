@@ -6,6 +6,7 @@
 import os.path
 import socket
 from time import sleep
+from ctypes import Structure, c_uint8, sizeof
 
 from xpra.scripts.config import InitException, TRUE_OPTIONS
 from xpra.scripts.main import InitExit
@@ -13,16 +14,17 @@ from xpra.exit_codes import (
     EXIT_SSL_FAILURE, EXIT_SSL_CERTIFICATE_VERIFY_FAILURE,
     EXIT_SERVER_ALREADY_EXISTS, EXIT_SOCKET_CREATION_ERROR,
     )
+from xpra.net.bytestreams import set_socket_timeout, pretty_socket
 from xpra.os_util import (
-    hexstr, bytestostr,
     getuid, get_username_for_uid, get_groups, get_group_id,
     path_permission_info, monotonic_time, umask_context, WIN32, OSX, POSIX,
     )
 from xpra.util import (
     envint, envbool, csv, parse_simple_dict,
-    ellipsizer, repr_ellipsized,
+    ellipsizer,
     DEFAULT_PORT,
     )
+from xpra.make_thread import start_thread
 
 #what timeout value to use on the socket probe attempt:
 WAIT_PROBE_TIMEOUT = envint("XPRA_WAIT_PROBE_TIMEOUT", 6)
@@ -30,6 +32,9 @@ GROUP = os.environ.get("XPRA_GROUP", "xpra")
 PEEK_TIMEOUT = envint("XPRA_PEEK_TIMEOUT", 1)
 PEEK_TIMEOUT_MS = envint("XPRA_PEEK_TIMEOUT_MS", PEEK_TIMEOUT*1000)
 PEEK_SIZE = envint("XPRA_PEEK_SIZE", 8192)
+
+SOCKET_DIR_MODE = num = int(os.environ.get("XPRA_SOCKET_DIR_MODE", "775"), 8)
+SOCKET_GROUP = os.environ.get("XPRA_SOCKET_GROUP", "xpra")
 
 
 network_logger = None
@@ -114,9 +119,10 @@ def hosts(host_str):
         return ["0.0.0.0", "::"]
     return [host_str]
 
-def add_listen_socket(socktype, sock, info, new_connection_cb, new_udp_connection_cb=None):
+def add_listen_socket(socktype, sock, info, new_connection_cb, new_udp_connection_cb=None, options=None):
     log = get_network_logger()
-    log("add_listen_socket(%s, %s, %s, %s, %s)", socktype, sock, info, new_connection_cb, new_udp_connection_cb)
+    log("add_listen_socket(%s, %s, %s, %s, %s, %s)",
+        socktype, sock, info, new_connection_cb, new_udp_connection_cb, options)
     try:
         #ugly that we have different ways of starting sockets,
         #TODO: abstract this into the socket class
@@ -136,10 +142,19 @@ def add_listen_socket(socktype, sock, info, new_connection_cb, new_udp_connectio
             return new_connection_cb(socktype, sock)
         source = GLib.io_add_watch(sock, GLib.PRIORITY_DEFAULT, GLib.IO_IN, io_in_cb)
         sources = [source]
+        upnp_cleanup = []
+        if socktype in ("udp", "tcp", "ws", "wss", "ssh", "ssl"):
+            upnp = (options or {}).get("upnp", "no")
+            if upnp.lower() in TRUE_OPTIONS:
+                from xpra.net.upnp import upnp_add
+                upnp_cleanup.append(upnp_add(socktype, info, options))
         def cleanup():
             for source in tuple(sources):
                 GLib.source_remove(source)
                 sources.remove(source)
+            for c in upnp_cleanup:
+                if c:
+                    start_thread(c, "pnp-cleanup-%s" % c, daemon=True)
         return cleanup
     except Exception as e:
         log("add_listen_socket(%s, %s)", socktype, sock, exc_info=True)
@@ -175,6 +190,7 @@ def peek_connection(conn, timeout=PEEK_TIMEOUT_MS, size=PEEK_SIZE):
     peek_data = b""
     start = monotonic_time()
     elapsed = 0
+    set_socket_timeout(conn, PEEK_TIMEOUT_MS*1000)
     while elapsed<=timeout:
         try:
             peek_data = conn.peek(size)
@@ -188,14 +204,91 @@ def peek_connection(conn, timeout=PEEK_TIMEOUT_MS, size=PEEK_SIZE):
         sleep(timeout/4000.0)
         elapsed = int(1000*(monotonic_time()-start))
         log("peek: elapsed=%s, timeout=%s", elapsed, timeout)
-    line1 = b""
     log("socket %s peek: got %i bytes", conn, len(peek_data))
-    if peek_data:
-        line1 = peek_data.splitlines()[0]
-        log("socket peek=%s", ellipsizer(peek_data, limit=512))
-        log("socket peek hex=%s", hexstr(peek_data[:128]))
-        log("socket peek line1=%s", ellipsizer(line1))
-    return peek_data, line1
+    return peek_data
+
+
+POSIX_TCP_INFO = ( 
+        ("state",           c_uint8),
+        )
+def get_sockopt_tcp_info(sock, TCP_INFO, attributes=POSIX_TCP_INFO):
+    def get_tcpinfo_class(fields):
+        class TCPInfo(Structure):
+            _fields_ = tuple(fields)
+            def __repr__(self):
+                return "TCPInfo(%s)" % self.getdict()
+            def getdict(self):
+                return {k[0] : getattr(self, k[0]) for k in self._fields_}
+        return TCPInfo
+    #calculate full structure size with all the fields defined:
+    tcpinfo_class = get_tcpinfo_class(attributes)
+    tcpinfo_size = sizeof(tcpinfo_class)
+    data = sock.getsockopt(socket.SOL_TCP, TCP_INFO, tcpinfo_size)
+    data_size = len(data)
+    #but only define fields in the ctypes.Structure
+    #if they are actually present in the returned data:
+    while tcpinfo_size>data_size:
+        #trim it down:
+        attributes = attributes[:-1]
+        tcpinfo_class = get_tcpinfo_class(attributes)
+        tcpinfo_size = sizeof(tcpinfo_class)
+    log = get_network_logger()
+    if tcpinfo_size==0:
+        log("getsockopt(SOL_TCP, TCP_INFO, %i) no data", tcpinfo_size)
+        return {}
+    #log("total size=%i for fields: %s", size, csv(fdef[0] for fdef in fields))
+    try:
+        tcpinfo = tcpinfo_class.from_buffer_copy(data[:tcpinfo_size])
+    except ValueError as e:
+        log("getsockopt(SOL_TCP, TCP_INFO, %i)", tcpinfo_size, exc_info=True)
+        log("TCPInfo fields=%s", csv(tcpinfo_class._fields_))
+        log.warn("Warning: failed to get TCP_INFO for %s", sock)
+        log.warn(" %s", e)
+        return {}
+    d = tcpinfo.getdict()
+    log("getsockopt(SOL_TCP, TCP_INFO, %i)=%s", tcpinfo_size, d)
+    return d
+
+
+
+def guess_packet_type(data):
+    if not data:
+        return None
+    if data[0]==ord("P"):
+        from xpra.net.header import (
+            unpack_header, HEADER_SIZE,
+            FLAGS_RENCODE, FLAGS_YAML,
+            LZ4_FLAG, LZO_FLAG, BROTLI_FLAG,
+            )
+        header = data.ljust(HEADER_SIZE, b"\0")
+        _, protocol_flags, compression_level, packet_index, data_size = unpack_header(header)
+        #this normally used on the first packet, so the packet index should be 0
+        #and I don't think we can make packets smaller than 8 bytes,
+        #even with packet name aliases and rencode
+        #(and aliases should not be defined for the initial packet anyway)
+        if packet_index==0 and 8<data_size<256*1024*1024:
+            rencode = bool(protocol_flags & FLAGS_RENCODE)
+            yaml = bool(protocol_flags & FLAGS_YAML)
+            lz4 = bool(protocol_flags & LZ4_FLAG)
+            lzo = bool(protocol_flags & LZO_FLAG)
+            brotli = bool(protocol_flags & BROTLI_FLAG)
+            #rencode and yaml are mutually exclusive,
+            #so are the compressors
+            compressors = sum((lz4, lzo, brotli))
+            if not (rencode and yaml) and not compressors>1:
+                #if compression is enabled, the compression level must be set:
+                if not compressors or compression_level>0:
+                    pass #return "xpra"
+    if data[:4]==b"SSH-":
+        return "ssh"
+    if data[0]==0x16:
+        return "ssl"
+    line1 = data.splitlines()[0]
+    if line1.find(b"HTTP/")>0 or line1.split(b" ")[0] in (b"GET", b"POST"):
+        return "http"
+    if line1.lower().startswith(b"<!doctype html") or line1.lower().startswith(b"<html"):
+        return "http"
+    return None
 
 
 def create_sockets(opts, error_cb):
@@ -409,7 +502,7 @@ def parse_bind_vsock(bind_vsock):
 def setup_sd_listen_socket(stype, sock, addr):
     log = get_network_logger()
     def cleanup_sd_listen_socket():
-        log.info("closing sd listen socket %s", addr)
+        log.info("closing sd listen socket %s", pretty_socket(addr))
         try:
             sock.close()
         except OSError:
@@ -492,6 +585,7 @@ def setup_local_sockets(bind, socket_dir, socket_dirs, display_name, clobber,
                 continue
             tmp[sockpath] = options
         sockpaths = tmp
+        log("sockpaths=%s", sockpaths)
         #create listeners:
         if WIN32:
             from xpra.platform.win32.namedpipes.listener import NamedPipeListener
@@ -528,15 +622,16 @@ def setup_local_sockets(bind, socket_dir, socket_dirs, display_name, clobber,
                 d = os.path.dirname(sockpath)
                 try:
                     kwargs = {}
-                    if getuid()==0 and d=="/var/run/xpra" or d=="/run/xpra":
+                    if d in ("/var/run/xpra", "/run/xpra"):
                         #this is normally done by tmpfiles.d,
                         #but we may need to do it ourselves in some cases:
-                        kwargs = {"mode"  : 0o775}
+                        kwargs["mode"] = SOCKET_DIR_MODE
                         xpra_gid = get_group_id("xpra")
                         if xpra_gid>0:
                             kwargs["gid"] = xpra_gid
                     log("creating sockdir=%s, kwargs=%s" % (d, kwargs))
                     dotxpra.mksockdir(d, **kwargs)
+                    log("%s permission mask: %s", d, oct(os.stat(d).st_mode))
                 except Exception as e:
                     log.warn("Warning: failed to create socket directory '%s'", d)
                     log.warn(" %s", e)
@@ -545,7 +640,6 @@ def setup_local_sockets(bind, socket_dir, socket_dirs, display_name, clobber,
             log("sockets in unknown state: %s", unknown)
             if unknown:
                 #re-probe them using threads so we can do them in parallel:
-                from xpra.make_thread import start_thread
                 threads = []
                 def timeout_probe(sockpath):
                     #we need a loop because "DEAD" sockets may return immediately
@@ -648,19 +742,6 @@ def handle_socket_error(sockpath, sperms, e):
         log.error(" %s", e)
         raise InitExit(EXIT_SOCKET_CREATION_ERROR,
                        "failed to create socket %s" % sockpath)
-
-
-def guess_header_protocol(v):
-    c = int(v[0])
-    s = bytestostr(v)
-    get_network_logger().debug("guess_header_protocol(%r) first char=%#x", repr_ellipsized(s), c)
-    if c==0x16:
-        return "ssl", "SSL packet?"
-    if s[:4]=="SSH-":
-        return "ssh", "SSH packet"
-    if len(s)>=3 and s.split(" ")[0] in ("GET", "POST"):
-        return "HTTP", "HTTP %s request" % s.split(" ")[0]
-    return None, "character %#x, not an xpra client?" % c
 
 
 #warn just once:
@@ -910,4 +991,3 @@ def get_ssl_wrap_socket_fn(cert=None, key=None, ca_certs=None, ca_data=None,
                 raise InitExit(status, "SSL handshake failed: %s" % msg)
         return ssl_sock
     return do_wrap_socket
-

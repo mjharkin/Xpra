@@ -13,10 +13,10 @@ from socket import error as socket_error
 from threading import Lock, Event
 from queue import Queue
 
-from xpra.os_util import memoryview_to_bytes, strtobytes, bytestostr, hexstr
+from xpra.os_util import memoryview_to_bytes, strtobytes, bytestostr, hexstr, monotonic_time
 from xpra.util import repr_ellipsized, ellipsizer, csv, envint, envbool, typedict, nonl
 from xpra.make_thread import make_thread, start_thread
-from xpra.net.common import ConnectionClosedException,may_log_packet    #@UndefinedVariable (pydev false positive)
+from xpra.net.common import ConnectionClosedException, may_log_packet, MAX_PACKET_SIZE    #@UndefinedVariable (pydev false positive)
 from xpra.net.bytestreams import ABORT
 from xpra.net import compression
 from xpra.net.compression import (
@@ -24,7 +24,7 @@ from xpra.net.compression import (
     InvalidCompressionException, Compressed, LevelCompressed, Compressible, LargeStructure,
     )
 from xpra.net import packet_encoding
-from xpra.net.socket_util import guess_header_protocol
+from xpra.net.socket_util import guess_packet_type
 from xpra.net.packet_encoding import (
     decode, sanity_checks as packet_encoding_sanity_checks,
     InvalidPacketEncodingException,
@@ -132,6 +132,7 @@ class Protocol:
         """
         assert scheduler is not None
         assert conn is not None
+        self.start_time = monotonic_time()
         self.timeout_add = scheduler.timeout_add
         self.idle_add = scheduler.idle_add
         self.source_remove = scheduler.source_remove
@@ -160,7 +161,7 @@ class Protocol:
         self.output_packetcount = 0
         self.output_raw_packetcount = 0
         #initial value which may get increased by client/server after handshake:
-        self.max_packet_size = 4*1024*1024
+        self.max_packet_size = MAX_PACKET_SIZE
         self.abs_max_packet_size = 256*1024*1024
         self.large_packets = [b"hello", b"window-metadata", b"sound-data", b"notify_show", b"setting-change", b"shell-reply"]
         self.send_aliases = {}
@@ -283,9 +284,9 @@ class Protocol:
         c = self._conn
         if c:
             try:
-                info.update(self._conn.get_info())
+                info.update(c.get_info())
             except Exception:
-                log.error("error collecting connection information on %s", self._conn, exc_info=True)
+                log.error("error collecting connection information on %s", c, exc_info=True)
         #add stats to connection info:
         info.setdefault("input", {}).update({
                        "buffer-size"            : self.read_buffer_size,
@@ -753,9 +754,9 @@ class Protocol:
     def _invalid_header(self, proto, data, msg=""):
         log("invalid_header(%s, %s bytes: '%s', %s)",
                proto, len(data or ""), msg, ellipsizer(data))
-        guess = guess_header_protocol(data)
-        if guess[0]:
-            err = "invalid packet format, %s" % guess[1]
+        guess = guess_packet_type(data)
+        if guess:
+            err = "invalid packet format: %s" % guess
         else:
             err = "%s: '%s'" % (msg, hexstr(data[:HEADER_SIZE]))
             if len(data)>1:
@@ -823,7 +824,7 @@ class Protocol:
                     #try to handle the first buffer:
                     buf = read_buffers[0]
                     if not header and buf[0]!=ord("P"):
-                        self.invalid_header(self, buf, "invalid packet header byte %s" % nonl(bytestostr(buf)))
+                        self.invalid_header(self, buf, "invalid packet header byte %s" % nonl(repr_ellipsized(buf)))
                         return
                     #how much to we need to slice off to complete the header:
                     read = min(len(buf), HEADER_SIZE-len(header))

@@ -8,10 +8,10 @@ import socket
 from time import sleep, time
 from queue import Queue
 
-from xpra.net import compression
 from xpra.net.net_util import get_network_caps
 from xpra.net.compression import Compressed, compressed_wrapper
 from xpra.net.protocol import Protocol
+from xpra.net.common import MAX_PACKET_SIZE
 from xpra.codecs.loader import load_codec, get_codec
 from xpra.codecs.image_wrapper import ImageWrapper
 from xpra.codecs.video_helper import getVideoHelper, PREFERRED_ENCODER_ORDER
@@ -37,7 +37,7 @@ PROXY_QUEUE_SIZE = envint("XPRA_PROXY_QUEUE_SIZE", 10)
 #for testing only: passthrough as RGB:
 PASSTHROUGH_RGB = envbool("XPRA_PROXY_PASSTHROUGH_RGB", False)
 VIDEO_TIMEOUT = 5                  #destroy video encoder after N seconds of idle state
-LEGACY_SALT_DIGEST = envbool("XPRA_LEGACY_SALT_DIGEST", True)
+LEGACY_SALT_DIGEST = envbool("XPRA_LEGACY_SALT_DIGEST", False)
 PASSTHROUGH_AUTH = envbool("XPRA_PASSTHROUGH_AUTH", True)
 
 PING_INTERVAL = max(1, envint("XPRA_PROXY_PING_INTERVAL", 5))*1000
@@ -91,10 +91,13 @@ class ProxyInstance:
     def is_alive(self):
         return not self.exit
 
-    def run(self):
+    def log_start(self):
+        assert self.client_protocol and self.server_protocol
         log.info("started %s", self)
         log.info(" for client %s", self.client_protocol._conn)
         log.info(" and server %s", self.server_protocol._conn)
+
+    def run(self):
         self.video_init()
 
         #setup protocol wrappers:
@@ -461,7 +464,7 @@ class ProxyInstance:
                 auth_caps = new_cipher_caps(self.client_protocol, self.cipher, self.encryption_key, padding_options)
                 caps.update(auth_caps)
             #may need to bump packet size:
-            proto.max_packet_size = max(4*1024*1024, maxw*maxh*4*4)
+            proto.max_packet_size = max(MAX_PACKET_SIZE, maxw*maxh*4*4)
             packet = ("hello", caps)
         elif packet_type=="ping_echo" and self.server_ping_timer and len(packet)>=7 and packet[6]==strtobytes(self.uuid):
             #this is one of our ping packets:

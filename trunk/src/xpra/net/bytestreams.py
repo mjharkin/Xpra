@@ -1,5 +1,5 @@
 # This file is part of Xpra.
-# Copyright (C) 2011-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2011-2020 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008, 2009, 2010 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -9,9 +9,9 @@ import os
 import errno
 import socket
 
-from xpra.net.common import ConnectionClosedException
+from xpra.net.common import ConnectionClosedException, IP_SOCKTYPES, TCP_SOCKTYPES
 from xpra.util import envint, envbool, csv
-from xpra.os_util import POSIX, LINUX
+from xpra.os_util import POSIX, LINUX, WIN32, OSX
 from xpra.platform.features import TCP_OPTIONS, IP_OPTIONS, SOCKET_OPTIONS
 from xpra.log import Logger
 
@@ -26,6 +26,7 @@ if SOCKET_CORK:
         log.warn(" %s", cork_e)
         SOCKET_CORK = False
 SOCKET_NODELAY = envbool("XPRA_SOCKET_NODELAY", None)
+SOCKET_KEEPALIVE = envbool("XPRA_SOCKET_KEEPALIVE", True)
 VSOCK_TIMEOUT = envint("XPRA_VSOCK_TIMEOUT", 5)
 SOCKET_TIMEOUT = envint("XPRA_SOCKET_TIMEOUT", 20)
 #this is more proper but would break the proxy server:
@@ -89,6 +90,9 @@ def pretty_socket(s):
         if isinstance(s, str):
             return s
         if len(s)==2:
+            if s[0].find(":")>=0:
+                #IPv6
+                return "[%s]:%s" % (s[0], s[1])
             return "%s:%s" % (s[0], s[1])
         if len(s)==4:
             return csv(str(x) for x in s)
@@ -141,7 +145,7 @@ class Connection:
 
     def peek(self, _n : int):
         #not implemented
-        return None
+        return b""
 
     def _write(self, *args):
         """ wraps do_write with packet accounting """
@@ -196,6 +200,14 @@ class TwoFileConnection(Connection):
         if self._abort_test:
             self._abort_test(action)
 
+    def flush(self):
+        r = self._readable
+        if r:
+            r.flush()
+        w = self._writeable
+        if w:
+            w.flush()
+
     def read(self, n):
         self.may_abort("read")
         return self._read(os.read, self._read_fd, n)
@@ -238,7 +250,6 @@ class TwoFileConnection(Connection):
         return d
 
 
-TCP_SOCKTYPES = ("tcp", "ssl", "ws", "wss")
 
 class SocketConnection(Connection):
     def __init__(self, sock, local, remote, target, socktype, info=None, socket_options=None):
@@ -262,6 +273,25 @@ class SocketConnection(Connection):
             log("%s options: cork=%s, nodelay=%s", self.socktype_wrapped, self.cork, self.nodelay)
             if self.nodelay:
                 self.do_set_nodelay(self.nodelay)
+            keepalive = boolget("keepalive", SOCKET_KEEPALIVE)
+            try:
+                self._setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, int(keepalive))
+                if keepalive:
+                    idletime = 10
+                    interval = 3
+                    kmax = 5
+                    if WIN32:
+                        sock = self.get_raw_socket()
+                        sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, idletime*1000, interval*1000))  #@UndefinedVariable pylint: disable=no-member
+                    elif OSX:
+                        TCP_KEEPALIVE = 0x10
+                        self._setsockopt(socket.IPPROTO_TCP, TCP_KEEPALIVE, interval)
+                    elif LINUX:
+                        self._setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, idletime)
+                        self._setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, interval)
+                        self._setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, kmax)
+            except OSError:
+                log("cannot set KEEPALIVE", exc_info=True)
         else:
             self.cork = False
             self.nodelay = False
@@ -270,18 +300,27 @@ class SocketConnection(Connection):
         if isinstance(remote, str):
             self.filename = remote
 
+    def get_raw_socket(self):
+        return self._socket
+
+    def _setsockopt(self, *args):
+        if self.active:
+            sock = self.get_raw_socket()
+            assert sock, "no raw socket on %s" % self
+            sock.setsockopt(*args)
+
     def set_nodelay(self, nodelay : bool):
         if self.nodelay is None and self.nodelay_value!=nodelay:
             self.do_set_nodelay(nodelay)
 
     def do_set_nodelay(self, nodelay : bool):
-        self._socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, nodelay)
+        self._setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, nodelay)
         self.nodelay_value = nodelay
         log("changed %s socket to nodelay=%s", self.socktype, nodelay)
 
     def set_cork(self, cork : bool):
         if self.cork and self.cork_value!=cork:
-            self._socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_CORK, cork)  #@UndefinedVariable
+            self._setsockopt(socket.IPPROTO_TCP, socket.TCP_CORK, cork)  #@UndefinedVariable
             self.cork_value = cork
             log("changed %s socket to cork=%s", self.socktype, cork)
 
@@ -396,10 +435,12 @@ class SocketConnection(Connection):
             opts = {
                     "SOCKET" : get_socket_options(s, socket.SOL_SOCKET, SOCKET_OPTIONS),
                     }
-            if self.socktype_wrapped in ("tcp", "udp", "ws", "wss", "ssl"):
+            if self.socktype_wrapped in IP_SOCKTYPES:
                 opts["IP"] = get_socket_options(s, socket.SOL_IP, IP_OPTIONS)
-            if self.socktype_wrapped in ("tcp", "ws", "wss", "ssl"):
+            if self.socktype_wrapped in TCP_SOCKTYPES:
                 opts["TCP"] = get_socket_options(s, socket.IPPROTO_TCP, TCP_OPTIONS)
+                from xpra.platform.netdev_query import get_tcp_info
+                opts["TCP_INFO"] = get_tcp_info(s)
             #ipv6:  IPV6_ADDR_PREFERENCES, IPV6_CHECKSUM, IPV6_DONTFRAG, IPV6_DSTOPTS, IPV6_HOPOPTS,
             # IPV6_MULTICAST_HOPS, IPV6_MULTICAST_IF, IPV6_MULTICAST_LOOP, IPV6_NEXTHOP, IPV6_PATHMTU,
             # IPV6_PKTINFO, IPV6_PREFER_TEMPADDR, IPV6_RECVDSTOPTS, IPV6_RECVHOPLIMIT, IPV6_RECVHOPOPTS,

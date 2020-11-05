@@ -13,6 +13,7 @@ import string
 
 from xpra.log import Logger
 from xpra.scripts.config import InitExit
+from xpra.common import SPLASH_EXIT_DELAY
 from xpra.child_reaper import getChildReaper, reaper_cleanup
 from xpra.net import compression
 from xpra.net.common import may_log_packet, PACKET_TYPES
@@ -56,7 +57,7 @@ EXTRA_TIMEOUT = 10
 ALLOW_UNENCRYPTED_PASSWORDS = envbool("XPRA_ALLOW_UNENCRYPTED_PASSWORDS", False)
 ALLOW_LOCALHOST_PASSWORDS = envbool("XPRA_ALLOW_LOCALHOST_PASSWORDS", True)
 DETECT_LEAKS = envbool("XPRA_DETECT_LEAKS", False)
-LEGACY_SALT_DIGEST = envbool("XPRA_LEGACY_SALT_DIGEST", True)
+LEGACY_SALT_DIGEST = envbool("XPRA_LEGACY_SALT_DIGEST", False)
 MOUSE_DELAY = envint("XPRA_MOUSE_DELAY", 0)
 
 
@@ -99,6 +100,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         self.exit_on_signal = False
         self.display_desc = {}
         self.progress_process = None
+        self.progress_timer = None
         #connection attributes:
         self.hello_extra = {}
         self.compression_level = 0
@@ -167,7 +169,17 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         if pct==100:
             #it should exit on its own, but just in case:
             #kill it if it's still running after 2 seconds
-            self.timeout_add(2000, self.stop_progress_process)
+            self.cancel_progress_timer()
+            def stop_progress():
+                self.progress_timer = None
+                self.stop_progress_process()
+            self.progress_timer = self.timeout_add(SPLASH_EXIT_DELAY*1000+500, stop_progress)
+
+    def cancel_progress_timer(self):
+        pt = self.progress_timer
+        if pt:
+            self.progress_timer = None
+            self.source_remove(pt)
 
 
     def init_challenge_handlers(self, challenge_handlers):
@@ -552,6 +564,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
             pass
 
     def cleanup(self):
+        self.cancel_progress_timer()
         self.stop_progress_process()
         reaper_cleanup()
         try:
@@ -575,6 +588,9 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         register_SIGUSR_signals(GLib.idle_add)
 
     def run(self):
+        self.start_protocol()
+
+    def start_protocol(self):
         #protocol may be None in "listen" mode
         if self._protocol:
             self._protocol.start()
@@ -935,7 +951,7 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         log("process_gibberish(%s)", ellipsizer(packet))
         message, data = packet[1:3]
         p = self._protocol
-        show_as_text = p and p.input_packetcount==0 and all(c in string.printable for c in bytestostr(data))
+        show_as_text = p and p.input_packetcount==0 and len(data)<128 and all(c in string.printable for c in bytestostr(data))
         if show_as_text:
             #looks like the first packet back is just text, print it:
             data = bytestostr(data)
@@ -946,7 +962,14 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
                 netlog.error("Error: failed to connect, received")
                 netlog.error(" %s", repr_ellipsized(data))
         else:
-            netlog.error("Error: received uninterpretable nonsense: %s", message)
+            from xpra.net.socket_util import guess_packet_type
+            packet_type = guess_packet_type(data)
+            log("guess_packet_type(%r)=%s", data, packet_type)
+            if packet_type and packet_type!="xpra":
+                netlog.error("Error: received a %s packet", packet_type)
+                netlog.error(" this is not an xpra server?")
+            else:
+                netlog.error("Error: received uninterpretable nonsense: %s", message)
             if p:
                 netlog.error(" packet no %i data: %s", p.input_packetcount, repr_ellipsized(data))
             else:

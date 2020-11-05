@@ -348,10 +348,12 @@ def run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=None
         gc.collect()
 
 
-def verify_display(xvfb=None, display_name=None, shadowing=False, log_errors=True):
+def verify_display(xvfb=None, display_name=None, shadowing=False, log_errors=True, timeout=None):
     #check that we can access the X11 display:
-    from xpra.x11.vfb_util import verify_display_ready
-    if not verify_display_ready(xvfb, display_name, shadowing, log_errors):
+    from xpra.x11.vfb_util import verify_display_ready, VFB_WAIT
+    if timeout is None:
+        timeout = VFB_WAIT
+    if not verify_display_ready(xvfb, display_name, shadowing, log_errors, timeout):
         return 1
     from xpra.log import Logger
     log = Logger("screen", "x11")
@@ -371,9 +373,10 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
         "shadow", "proxy",
         )
 
-    def progress(i, msg):
+    def _progress(i, msg):
         if progress_cb:
             progress_cb(i, msg)
+    progress = _progress
 
     progress(10, "initializing environment")
     try:
@@ -444,7 +447,7 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
             error_cb("too many extra arguments (%i): only expected a display number" % len(extra_args))
         if len(extra_args) == 1:
             display_name = extra_args[0]
-            if not shadowing and not proxying and not upgrading and not use_display:
+            if not shadowing and not upgrading and not use_display:
                 display_name_check(display_name)
         else:
             if proxying:
@@ -639,6 +642,7 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
         warn(" you should also enable the sync-xvfb option")
         warn(" to keep the Xephyr window updated")
 
+    progress(10, "creating sockets")
     from xpra.net.socket_util import get_network_logger, setup_local_sockets, create_sockets
     sockets = create_sockets(opts, error_cb)
 
@@ -677,10 +681,10 @@ def do_run_server(error_cb, opts, mode, xpra_file, extra_args, desktop_display=N
         if not display_name:
             use_display = False
         else:
-            progress(20, "connecting to display")
-            start_vfb = verify_display(None, display_name, log_errors=False)!=0
+            progress(20, "connecting to the display")
+            start_vfb = verify_display(None, display_name, log_errors=False, timeout=1)!=0
     if start_vfb:
-        progress(30, "starting a virtual display")
+        progress(20, "starting a virtual display")
         assert not proxying and xauth_data
         pixel_depth = validate_pixel_depth(opts.pixel_depth, starting_desktop)
         from xpra.x11.vfb_util import start_Xvfb, check_xvfb_process, parse_resolution

@@ -12,7 +12,7 @@ from gi.repository import GObject
 from xpra.sound.sound_pipeline import SoundPipeline
 from xpra.gtk_common.gobject_util import one_arg_signal
 from xpra.sound.gstreamer_util import (
-    plugin_str, get_decoder_elements,
+    plugin_str, get_decoder_elements, has_plugins,
     get_queue_time, normv, get_decoders,
     get_default_sink_plugin, get_sink_plugins,
     MP3, CODEC_ORDER, gst, QUEUE_LEAK,
@@ -48,6 +48,7 @@ GRACE_PERIOD = envint("XPRA_SOUND_GRACE_PERIOD", 2000)
 MARGIN = max(0, min(200, envint("XPRA_SOUND_MARGIN", 50)))
 #how high we push up the min-level to prevent underruns:
 UNDERRUN_MIN_LEVEL = max(0, envint("XPRA_SOUND_UNDERRUN_MIN_LEVEL", 150))
+CLOCK_SYNC = envbool("XPRA_CLOCK_SYNC", False)
 
 
 GST_FORMAT_BYTES = 2
@@ -87,6 +88,7 @@ class SoundSink(SoundPipeline):
         self.levels = deque(maxlen=100)
         self.volume = None
         self.src    = None
+        self.sink   = None
         self.queue  = None
         self.normal_volume = volume
         self.target_volume = volume
@@ -128,6 +130,11 @@ class SoundSink(SoundPipeline):
                                           "max-size-time=%s" % QUEUE_TIME,
                                           "leaky=%s" % QUEUE_LEAK]))
         pipeline_els.append("volume name=volume volume=0")
+        if CLOCK_SYNC:
+            if not has_plugins("clocksync"):
+                log.warn("Warning: cannot enable clocksync, element not found")
+            else:
+                pipeline_els.append("clocksync")
         sink_attributes = SINK_SHARED_DEFAULT_ATTRIBUTES.copy()
         #anything older than this may cause problems (ie: centos 6.x)
         #because the attributes may not exist
@@ -139,12 +146,14 @@ class SoundSink(SoundPipeline):
             sink_attributes.update(v)
         if sink_options:
             sink_attributes.update(sink_options)
+        sink_attributes["name"] = "sink"
         sink_str = plugin_str(sink_type, sink_attributes)
         pipeline_els.append(sink_str)
         if not self.setup_pipeline_and_bus(pipeline_els):
             return
         self.volume = self.pipeline.get_by_name("volume")
         self.src    = self.pipeline.get_by_name("src")
+        self.sink   = self.pipeline.get_by_name("sink")
         self.queue  = self.pipeline.get_by_name("queue")
         if self.queue:
             if QUEUE_SILENT:
@@ -154,6 +163,7 @@ class SoundSink(SoundPipeline):
                 self.queue.connect("underrun", self.queue_underrun)
                 self.queue.connect("running", self.queue_running)
                 self.queue.connect("pushing", self.queue_pushing)
+        self.init_file(codec)
 
     def __repr__(self):
         return "SoundSink('%s' - %s)" % (self.pipeline_str, self.state)
@@ -356,6 +366,23 @@ class SoundSink(SoundPipeline):
                              "underruns"    : self.underruns,
                              "state"        : self.queue_state,
                              }
+        sink_info = info.setdefault("sink", {})
+        for x in (
+            "buffer-time", "latency-time",
+            #"next_sample", "eos_rendering",
+            "async", "blocksize",
+            "enable-last-sample",
+            "max-bitrate", "max-lateness", "processing-deadline",
+            "qos", "render-delay", "sync",
+            "throttle-time", "ts-offset",
+            
+            ):
+            try:
+                v = self.sink.get_property(x)
+                if v>=0:
+                    sink_info[x] = v
+            except Exception as e:
+                log.warn("Warning: %s", e)
         return info
 
     def can_push_buffer(self):
@@ -402,6 +429,7 @@ class SoundSink(SoundPipeline):
     def do_add_data(self, data, metadata=None):
         #having a timestamp causes problems with the queue and overruns:
         log("do_add_data(%s bytes, %s) queue_state=%s", len(data), metadata, self.queue_state)
+        self.save_to_file(data)
         buf = gst.Buffer.new_allocate(None, len(data), None)
         buf.fill(0, data)
         if metadata:

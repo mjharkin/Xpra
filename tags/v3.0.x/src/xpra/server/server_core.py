@@ -1040,8 +1040,6 @@ class ServerCore(object):
                 return None
             ssl_conn = SSLSocketConnection(ssl_sock, sockname, address, target, socktype)
             ssllog("ssl_wrap()=%s", ssl_conn)
-                    if conn is None:
-                        return
             return ssl_conn
 
         if socktype in ("ssl", "wss"):
@@ -1087,6 +1085,8 @@ class ServerCore(object):
                         return
                     ssllog("ws socket receiving ssl, upgrading")
                     conn = ssl_wrap()
+                    if conn is None:
+                        return
                 elif len(peek_data)>=2 and peek_data[0] in ("P", ord("P") and peek_data[1] in ("\x00", 0)):
                     self.new_conn_err(conn, sock, socktype, socket_info, "xpra",
                                       "packet looks like a plain xpra packet")
@@ -1861,7 +1861,7 @@ class ServerCore(object):
         #max packet size from client (the biggest we can get are clipboard packets)
         netlog("accept_client(%s, %s)", proto, c)
         #note: when uploading files, we send them in chunks smaller than this size
-        proto.max_packet_size = 1024*1024  #1MB
+        proto.max_packet_size = 16*1024*1024  #16MB
         proto.parse_remote_caps(c)
         self.accept_protocol(proto)
 

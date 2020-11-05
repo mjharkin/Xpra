@@ -220,9 +220,9 @@
 
 	<distutils id="python3-pillow" python3="1">
 		<branch repo="files.pythonhosted.org"
-			module="/packages/3e/02/b09732ca4b14405ff159c470a612979acfc6e8645dc32f83ea0129709f7a/Pillow-7.2.0.tar.gz"
-			hash="sha256:97f9e7953a77d5a70f49b9a48da7776dc51e9b738151b22dacf101641594a626"
-			version="7.2.0"/>
+			module="/packages/2b/06/93bf1626ef36815010e971a5ce90f49919d84ab5d2fa310329f843a74bc1/Pillow-8.0.1.tar.gz"
+			hash="sha256:11c5c6e9b02c9dac08af04f093eb5a2f84857df70a7d4a6a6ad461aca803fb9e"
+			version="8.0.1"/>
 		<dependencies>
 			<dep package="python3"/>
 			<dep package="libwebp"/>
@@ -260,19 +260,6 @@
 		</dependencies>
 		<after>
 			<dep package="python3"/>
-		</after>
-	</distutils>
-
-	<distutils id="python3-numpy" python3="1">
-		<branch repo="files.pythonhosted.org"
-			module="/packages/2c/2f/7b4d0b639a42636362827e611cfeba67975ec875ae036dd846d459d52652/numpy-1.19.1.zip"
-			version="1.19.1"
-			hash="sha256:b8456987b637232602ceb4d663cb34106f7eb780e247d51a260b84760fd8f491"/>
-		<dependencies>
-			<dep package="python"/>
-		</dependencies>
-		<after>
-			<dep package="python"/>
 		</after>
 	</distutils>
 
@@ -626,6 +613,20 @@
 	</distutils>
 
 
+	<distutils id="python3-qrencode" python3="1">
+		<branch repo="files.pythonhosted.org"
+			module="/packages/0e/ef/0acbb4ac130dd5d9395370af72b6a551a887b27cd7efbbeac424e72707bb/qrencode-1.2.tar.gz"
+			hash="sha256:10942f76641e989d429e53e6b590f50420f883ded034f1fac767f55229678c6c"
+			version="1.2.0"/>
+		<dependencies>
+			<dep package="python3"/>
+		</dependencies>
+		<after>
+			<dep package="python3"/>
+		</after>
+	</distutils>
+
+
 	<distutils id="python3-pyobjc-core" python3="1">
 		<branch repo="files.pythonhosted.org"
 			module="/packages/47/da/8739c856f27d98b546e2e52b053931686b81e8a37aabedd182ec4a460982/pyobjc-core-6.2.2.tar.gz"
@@ -809,7 +810,6 @@
 		  <dep package="python3-pillow"/>
 		  <dep package="python3-py2app"/>
 		  <dep package="python3-cython"/>
-		  <dep package="python3-numpy"/>
 		  <dep package="python3-pycups"/>
 		  <dep package="python3-bcrypt"/>
 		  <dep package="python3-paramiko"/>
@@ -840,6 +840,7 @@
 		  <dep package="python3-altgraph"/>
 		  <dep package="python3-pyopengl"/>
 		  <dep package="python3-pyopengl-accelerate"/>
+		  <dep package="python3-qrencode"/>
 		  <dep package="python3-pyobjc-core"/>
 		  <dep package="python3-pyobjc-framework-cocoa"/>
 		  <dep package="python3-pyobjc-framework-quartz"/>

@@ -12,7 +12,7 @@ import stat
 import socket
 from time import sleep
 import logging
-from subprocess import Popen, PIPE, DEVNULL
+from subprocess import Popen, PIPE, TimeoutExpired
 import signal
 import shlex
 import traceback
@@ -41,7 +41,8 @@ from xpra.scripts.parsing import (
     supports_shadow, supports_server, supports_proxy, supports_mdns,
     )
 from xpra.scripts.config import (
-    OPTION_TYPES, TRUE_OPTIONS, CLIENT_OPTIONS, NON_COMMAND_LINE_OPTIONS, CLIENT_ONLY_OPTIONS,
+    OPTION_TYPES, TRUE_OPTIONS, FALSE_OPTIONS, OFF_OPTIONS,
+    CLIENT_OPTIONS, NON_COMMAND_LINE_OPTIONS, CLIENT_ONLY_OPTIONS,
     START_COMMAND_OPTIONS, BIND_OPTIONS, PROXY_START_OVERRIDABLE_OPTIONS, OPTIONS_ADDED_SINCE_V3, OPTIONS_COMPAT_NAMES,
     InitException, InitInfo, InitExit,
     fixup_options, dict_to_validated_config, get_xpra_defaults_dirs, get_defaults, read_xpra_conf,
@@ -70,6 +71,11 @@ def nox():
     import warnings
     warnings.filterwarnings("error", "could not open display")
     return DISPLAY
+
+def werr(*msg):
+    for x in msg:
+        noerr(sys.stderr.write, "%s\n" % (x,))
+    noerr(sys.stderr.flush)
 
 
 saved_env = {}
@@ -162,8 +168,8 @@ def configure_logging(options, mode):
     if mode in (
         "showconfig", "info", "id", "attach", "listen", "launcher", "stop", "print",
         "control", "list", "list-windows", "list-mdns", "sessions", "mdns-gui", "bug-report",
-        "splash",
-        "opengl", "opengl-probe", "opengl-test",
+        "splash", "qrcode",
+        "opengl-test",
         "test-connect",
         "encoding", "webcam", "clipboard-test",
         "keyboard", "keyboard-test", "keymap", "gui-info", "network-info", "path-info",
@@ -390,12 +396,6 @@ def do_run_mode(script_file, error_cb, options, args, mode, defaults):
 
     if (mode in ("start", "start-desktop", "upgrade", "upgrade-desktop") and supports_server) or \
         (mode=="shadow" and supports_shadow) or (mode=="proxy" and supports_proxy):
-        try:
-            cwd = os.getcwd()
-        except OSError:
-            os.chdir("/")
-            cwd = "/"
-        env = os.environ.copy()
         start_via_proxy = parse_bool("start-via-proxy", options.start_via_proxy)
         if start_via_proxy is not False and (not POSIX or getuid()!=0) and options.daemon:
             try:
@@ -409,6 +409,9 @@ def do_run_mode(script_file, error_cb, options, args, mode, defaults):
                 try:
                     #this will use the client "start-new-session" feature,
                     #to start a new session and connect to it at the same time:
+                    if not args:
+                        from xpra.platform.features import SYSTEM_PROXY_SOCKET
+                        args = [SYSTEM_PROXY_SOCKET]
                     app = get_client_app(error_cb, options, args, "request-%s" % mode)
                     r = do_run_client(app)
                     #OK or got a signal:
@@ -450,7 +453,8 @@ def do_run_mode(script_file, error_cb, options, args, mode, defaults):
             options.splash is not False and (
                 not POSIX or (
                     (os.environ.get("DISPLAY") or os.environ.get("XDG_SESSION_DESKTOP")) and
-                    not (os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_CLIENT"))
+                    not (os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_CLIENT")) and
+                    not options.daemon
                     )
                 )
             ):
@@ -470,12 +474,18 @@ def do_run_mode(script_file, error_cb, options, args, mode, defaults):
                 noerr(progress.stdin.flush)
                 if pct==100:
                     #it should exit on its own, but just in case:
-                    #kill it if it's still running after 2 seconds
+                    from xpra.common import SPLASH_EXIT_DELAY
                     from gi.repository import GLib
-                    GLib.timeout_add(2000, stop_progress_process)
+                    GLib.timeout_add(SPLASH_EXIT_DELAY*1000+500, stop_progress_process)
             progress_cb = show_progress
             from xpra.scripts.server import add_cleanup
             add_cleanup(stop_progress_process)
+        try:
+            cwd = os.getcwd()
+        except OSError:
+            os.chdir("/")
+            cwd = "/"
+        env = os.environ.copy()
         current_display = nox()
         try:
             from xpra import server
@@ -516,6 +526,7 @@ def do_run_mode(script_file, error_cb, options, args, mode, defaults):
         "attach", "listen", "detach",
         "screenshot", "version", "info", "id",
         "control", "_monitor", "shell", "print",
+        "qrcode",
         "connect-test", "request-start", "request-start-desktop", "request-shadow",
         ):
         return run_client(error_cb, options, args, mode)
@@ -564,12 +575,9 @@ def do_run_mode(script_file, error_cb, options, args, mode, defaults):
         check_display()
         from xpra.scripts.bug_report import main as bug_main    #@Reimport
         bug_main(["xpra"]+args)
-    elif mode in (
-        "_proxy",
-        "_proxy_start",
-        "_proxy_start_desktop",
-        "_proxy_shadow_start",
-        ) and (supports_server or supports_shadow):
+    elif (
+        mode in ("_proxy", "_proxy_start", "_proxy_start_desktop") and supports_server) or (
+        mode in ("_proxy_shadow_start", ) and supports_shadow):
         nox()
         return run_proxy(error_cb, options, script_file, args, mode, defaults)
     elif mode in ("_sound_record", "_sound_play", "_sound_query"):
@@ -1289,8 +1297,7 @@ def socket_connect(dtype, host, port):
         if monotonic_time()-start>=CONNECT_TIMEOUT:
             break
         if retry==0:
-            log = Logger("network")
-            log.info("failed to connect to %s:%s, retrying for %i seconds", host, port, CONNECT_TIMEOUT)
+            werr("failed to connect to %s:%s, retrying for %i seconds" % (host, port, CONNECT_TIMEOUT))
         retry += 1
         import time
         time.sleep(1)
@@ -1519,13 +1526,13 @@ def get_sockpath(display_desc, error_cb, timeout=CONNECT_TIMEOUT):
                 #or not found any sockets at all (DEAD),
                 #this could be a server starting up,
                 #so give it a bit of time:
-                log = Logger("network")
                 if state==DotXpra.UNKNOWN:
-                    log.info("server socket for display %s is in %s state", display, DotXpra.UNKNOWN)
+                    werr("server socket for display %s is in %s state" % (display, DotXpra.UNKNOWN))
                 else:
-                    log.info("server socket for display %s not found", display)
-                log.info(" waiting up to %i seconds", timeout)
+                    werr("server socket for display %s not found" % display)
+                werr(" waiting up to %i seconds" % timeout)
                 start = monotonic_time()
+                log = Logger("network")
                 while monotonic_time()-start<timeout:
                     state = dotxpra.get_display_state(display)
                     log("get_display_state(%s)=%s", display, state)
@@ -1594,23 +1601,19 @@ def connect_to_server(app, display_desc, opts):
             protocol.start()
         except InitInfo as e:
             log("do_setup_connection() display_desc=%s", display_desc, exc_info=True)
-            log.info("failed to connect:")
-            log.info(" %s", e)
+            werr("failed to connect:", " %s" % e)
             GLib.idle_add(app.quit, EXIT_OK)
         except InitExit as e:
             log("do_setup_connection() display_desc=%s", display_desc, exc_info=True)
-            log.warn("Warning: failed to connect:")
-            log.warn(" %s", e)
+            werr("Warning: failed to connect:", " %s" % e)
             GLib.idle_add(app.quit, e.status)
         except InitException as e:
             log("do_setup_connection() display_desc=%s", display_desc, exc_info=True)
-            log.warn("Warning: failed to connect:")
-            log.warn(" %s", e)
+            werr("Warning: failed to connect:", " %s" % e)
             GLib.idle_add(app.quit, EXIT_CONNECTION_FAILED)
         except Exception as e:
             log.error("do_setup_connection() display_desc=%s", display_desc, exc_info=True)
-            log.error("Error: failed to connect:")
-            log.error(" %s", e)
+            werr("Error: failed to connect:", " %s", e)
             GLib.idle_add(app.quit, EXIT_CONNECTION_FAILED)
     def setup_connection():
         log("setup_connection() starting setup-connection thread")
@@ -1676,6 +1679,9 @@ def get_client_app(error_cb, opts, extra_args, mode):
         extra_args = extra_args[:1]
         app = PrintClient(opts)
         app.set_command_args(args)
+    elif mode=="qrcode":
+        from xpra.client.gtk3.qrcode_client import QRCodeClient
+        app = QRCodeClient(opts)
     elif mode=="version":
         from xpra.client.gobject_client_base import VersionXpraClient
         app = VersionXpraClient(opts)
@@ -1857,40 +1863,58 @@ def make_progress_process():
 def run_opengl_probe():
     from xpra.platform.paths import get_nodock_command
     log = Logger("opengl")
-    cmd = get_nodock_command()+["opengl-probe"]
+    cmd = get_nodock_command()+["opengl"]
     env = os.environ.copy()
     if is_debug_enabled("opengl"):
         cmd += ["-d", "opengl"]
     else:
         env["NOTTY"] = "1"
     env["XPRA_HIDE_DOCK"] = "1"
+    env["XPRA_REDIRECT_OUTPUT"] = "0"
     start = monotonic_time()
     try:
-        proc = Popen(cmd, stderr=DEVNULL, env=env)
+        proc = Popen(cmd, stdout=PIPE, stderr=PIPE, env=env)
     except Exception as e:
         log.warn("Warning: failed to execute OpenGL probe command")
         log.warn(" %s", e)
-        return "probe-failed:%s" % e
-    r = pollwait(proc, OPENGL_PROBE_TIMEOUT)
+        return "failed", {"message" : str(e).replace("\n", " ")}
+    try:
+        stdout, stderr = proc.communicate(timeout=OPENGL_PROBE_TIMEOUT)
+        r = proc.returncode
+    except TimeoutExpired:
+        log("opengl probe command timed out")
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        r = None
+    log("xpra opengl stdout=%s", nonl(stdout))
+    log("xpra opengl stderr=%s", nonl(stderr))
     log("OpenGL probe command returned %s for command=%s", r, cmd)
     end = monotonic_time()
     log("probe took %ims", 1000*(end-start))
-    if r==0:
-        return "probe-success"
-    if r==1:
-        return "probe-crash"
-    if r==2:
-        return "probe-warning"
-    if r==3:
-        return "probe-error"
-    if r is None:
-        msg = "timeout"
-    elif r>128:
-        msg = SIGNAMES.get(r-128)
-    else:
-        msg = SIGNAMES.get(0-r, 0-r)
-    log.warn("Warning: OpenGL probe failed: %s", msg)
-    return "probe-failed:%s" % msg
+    props = {}
+    for line in stdout.decode().splitlines():
+        parts = line.split("=", 1)
+        if len(parts)==2:
+            props[parts[0]] = parts[1]
+    def probe_message():
+        err = props.get("error")
+        if err:
+            return "error"
+        if r==1:
+            return "crash"
+        if r is None:
+            return "timeout"
+        if r>128:
+            return "failed:%s" % SIGNAMES.get(r-128)
+        if r!=0:
+            return "failed:%s" % SIGNAMES.get(0-r, 0-r)
+        if props.get("success", "False").lower() in FALSE_OPTIONS:
+            return "error"
+        if props.get("safe", "False").lower() in FALSE_OPTIONS:
+            return "warning"
+        return "success"
+    #log.warn("Warning: OpenGL probe failed: %s", msg)
+    return probe_message(), props
 
 def make_client(error_cb, opts):
     progress_process = None
@@ -1903,7 +1927,6 @@ def make_client(error_cb, opts):
         from xpra.platform.gui import init as gui_init
         gui_init()
 
-        from xpra.scripts.config import FALSE_OPTIONS, OFF_OPTIONS
         def b(v):
             return str(v).lower() not in FALSE_OPTIONS
         def bo(v):
@@ -1943,8 +1966,19 @@ def make_client(error_cb, opts):
             if os.environ.get("XDG_SESSION_TYPE")=="wayland":
                 opts.opengl = "no"
             else:
-                app.show_progress(20, "validing OpenGL renderer")
-                opts.opengl = run_opengl_probe()
+                app.show_progress(20, "validating OpenGL configuration")
+                probe, info = run_opengl_probe()
+                opts.opengl = "probe-%s" % probe
+                r = probe   #ie: "success"
+                if info:
+                    renderer = info.get("renderer")
+                    if renderer:
+                        r += " (%s)" % renderer
+                app.show_progress(20, "validating OpenGL: %s" % r)
+                if probe=="error":
+                    message = info.get("message")
+                    if message:
+                        app.show_progress(21, " %s" % message)
     except Exception:
         if progress_process:
             try:
@@ -2159,6 +2193,10 @@ def no_gtk():
     raise Exception("the Gtk module is already loaded: %s" % Gtk)
 
 
+def run_qrcode(args):
+    from xpra.client.gtk3 import qrcode_client
+    return qrcode_client.main(args)
+
 def run_splash(args) -> int:
     from xpra.client.gtk3 import splash_screen
     return splash_screen.main(args)
@@ -2208,9 +2246,8 @@ def do_run_glcheck(opts, show=False) -> dict:
         if is_debug_enabled("opengl"):
             log("do_run_glcheck(..)", exc_info=True)
         if use_tty():
-            sys.stderr.write("error:\n")
-            sys.stderr.write("%s\n" % e)
-            sys.stderr.flush()
+            noerr(sys.stderr.write, "error=%s\n" % nonl(e))
+            noerr(sys.stderr.flush)
         return {
             "success"   : False,
             "message"   : str(e).replace("\n", " "),
@@ -2223,20 +2260,24 @@ def run_glcheck(opts):
     try:
         props = do_run_glcheck(opts)
     except Exception as e:
-        sys.stdout.write("error=%s\n" % nonl(e))
+        noerr(sys.stdout.write, "error=%s\n" % str(e).replace("\n", " "))
         return 1
+    log = Logger("opengl")
+    log("run_glcheck(..) props=%s", props)
     for k in sorted(props.keys()):
         v = props[k]
         #skip not human readable:
         if k not in ("extensions", "glconfig", "GLU.extensions", ):
+            vstr = str(v)
             try:
                 if k.endswith("dims"):
                     vstr = csv(v)
                 else:
                     vstr = pver(v)
             except ValueError:
-                vstr = str(v)
-            sys.stdout.write("%s=%s\n" % (str(k), vstr))
+                pass
+            sys.stdout.write("%s=%s\n" % (k, vstr))
+    sys.stdout.flush()
     return 0
 
 

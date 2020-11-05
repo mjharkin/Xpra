@@ -71,7 +71,7 @@ def xpra_runner_shell_script(xpra_file, starting_dir, socket_dir):
     #when it is specified, but the client may override it:
     if socket_dir:
         script.append(b'if [ -z "${XPRA_SOCKET_DIR}" ]; then\n')
-        script.append(b'    XPRA_SOCKET_DIR=%s; export XPRA_SOCKET_DIR\n' % sh_quotemeta(os.path.expanduser(socket_dir).encode()))
+        script.append(b'    XPRA_SOCKET_DIR="%s"; export XPRA_SOCKET_DIR\n' % sh_quotemeta(os.path.expanduser(socket_dir).encode()))
         script.append(b'fi\n')
     # We ignore failures in cd'ing, b/c it's entirely possible that we were
     # started from some temporary directory and all paths are absolute.
@@ -123,14 +123,15 @@ def write_runner_shell_scripts(contents, overwrite=True):
     # people run into problems or autodiscovery turns out to be less useful
     # than expected.
     log = get_util_logger()
+    MODE = 0o700
     from xpra.platform.paths import get_script_bin_dirs
     for d in get_script_bin_dirs():
         scriptdir = osexpand(d)
         if not os.path.exists(scriptdir):
             try:
-                os.mkdir(scriptdir, 0o700)
+                os.mkdir(scriptdir, MODE)
             except Exception as e:
-                log("os.mkdir(%s, 0o700)", scriptdir, exc_info=True)
+                log("os.mkdir(%s, %s)", scriptdir, oct(MODE), exc_info=True)
                 log.warn("Warning: failed to create script directory '%s':", scriptdir)
                 log.warn(" %s", e)
                 if scriptdir.startswith("/var/run/user") or scriptdir.startswith("/run/user"):
@@ -143,7 +144,7 @@ def write_runner_shell_scripts(contents, overwrite=True):
         # environment:
         try:
             with umask_context(0o022):
-                h = os.open(scriptpath, os.O_WRONLY|os.O_CREAT|os.O_TRUNC, 0o700)
+                h = os.open(scriptpath, os.O_WRONLY|os.O_CREAT|os.O_TRUNC, MODE)
                 try:
                     os.write(h, contents)
                 finally:

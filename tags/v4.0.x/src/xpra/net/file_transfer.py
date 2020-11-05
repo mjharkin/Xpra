@@ -311,7 +311,7 @@ class FileTransferHandler(FileTransferAttributes):
         if written!=filesize:
             filelog.error("Error: expected a file of %i bytes, got %i", filesize, written)
             return
-        expected_digest = options.get("sha1")
+        expected_digest = options.strget("sha1")
         if expected_digest:
             self.check_digest(filename, digest.hexdigest(), expected_digest)
         start_time = chunk_state[0]
@@ -421,20 +421,20 @@ class FileTransferHandler(FileTransferAttributes):
             os.write(fd, file_data)
         finally:
             os.close(fd)
-        self.transfer_progress_update(False, send_id, monotonic_time()-start, filesize, filesize, None)
         self.process_downloaded_file(filename, mimetype, printit, openit, filesize, options)
 
 
     def process_downloaded_file(self, filename, mimetype, printit, openit, filesize, options):
-        t = start_thread(self.do_process_downloaded_file, "process-download", daemon=False,
-                         args=(filename, mimetype, printit, openit, filesize, options))
-        filelog("started process-download thread: %s", t)
-
-    def do_process_downloaded_file(self, filename, mimetype, printit, openit, filesize, options):
-        filelog("do_process_downloaded_file%s", (filename, mimetype, printit, openit, filesize, options))
         filelog.info("downloaded %s bytes to %s file%s:",
                      filesize, (mimetype or "temporary"), ["", " for printing"][int(printit)])
         filelog.info(" '%s'", filename)
+        if printit or openit:
+            t = start_thread(self.do_process_downloaded_file, "process-download", daemon=False,
+                             args=(filename, mimetype, printit, openit, filesize, options))
+            filelog("started process-download thread: %s", t)
+
+    def do_process_downloaded_file(self, filename, mimetype, printit, openit, filesize, options):
+        filelog("do_process_downloaded_file%s", (filename, mimetype, printit, openit, filesize, options))
         if printit:
             self._print_file(filename, mimetype, options)
             return
@@ -698,21 +698,14 @@ class FileTransferHandler(FileTransferAttributes):
     def _process_send_data_response(self, packet):
         send_id, accept = packet[1:3]
         filelog("process send-data-response: send_id=%s, accept=%s", send_id, accept)
-        timer = self.pending_send_data_timers.get(send_id)
+        send_id = bytestostr(send_id)
+        timer = self.pending_send_data_timers.pop(send_id, None)
         if timer:
-            try:
-                del self.pending_send_data_timers[send_id]
-            except KeyError:
-                pass
             self.source_remove(timer)
-        v = self.pending_send_data.get(bytestostr(send_id))
-        if not v:
+        v = self.pending_send_data.pop(send_id, None)
+        if v is None:
             filelog.warn("Warning: cannot find send-file entry")
             return
-        try:
-            del self.pending_send_data[send_id]
-        except KeyError:
-            pass
         dtype = v[0]
         url = v[1]
         if accept==DENY:

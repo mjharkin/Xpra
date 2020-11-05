@@ -198,7 +198,7 @@ v4l2_ENABLED            = DEFAULT and (not WIN32 and not OSX and not FREEBSD and
 dec_avcodec2_ENABLED    = DEFAULT and pkg_config_version("57", "libavcodec")
 csc_swscale_ENABLED     = DEFAULT and pkg_config_ok("--exists", "libswscale")
 csc_cython_ENABLED      = DEFAULT
-nvenc_ENABLED = DEFAULT and BITS==64 and pkg_config_version("7", "nvenc")
+nvenc_ENABLED = DEFAULT and BITS==64 and pkg_config_version("10", "nvenc")
 nvfbc_ENABLED = DEFAULT and BITS==64 and pkg_config_ok("--exists", "nvfbc")
 cuda_kernels_ENABLED    = DEFAULT
 cuda_rebuild_ENABLED    = DEFAULT
@@ -737,14 +737,10 @@ def get_base_conf_dir(install_dir, stripbuildroot=True):
         elif "pkg" in dirs:
             #archlinux
             #ie: "/build/xpra/pkg/xpra/etc" -> "etc"
-            i = dirs.index("pkg")
-            while i>=0 and len(dirs)>i+1:
-                if dirs[i+1] == "xpra":
-                    dirs = dirs[i+2:]
-                try:
-                    i = dirs.index("pkg")
-                except ValueError:
-                    break
+            #find the last 'pkg' from the list of directories:
+            i = max(loc for loc, val in enumerate(dirs) if val == "pkg")
+            if len(dirs)>i+1 and dirs[i+1] in ("xpra", "xpra-svn"):
+                dirs = dirs[i+2:]
         elif pkgdir and install_dir.startswith(pkgdir):
             #arch build dir:
             dirs = install_dir.lstrip(pkgdir).split(os.path.sep)
@@ -769,7 +765,8 @@ def get_base_conf_dir(install_dir, stripbuildroot=True):
 
 def get_conf_dir(install_dir, stripbuildroot=True):
     dirs = get_base_conf_dir(install_dir, stripbuildroot)
-    dirs.append("etc")
+    if "etc" not in dirs:
+        dirs.append("etc")
     dirs.append("xpra")
     return os.path.join(*dirs)
 
@@ -1206,6 +1203,10 @@ if WIN32:
             #svg pixbuf loader:
             add_DLLs("rsvg", "croco")
 
+        if client_ENABLED or server_ENABLED:
+            packages.append("qrencode")
+            add_DLLs("qrencode")
+
         if sound_ENABLED:
             add_dir("share", ["gst-plugins-base", "gstreamer-1.0"])
             add_gi("Gst-1.0", "GstAllocators-1.0", "GstAudio-1.0", "GstBase-1.0",
@@ -1276,7 +1277,7 @@ if WIN32:
                             "bin_excludes"      : bin_excludes,
                             }
         #cx_Freeze v5 workarounds:
-        if opengl_ENABLED or nvenc_ENABLED or nvfbc_ENABLED:
+        if nvenc_ENABLED or nvfbc_ENABLED:
             add_packages("numpy.core._methods", "numpy.lib.format")
 
         setup_options["options"] = {"build_exe" : cx_freeze_options}
@@ -1415,8 +1416,7 @@ if WIN32:
     else:
         remove_packages("cv2")
 
-    if opengl_ENABLED or nvenc_ENABLED or nvfbc_ENABLED:
-        #we need numpy for opengl or as a fallback for the Cython xor module
+    if nvenc_ENABLED or nvfbc_ENABLED:
         external_includes.append("numpy")
     else:
         remove_packages("unittest", "difflib",  #avoid numpy warning (not an error)
@@ -1603,6 +1603,7 @@ else:
         #to support GStreamer 1.x we need this:
         modules.append("importlib")
         modules.append("mimetypes")
+        external_excludes.append("numpy")
     else:
         PYGTK_PACKAGES += ["gdk-x11-2.0", "gtk+-x11-2.0"]
         add_packages("xpra.platform.xposix")
@@ -1706,7 +1707,6 @@ if data_ENABLED:
 
 if html5_ENABLED:
     if WIN32 or OSX:
-        external_includes.append("numpy")
         external_includes.append("ssl")
         external_includes.append("_ssl")
 
@@ -2120,6 +2120,8 @@ if nvenc_ENABLED and cuda_kernels_ENABLED:
 if nvenc_ENABLED:
     nvencmodule = "nvenc"
     nvenc_pkgconfig = pkgconfig(nvencmodule, ignored_flags=["-l", "-L"])
+    #make it possible to build against SDK v10
+    add_to_keywords(nvenc_pkgconfig, 'extra_compile_args', "-Wno-error=deprecated-declarations")
     #don't link against libnvidia-encode, we load it dynamically:
     libraries = nvenc_pkgconfig.get("libraries", [])
     if "nvidia-encode" in libraries:

@@ -13,6 +13,7 @@ from xpra.server.proxy.proxy_instance import ProxyInstance
 from xpra.scripts.server import deadly_signal
 from xpra.net.protocol_classes import get_client_protocol_class, get_server_protocol_class
 from xpra.net.protocol import Protocol
+from xpra.net.socket_util import SOCKET_DIR_MODE
 from xpra.os_util import (
     SIGNAMES, POSIX,
     bytestostr,
@@ -112,6 +113,8 @@ class ProxyInstanceProcess(ProxyInstance, QueueScheduler, Process):
                 set_blocking(self.server_conn)
             else:
                 log.error("unexpected proxy server message: %s", m)
+                log.warn("Warning: unexpected proxy server message:")
+                log.warn(" '%s'", m)
 
     def signal_quit(self, signum, _frame=None):
         log.info("")
@@ -122,7 +125,6 @@ class ProxyInstanceProcess(ProxyInstance, QueueScheduler, Process):
         signal.signal(signal.SIGTERM, deadly_signal)
         self.stop(None, SIGNAMES.get(signum, signum))
         #from now on, we can't rely on the main loop:
-        from xpra.os_util import register_SIGUSR_signals
         register_SIGUSR_signals()
         #log.info("instance frames:")
         #from xpra.util import dump_all_frames
@@ -133,9 +135,6 @@ class ProxyInstanceProcess(ProxyInstance, QueueScheduler, Process):
 
     def run(self):
         register_SIGUSR_signals(self.idle_add)
-        log.info("started %s", self)
-        log.info(" for client %s", self.client_conn)
-        log.info(" and server %s", self.server_conn)
         client_protocol_class = get_client_protocol_class(self.client_conn.socktype)
         server_protocol_class = get_server_protocol_class(self.server_conn.socktype)
         self.client_protocol = client_protocol_class(self, self.client_conn,
@@ -143,6 +142,7 @@ class ProxyInstanceProcess(ProxyInstance, QueueScheduler, Process):
         self.client_protocol.restore_state(self.client_state)
         self.server_protocol = server_protocol_class(self, self.server_conn,
                                                      self.process_server_packet, self.get_server_packet)
+        self.log_start()
 
         log("ProxyProcessProcess.run() pid=%s, uid=%s, gid=%s", os.getpid(), getuid(), getgid())
         set_proc_title("Xpra Proxy Instance for %s" % self.server_conn)
@@ -172,7 +172,6 @@ class ProxyInstanceProcess(ProxyInstance, QueueScheduler, Process):
         start_thread(self.server_message_queue, "server message queue")
 
         if not self.create_control_socket():
-            #TODO: should send a message to the client
             return
         self.control_socket_thread = start_thread(self.control_socket_loop, "control")
 
@@ -197,6 +196,8 @@ class ProxyInstanceProcess(ProxyInstance, QueueScheduler, Process):
     # control socket:
     def create_control_socket(self):
         assert self.socket_dir
+        def stop(msg):
+            self.stop(None, "cannot create the proxy control socket: %s" % msg)
         username = get_username_for_uid(self.uid)
         dotxpra = DotXpra(self.socket_dir, actual_username=username, uid=self.uid, gid=self.gid)
         sockname = ":proxy-%s" % os.getpid()
@@ -207,10 +208,11 @@ class ProxyInstanceProcess(ProxyInstance, QueueScheduler, Process):
         if state in (DotXpra.LIVE, DotXpra.UNKNOWN, DotXpra.INACCESSIBLE):
             log.error("Error: you already have a proxy server running at '%s'", sockpath)
             log.error(" the control socket will not be created")
+            stop("socket already exists")
             return False
         d = os.path.dirname(sockpath)
         try:
-            dotxpra.mksockdir(d)
+            dotxpra.mksockdir(d, SOCKET_DIR_MODE)
         except Exception as e:
             log.warn("Warning: failed to create socket directory '%s'", d)
             log.warn(" %s", e)
@@ -221,6 +223,7 @@ class ProxyInstanceProcess(ProxyInstance, QueueScheduler, Process):
             log("create_unix_domain_socket failed for '%s'", sockpath, exc_info=True)
             log.error("Error: failed to setup control socket '%s':", sockpath)
             log.error(" %s", e)
+            stop(e)
             return False
         self.control_socket = sock
         self.control_socket_path = sockpath

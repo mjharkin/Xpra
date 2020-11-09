@@ -1,7 +1,7 @@
 %define _build_id_links none
 
 Name:	     x264-xpra
-Version:     20200706
+Version:     20191217
 %if 0%{?beta} < 1
 Release:     1%{?dist}
 %else
@@ -12,7 +12,7 @@ Summary:     x264 library for xpra
 Group:       Applications/Multimedia
 License:     GPL
 URL:	     http://www.videolan.org/developers/x264.html
-Source0:     http://download.videolan.org/pub/x264/snapshots/x264-%{version}.tar.bz2
+Source0:     http://download.videolan.org/pub/x264/snapshots/x264-snapshot-%{version}-2245-stable.tar.bz2
 BuildRoot:   %(mktemp -ud %{_tmppath}/%{name}-%{version}-%{release}-XXXXXX)
 AutoProv:    0
 
@@ -43,7 +43,7 @@ This package contains the development files for %{name}.
 
 
 %prep
-%setup -q -n x264-master
+%setup -q -n x264-snapshot-%{version}-2245-stable
 
 
 %build
@@ -64,7 +64,6 @@ make install DESTDIR=%{buildroot}
 
 # remove executable and bash completion:
 rm %{buildroot}/usr/bin/x264
-rm %{buildroot}/usr/share/bash-completion/completions/x264
 
 %post -p /sbin/ldconfig
 %postun -p /sbin/ldconfig
@@ -86,11 +85,10 @@ rm -rf %{buildroot}
 %{_libdir}/xpra/pkgconfig/x264.pc
 
 %changelog
-* Mon Jul 06 2020 Antoine Martin <antoine@xpra.org> 20200706-1
-- use a newer snapshot
-- remove autoreq / autoprov
+* Sun Nov 08 2020 Antoine Martin <antoine@xpra.org> 20191217-1
+- use the last official snapshot
 
-* Mon May 11 2017 Antoine Martin <antoine@xpra.org> 20200510-1
+* Thu May 11 2017 Antoine Martin <antoine@xpra.org> 20200510-1
 - use a newer snapshot
 
 * Sat Dec 23 2017 Antoine Martin <antoine@xpra.org> 20171222-1

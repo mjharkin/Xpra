@@ -12,7 +12,6 @@ from xpra.os_util import monotonic_time, POSIX
 from xpra.util import envint, envbool, csv, typedict
 from xpra.exit_codes import EXIT_TIMEOUT
 from xpra.net.packet_encoding import ALL_ENCODERS
-from xpra.net.compression import ALL_COMPRESSORS
 from xpra.client.mixins.stub_client_mixin import StubClientMixin
 from xpra.scripts.config import parse_with_unit
 from xpra.log import Logger
@@ -58,7 +57,6 @@ class NetworkState(StubClientMixin):
 
         #network state:
         self.server_packet_encoders = ()
-        self.server_packet_compressors = ()
         self.server_ping_latency = deque(maxlen=1000)
         self.server_load = None
         self.client_ping_latency = deque(maxlen=1000)
@@ -142,7 +140,6 @@ class NetworkState(StubClientMixin):
         bandwidthlog("server_bandwidth_limit_change=%s, server_bandwidth_limit=%s",
                      self.server_bandwidth_limit_change, self.server_bandwidth_limit)
         self.server_packet_encoders = tuple(x for x in ALL_ENCODERS if c.boolget(x, False))
-        self.server_packet_compressors = tuple(x for x in ALL_COMPRESSORS if c.boolget(x, False))
         return True
 
     def process_ui_capabilities(self, caps : typedict):

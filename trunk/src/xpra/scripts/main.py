@@ -30,8 +30,8 @@ from xpra.exit_codes import (
     EXIT_INTERNAL_ERROR, EXIT_FILE_TOO_BIG,
     )
 from xpra.os_util import (
-    get_util_logger, getuid, getgid, pollwait,
-    monotonic_time, bytestostr, use_tty,
+    get_util_logger, getuid, getgid,
+    monotonic_time, bytestostr, use_tty, osexpand,
     WIN32, OSX, POSIX, SIGNAMES, is_Ubuntu,
     )
 from xpra.scripts.parsing import (
@@ -315,9 +315,12 @@ def use_systemd_run(s):
         return False    # pragma: no cover
     #test it:
     cmd = ["systemd-run", "--quiet", "--user", "--scope", "--", "true"]
-    proc = Popen(cmd, stdin=None, stdout=None, stderr=None, shell=False)
-    r = pollwait(proc, timeout=2)
-    if r is None:   # pragma: no cover
+    proc = Popen(cmd, stdout=PIPE, stderr=PIPE, shell=False)
+    try:
+        r = proc.wait(timeout=2)
+    except TimeoutExpired:  # pragma: no cover
+        r = None
+    if r is None:
         try:
             proc.terminate()
         except Exception:
@@ -339,10 +342,19 @@ def run_mode(script_file, error_cb, options, args, mode, defaults):
             if argv[0].find("python")<0:
                 argv.insert(0, "python%i.%i" % (sys.version_info.major, sys.version_info.minor))
             return systemd_run_wrap(mode, argv, options.systemd_run_args)
-
     configure_env(options.env)
     configure_logging(options, mode)
     configure_network(options)
+
+    if mode!="showconfig" and POSIX and not OSX and os.environ.get("XDG_RUNTIME_DIR") is None and getuid()>0:
+        from xpra.platform.xposix.paths import get_runtime_dir
+        xrd = osexpand(get_runtime_dir())
+        if not os.path.exists(xrd):
+            warn("Warning: XDG_RUNTIME_DIR does not exist")
+            if os.path.exists("/tmp") and os.path.isdir("/tmp"):
+                xrd = "/tmp"
+                warn(" using '%s'" % xrd)
+                os.environ["XDG_RUNTIME_DIR"] = xrd
 
     if not mode.startswith("_sound_"):
         #only the sound subcommands should ever actually import GStreamer:
@@ -396,132 +408,7 @@ def do_run_mode(script_file, error_cb, options, args, mode, defaults):
 
     if (mode in ("start", "start-desktop", "upgrade", "upgrade-desktop") and supports_server) or \
         (mode=="shadow" and supports_shadow) or (mode=="proxy" and supports_proxy):
-        start_via_proxy = parse_bool("start-via-proxy", options.start_via_proxy)
-        if start_via_proxy is not False and (not POSIX or getuid()!=0) and options.daemon:
-            try:
-                from xpra import client
-                assert client
-            except ImportError as e:
-                if start_via_proxy is True:
-                    error_cb("cannot start-via-proxy: xpra client is not installed")
-            else:
-                err = None
-                try:
-                    #this will use the client "start-new-session" feature,
-                    #to start a new session and connect to it at the same time:
-                    if not args:
-                        from xpra.platform.features import SYSTEM_PROXY_SOCKET
-                        args = [SYSTEM_PROXY_SOCKET]
-                    app = get_client_app(error_cb, options, args, "request-%s" % mode)
-                    r = do_run_client(app)
-                    #OK or got a signal:
-                    NO_RETRY = [EXIT_OK] + list(range(128, 128+16))
-                    if app.completed_startup:
-                        #if we had connected to the session,
-                        #we can ignore more error codes:
-                        NO_RETRY += [
-                            EXIT_CONNECTION_LOST,
-                            EXIT_REMOTE_ERROR,
-                            EXIT_INTERNAL_ERROR,
-                            EXIT_FILE_TOO_BIG,
-                            ]
-                    if r in NO_RETRY:
-                        return r
-                    if r==EXIT_FAILURE:
-                        err = "unknown general failure"
-                    else:
-                        err = EXIT_STR.get(r, r)
-                except Exception as e:
-                    log = Logger("proxy")
-                    log("failed to start via proxy", exc_info=True)
-                    err = str(e)
-                if start_via_proxy is True:
-                    raise InitException("failed to start-via-proxy: %s" % (err,))
-                #warn and fall through to regular server start:
-                warn("Warning: cannot use the system proxy for '%s' subcommand," % (mode, ))
-                warn(" %s" % (err,))
-                warn(" more information may be available in your system log")
-                #re-exec itself and disable start-via-proxy:
-                args = sys.argv[:]+["--start-via-proxy=no"]
-                #warn("re-running with: %s" % (args,))
-                os.execv(args[0], args)
-                #this code should be unreachable!
-                return 1
-        #show splash screen?
-        progress_cb = None
-        if options.splash is True or (
-            options.splash is not False and (
-                not POSIX or (
-                    (os.environ.get("DISPLAY") or os.environ.get("XDG_SESSION_DESKTOP")) and
-                    not (os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_CLIENT")) and
-                    not options.daemon
-                    )
-                )
-            ):
-            # use splash screen to show server startup progress:
-            progress = make_progress_process()
-            def stop_progress_process():
-                if progress.poll() is not None:
-                    return
-                try:
-                    progress.terminate()
-                except Exception:
-                    pass
-            def show_progress(pct, text=""):
-                if progress.poll() is not None:
-                    return
-                noerr(progress.stdin.write, ("%i:%s\n" % (pct, text)).encode("latin1"))
-                noerr(progress.stdin.flush)
-                if pct==100:
-                    #it should exit on its own, but just in case:
-                    from xpra.common import SPLASH_EXIT_DELAY
-                    from gi.repository import GLib
-                    GLib.timeout_add(SPLASH_EXIT_DELAY*1000+500, stop_progress_process)
-            progress_cb = show_progress
-            from xpra.scripts.server import add_cleanup
-            add_cleanup(stop_progress_process)
-        try:
-            cwd = os.getcwd()
-        except OSError:
-            os.chdir("/")
-            cwd = "/"
-        env = os.environ.copy()
-        current_display = nox()
-        try:
-            from xpra import server
-            assert server
-            from xpra.scripts.server import run_server, add_when_ready
-        except ImportError as e:
-            error_cb("Xpra server is not installed")
-        ######################################################################
-        if options.attach is True:
-            def attach_client():
-                from xpra.platform.paths import get_xpra_command
-                cmd = get_xpra_command()+["attach"]
-                display_name = os.environ.get("DISPLAY")
-                if display_name:
-                    cmd += [display_name]
-                #options has been "fixed up", make sure this has too:
-                fixup_options(defaults)
-                for x in CLIENT_OPTIONS:
-                    f = x.replace("-", "_")
-                    try:
-                        d = getattr(defaults, f)
-                        c = getattr(options, f)
-                    except Exception as e:
-                        print("error on %s: %s" % (f, e))
-                        continue
-                    if c!=d:
-                        if OPTION_TYPES.get(x)==list:
-                            v = csv(c)
-                        else:
-                            v = str(c)
-                        cmd.append("--%s=%s" % (x, v))
-                proc = Popen(cmd, cwd=cwd, env=env, start_new_session=POSIX and not OSX)
-                from xpra.child_reaper import getChildReaper
-                getChildReaper().add_process(proc, "client-attach", cmd, ignore=True, forget=False)
-            add_when_ready(attach_client)
-        return run_server(error_cb, options, mode, script_file, args, current_display, progress_cb)
+        return run_server(script_file, error_cb, options, args, mode, defaults)
     elif mode in (
         "attach", "listen", "detach",
         "screenshot", "version", "info", "id",
@@ -533,24 +420,7 @@ def do_run_mode(script_file, error_cb, options, args, mode, defaults):
     elif mode in ("stop", "exit"):
         return run_stopexit(mode, error_cb, options, args)
     elif mode == "top":
-        from xpra.client.top_client import TopClient, TopSessionClient
-        app = None
-        if args:
-            try:
-                display_desc = pick_display(error_cb, options, args)
-            except Exception:
-                pass
-            else:
-                #show the display we picked automatically:
-                app = TopSessionClient(options)
-                try:
-                    connect_to_server(app, display_desc, options)
-                except Exception:
-                    app = None
-        if not app:
-            #show all sessions:
-            app = TopClient(options)
-        return app.run()
+        return run_top(error_cb, options, args)
     elif mode == "list":
         return run_list(error_cb, options, args)
     elif mode == "list-windows":
@@ -1637,7 +1507,7 @@ def get_client_app(error_cb, opts, extra_args, mode):
     try:
         from xpra import client
         assert client
-    except ImportError as e:
+    except ImportError:
         error_cb("Xpra client is not installed")
 
     if opts.compression_level < 0 or opts.compression_level > 9:
@@ -2032,6 +1902,189 @@ def strip_defaults_start_child(start_child, defaults_start_child):
             if x in start_child:
                 start_child.remove(x)
     return start_child
+
+
+def run_server(script_file, error_cb, options, args, mode, defaults):
+    display_is_remote = isdisplaytype(args, "ssh", "tcp", "ssl", "vsock")
+    if mode in ("start", "start-desktop") and args and parse_bool("attach", options.attach) is True:
+        assert not display_is_remote
+        #maybe the server is already running
+        #and we don't need to bother trying to start it:
+        try:
+            display = pick_display(error_cb, options, args)
+        except Exception:
+            pass
+        else:
+            dotxpra = DotXpra(options.socket_dir, options.socket_dirs)
+            display_name = display.get("display_name")
+            if display_name:
+                state = dotxpra.get_display_state(display_name)
+                if state==DotXpra.LIVE:
+                    noerr(sys.stdout.write, "existing live display found, attaching")
+                    return do_run_mode(script_file, error_cb, options, args, "attach", defaults)
+
+    if (
+        mode in ("start", "start-desktop", "upgrade", "upgrade-desktop") and not supports_server
+        ) or (
+        mode=="shadow" and not supports_shadow
+        ) or (
+        mode=="proxy" and not supports_proxy
+        ):
+        raise InitException("%s is not supported by this local installation" % mode)
+
+    if mode in ("start", "start-desktop") and args and parse_bool("attach", options.attach) is True:
+        assert not display_is_remote
+        #maybe the server is already running
+        #and we don't need to bother trying to start it:
+        try:
+            display = pick_display(error_cb, options, args)
+        except Exception:
+            pass
+        else:
+            dotxpra = DotXpra(options.socket_dir, options.socket_dirs)
+            display_name = display.get("display_name")
+            if display_name:
+                state = dotxpra.get_display_state(display_name)
+                if state==DotXpra.LIVE:
+                    noerr(sys.stdout.write, "existing live display found, attaching")
+                    return do_run_mode(script_file, error_cb, options, args, "attach", defaults)
+
+    if (mode in ("start", "start-desktop", "upgrade", "upgrade-desktop") and supports_server) or \
+        (mode=="shadow" and supports_shadow) or (mode=="proxy" and supports_proxy):
+        start_via_proxy = parse_bool("start-via-proxy", options.start_via_proxy)
+        if start_via_proxy is not False and (not POSIX or getuid()!=0) and options.daemon:
+            try:
+                from xpra import client
+                assert client
+            except ImportError as e:
+                if start_via_proxy is True:
+                    error_cb("cannot start-via-proxy: xpra client is not installed")
+            else:
+                err = None
+                try:
+                    #this will use the client "start-new-session" feature,
+                    #to start a new session and connect to it at the same time:
+                    if not args:
+                        from xpra.platform.features import SYSTEM_PROXY_SOCKET
+                        args = [SYSTEM_PROXY_SOCKET]
+                    app = get_client_app(error_cb, options, args, "request-%s" % mode)
+                    r = do_run_client(app)
+                    #OK or got a signal:
+                    NO_RETRY = [EXIT_OK] + list(range(128, 128+16))
+                    if app.completed_startup:
+                        #if we had connected to the session,
+                        #we can ignore more error codes:
+                        NO_RETRY += [
+                            EXIT_CONNECTION_LOST,
+                            EXIT_REMOTE_ERROR,
+                            EXIT_INTERNAL_ERROR,
+                            EXIT_FILE_TOO_BIG,
+                            ]
+                    if r in NO_RETRY:
+                        return r
+                    if r==EXIT_FAILURE:
+                        err = "unknown general failure"
+                    else:
+                        err = EXIT_STR.get(r, r)
+                except Exception as e:
+                    log = Logger("proxy")
+                    log("failed to start via proxy", exc_info=True)
+                    err = str(e)
+                if start_via_proxy is True:
+                    raise InitException("failed to start-via-proxy: %s" % (err,))
+                #warn and fall through to regular server start:
+                warn("Warning: cannot use the system proxy for '%s' subcommand," % (mode, ))
+                warn(" %s" % (err,))
+                warn(" more information may be available in your system log")
+                #re-exec itself and disable start-via-proxy:
+                args = sys.argv[:]+["--start-via-proxy=no"]
+                #warn("re-running with: %s" % (args,))
+                os.execv(args[0], args)
+                #this code should be unreachable!
+                return 1
+        #show splash screen?
+        progress_cb = None
+        if options.splash is True or (
+            options.splash is not False and (
+                not POSIX or (
+                    (os.environ.get("DISPLAY") or os.environ.get("XDG_SESSION_DESKTOP")) and
+                    not (os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_CLIENT")) and
+                    not options.daemon
+                    )
+                )
+            ):
+            # use splash screen to show server startup progress:
+            progress = make_progress_process()
+            def stop_progress_process():
+                if progress.poll() is not None:
+                    return
+                try:
+                    progress.terminate()
+                except Exception:
+                    pass
+            def show_progress(pct, text=""):
+                if progress.poll() is not None:
+                    return
+                noerr(progress.stdin.write, ("%i:%s\n" % (pct, text)).encode("latin1"))
+                noerr(progress.stdin.flush)
+                if pct==100:
+                    #it should exit on its own, but just in case:
+                    from xpra.common import SPLASH_EXIT_DELAY
+                    from gi.repository import GLib
+                    GLib.timeout_add(SPLASH_EXIT_DELAY*1000+500, stop_progress_process)
+            progress_cb = show_progress
+            from xpra.scripts.server import add_cleanup
+            add_cleanup(stop_progress_process)
+        try:
+            cwd = os.getcwd()
+        except OSError:
+            os.chdir("/")
+            cwd = "/"
+        env = os.environ.copy()
+        desktop_display = nox()
+        try:
+            from xpra import server
+            assert server
+            from xpra.scripts.server import do_run_server, add_when_ready, run_cleanups
+        except ImportError as e:
+            error_cb("Xpra server is not installed")
+        ######################################################################
+        if options.attach is True:
+            def attach_client():
+                from xpra.platform.paths import get_xpra_command
+                cmd = get_xpra_command()+["attach"]
+                display_name = os.environ.get("DISPLAY")
+                if display_name:
+                    cmd += [display_name]
+                #options has been "fixed up", make sure this has too:
+                fixup_options(defaults)
+                for x in CLIENT_OPTIONS:
+                    f = x.replace("-", "_")
+                    try:
+                        d = getattr(defaults, f)
+                        c = getattr(options, f)
+                    except Exception as e:
+                        print("error on %s: %s" % (f, e))
+                        continue
+                    if c!=d:
+                        if OPTION_TYPES.get(x)==list:
+                            v = csv(c)
+                        else:
+                            v = str(c)
+                        cmd.append("--%s=%s" % (x, v))
+                proc = Popen(cmd, cwd=cwd, env=env, start_new_session=POSIX and not OSX)
+                from xpra.child_reaper import getChildReaper
+                getChildReaper().add_process(proc, "client-attach", cmd, ignore=True, forget=False)
+            add_when_ready(attach_client)
+        #add finally hook to ensure we will run the cleanups
+        #even if we exit because of an exception:
+        try:
+            return do_run_server(error_cb, options, mode, script_file, args, desktop_display, progress_cb)
+        finally:
+            run_cleanups()
+            import gc
+            gc.collect()
+
 
 def run_remote_server(error_cb, opts, args, mode, defaults):
     """ Uses the regular XpraClient with patched proxy arguments to tell run_proxy to start the server """
@@ -2740,6 +2793,28 @@ def may_cleanup_socket(state, display, sockpath, clean_states=(DotXpra.DEAD,)):
         except OSError as e:
             sys.stdout.write(" (delete failed: %s)" % e)
     sys.stdout.write("\n")
+
+
+def run_top(error_cb, options, args):
+    from xpra.client.top_client import TopClient, TopSessionClient
+    app = None
+    if args:
+        try:
+            display_desc = pick_display(error_cb, options, args)
+        except Exception:
+            pass
+        else:
+            #show the display we picked automatically:
+            app = TopSessionClient(options)
+            try:
+                connect_to_server(app, display_desc, options)
+            except Exception:
+                app = None
+    if not app:
+        #show all sessions:
+        app = TopClient(options)
+    return app.run()
+    
 
 def run_sessions_gui(error_cb, options):
     mdns = supports_mdns and options.mdns

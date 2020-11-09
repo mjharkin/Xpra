@@ -27,9 +27,9 @@
 %endif
 %global selinux_variants mls targeted
 %define selinux_modules cups_xpra xpra_socketactivation
-#we never want to depend on proprietary nvidia bits:
-%global __requires_exclude ^libnvidia-.*\\.so.*$
-
+#we never want to depend on proprietary nvidia bits,
+#and we manage the codecs with a private library:
+%global __requires_exclude ^(libnvidia-|libavcodec|libavformat|libavutil|libswscale|libx264).*\\.so.*$
 
 # no support for centos / rhel 7:
 %if 0%{?el7}
@@ -244,7 +244,7 @@ Recommends:         python3-qrencode
 %if 0%{?el8}
 Recommends:			gnome-shell-extension-topicons-plus
 %endif
-%if 0%{?fedora}>=29
+%if 0%{?fedora}
 Recommends:			libappindicator-gtk3
 %endif
 Suggests:			sshpass

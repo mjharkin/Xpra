@@ -10,7 +10,7 @@ from threading import RLock
 from xpra.log import Logger
 from xpra.scripts.config import FALSE_OPTIONS
 from xpra.net import compression
-from xpra.os_util import OSEnvContext, monotonic_time, WIN32, BITS
+from xpra.os_util import OSEnvContext, monotonic_time, WIN32
 from xpra.util import envint, envbool, csv, typedict, XPRA_WEBCAM_NOTIFICATION_ID
 from xpra.client.mixins.stub_client_mixin import StubClientMixin
 
@@ -151,7 +151,7 @@ class WebcamForwarder(StubClientMixin):
         self.webcam_frame_no = 0
         try:
             #test capture:
-            webcam_device = cv2.VideoCapture(device)        #0 -> /dev/video0
+            webcam_device = cv2.VideoCapture(device)        #0 -> /dev/video0 @UndefinedVariable
             ret, frame = webcam_device.read()
             log("test capture using %s: %s, %s", webcam_device, ret, frame is not None)
             assert ret, "no device or permission"
@@ -263,7 +263,7 @@ class WebcamForwarder(StubClientMixin):
             assert frame.ndim==3, "invalid frame data"
             h, w, Bpp = frame.shape
             assert Bpp==3 and frame.size==w*h*Bpp
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # @UndefinedVariable
             end = monotonic_time()
             log("webcam frame capture took %ims", (end-start)*1000)
             start = monotonic_time()

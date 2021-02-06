@@ -41,8 +41,8 @@
 
   <div id="navigation">
    <ul>
-    <li class="selected_true"><a href="/">Xpra</a></li>
-    <li class="selected_false"><a href="https://www.xpra.org/trac/">Wiki &amp; Bugs</a></li>
+    <li class="selected_true"><a href="https://github.com/Xpra-org/xpra">Xpra</a></li>
+    <li class="selected_false"><a href="https://github.com/Xpra-org/xpra/wiki">Wiki &amp; Bugs</a></li>
     <li>
 		<form id="search" method="get" action="https://www.google.com/search">
 			<fieldset>
@@ -58,7 +58,7 @@
   <div id="fullcontent">
 	<a id="about"></a>
 	<div class="box">
-		<h2><a href="/trac/wiki/About"><img src="/icons/gears.png" alt="gears" /> About</a></h2>
+		<h2><a href="https://github.com/Xpra-org/xpra/blob/master/README.md"><img src="/icons/gears.png" alt="gears" /> About</a></h2>
 		<p>
 			Xpra is an open-source multi-platform persistent remote display server and client for
 			forwarding applications and desktop screens.
@@ -78,42 +78,37 @@
 			Sessions can be accessed over SSH, or password protected over plain TCP sockets with or without SSL. <br />
 			Xpra is usable over reasonably slow links and does its best to adapt to changing network bandwidth constraints.
 		</p><p>
-			For more details see <a href="/trac/wiki/About">here</a>, you can find the source <a href="https://www.xpra.org/trac/wiki/Source">here</a>.
+			For more details see <a href="https://github.com/Xpra-org/xpra/blob/master/README.md">here</a>, you can find the source <a href="https://github.com/Xpra-org/xpra">here</a>.
 		</p>
   	</div>
 
 	<a id="features"></a>
 	<div class="box">
-		<h2><a href="/trac/wiki/Enhancements"><img src="/icons/features.png" alt="features" /> Enhancements</a></h2>
-		This fork adds <a href="/trac/wiki/Enhancements">many enhancements</a> over the <a class="ext" href="https://github.com/njsmith/partiwm">original version</a>:
-		better performance and platform support, a built-in HTML5 client,
+		<h2><a href="https://github.com/Xpra-org/xpra/blob/master/docs/Features/README.md"><img src="/icons/features.png" alt="features" /> Features</a></h2>
+		Xpra includes includes a built-in HTML5 client,
 	       	hardware acceleration, multi-user support, GUI tools and configuration and options;
-		keyboard and clipboard fixes; printer, cursor, sound, system tray and notifications forwarding;
+		keyboard and clipboard synchronization; printer, cursor, sound, system tray and notifications forwarding;
 		IPv6 support, SSL, support for shadowing existing displays, desktop mode, etc
-		<br />
-		Development is <a href="/trac/timeline">very active</a>, so keep an eye on <a href="/trac/wiki/News">the news</a> for new versions and features, or subscribe to the <a href="https://lists.devloop.org.uk/mailman/listinfo/shifter-users">mailing list</a> to get the release announcements email notifications.
 	</div>
 
 	<a id="download"></a>
 	<div class="box">
-		<h2><a href="/trac/wiki/Download"><img src="/icons/download.png" alt="download" /> Download</a></h2>
+		<h2><a href="https://github.com/Xpra-org/xpra/wiki/Download"><img src="/icons/download.png" alt="download" /> Download</a></h2>
 		You can find binary packages for Microsoft Windows <img src="/icons/win32.png" width="16" height="16" alt="microsoft windows">
-		<a href="/dists/windows/Xpra-x86_64_Setup.exe">64-bit</a> / <a href="/dists/windows/Xpra_Setup.exe">32-bit</a>,
-		<a href="/dists/osx/x86_64/Xpra-x86_64.pkg"><img src="/icons/osx.png" width="16" height="16" alt="mac osx"></img> Apple Mac OS X</a> (10.9 onwards)
-		and <a href="/trac/wiki/Download#Linux"><img src="/icons/linux.png" width="16" height="16" alt="linux"></img> Linux repositories and packages</a>
+		<a href="/dists/windows/Xpra-x86_64_Setup.exe">64-bit</a>,
+		<a href="/dists/osx/x86_64/Xpra-x86_64.pkg"><img src="/icons/osx.png" width="16" height="16" alt="mac osx"></img> Apple Mac OS X</a>
+		and <a href="https://github.com/Xpra-org/xpra/wiki/Download#-linux"><img src="/icons/linux.png" width="16" height="16" alt="linux"></img> Linux repositories and packages</a>
 		<br />
-		Source snapshots can be found here: <a href="/src/">xpra.org/src</a>, the subversion repository is here: <a href="/svn/Xpra">xpra.org/svn/Xpra</a>, you may also find beta releases here: <a href="/beta/">xpra.org/beta</a>.
-		<br />
-		For more information see <a href="/trac/wiki/Source">wiki: source</a>.
+		Source snapshots can be found here: <a href="/src/">xpra.org/src</a>, the git repository is here: <a href="https://github.com/Xpra-org/xpra">https://github.com/Xpra-org/xpra</a>, you may also find beta releases here: <a href="/beta/">xpra.org/beta</a>.
   	</div>
 
 	<a id="get_started"></a>
 	<div class="box">
-		<h2><a href="/trac/wiki/Usage"><img src="/icons/forward.png" alt="forward" /> Get started with Xpra</a></h2>
+		<h2><a href="https://github.com/Xpra-org/xpra/blob/master/docs/Usage/README.md"><img src="/icons/forward.png" alt="forward" /> Get started with Xpra</a></h2>
 		To start an application (a simple <code>xterm</code> in this example) on a remote system
 		and display it on your local machine, simply run:
 		<div class="codebox">
-		<pre><code>xpra start ssh:SERVERHOSTNAME --start=xterm
+		<pre><code>xpra start ssh://USERNAME@HOST/ --start=xterm
 </code></pre></div>
 		This is similar to <code>ssh -X</code>, except that performance will be noticeably better and you can disconnect and re-connect to this session as many times as you like. (obviously xpra must be installed on your server host)
 
@@ -121,14 +116,14 @@
 
 		To re-connect or to connect to this session from another machine, use the <code>attach</code> command (you can also use the <code>xpra_launcher</code> GUI):
 		<div class="codebox">
-		<pre><code>xpra attach ssh:serverhostname
+		<pre><code>xpra attach ssh://USERNAME@HOST/
 </code></pre></div>
-		You can find many more usage examples <a href="/trac/wiki/Usage">here</a>, ssh is not required but it does make things easier.
+		You can find many more usage examples <a href="https://github.com/Xpra-org/xpra/blob/master/docs/Usage/README.md">here</a>, ssh is not required but it does make things easier.
 	</div>
 
 	<a id="help"></a>
 	<div class="box">
-		<h2><a href="/trac/wiki/Help"><img src="/icons/forum.png" alt="forum" /> Help and Discussions</a></h2>
+		<h2><img src="/icons/forum.png" alt="forum" /> Help and Discussions</h2>
 		<p>
 			Send your questions to the <a href="https://lists.devloop.org.uk/mailman/listinfo/shifter-users">mailing list</a>
 			or join us on the IRC channel <a href="irc://irc.freenode.net/winswitch">#winswitch on irc.freenode.net</a>.

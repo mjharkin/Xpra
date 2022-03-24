@@ -1,1 +1,1 @@
-deb https://xpra.org/ hirsute main
+deb [arch=amd64,arm64] https://xpra.org/ hirsute main

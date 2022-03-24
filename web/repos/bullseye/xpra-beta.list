@@ -1,1 +1,1 @@
-deb https://xpra.org/beta/ bullseye main
+deb [arch=amd64,arm64] https://xpra.org/beta/ bullseye main
